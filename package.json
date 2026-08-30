@@ -20,6 +20,7 @@
     "test": "vitest run --coverage",
     "test:watch": "vitest",
     "test:shuffle": "vitest run --coverage=false --sequence.shuffle --sequence.seed=20260813",
+    "mink:eval": "node scripts/mink-eval.mjs",
     "db:migrate": "node scripts/db-migrate.mjs"
   },
   "browserslist": [
@@ -40,6 +41,7 @@
     "@dnd-kit/utilities": "^3.2.2",
     "@google-cloud/cloud-sql-connector": "^1.11.2",
     "@google-cloud/storage": "^7.21.0",
+    "@google/genai": "^2.19.0",
     "@tiptap/extension-code-block-lowlight": "^3.24.0",
     "@tiptap/extension-image": "^3.24.0",
     "@tiptap/extension-link": "^3.24.0",
@@ -74,8 +76,8 @@
     "recharts": "^3.8.1",
     "resend": "^6.12.4",
     "sanitize-html": "^2.17.4",
-    "sharp": "^0.35.3",
     "shadcn": "^4.10.0",
+    "sharp": "^0.35.3",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.6.0",
     "tldts": "^7.4.2",

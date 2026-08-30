@@ -22,7 +22,7 @@ describe("database migration controls", () => {
   it("loads the repository manifest and checksums the enrolled SQL", async () => {
     const loaded = await loadManifest();
     expect(loaded.baseline.id).toBe("baseline:cloudsql-2026-08-14");
-    expect(loaded.migrations).toHaveLength(34);
+    expect(loaded.migrations).toHaveLength(44);
     expect(loaded.migrations[0]).toMatchObject({
       id: "20260814_0001_logistics_shiprocket",
       transaction: true,
@@ -351,6 +351,214 @@ describe("database migration controls", () => {
     );
     expect(loaded.migrations[32].sql).toContain(
       "Understand collected pickups in Sales",
+    );
+    expect(loaded.migrations[34]).toMatchObject({
+      id: "20260829_0035_mink_dashboard_alpha",
+      transaction: true,
+      requires: ["20260829_0034_pos_sales_refund_state_help"],
+      verify: {
+        tables: expect.arrayContaining([
+          "mink_conversations",
+          "mink_runs",
+          "mink_messages",
+          "mink_tool_calls",
+          "mink_usage_ledger",
+        ]),
+        rlsTables: expect.arrayContaining([
+          "mink_conversations",
+          "mink_runs",
+          "mink_messages",
+          "mink_tool_calls",
+          "mink_usage_ledger",
+        ]),
+      },
+    });
+    expect(loaded.migrations[34].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[34].sql).toContain(
+      "REVOKE ALL ON TABLE public.mink_conversations FROM PUBLIC, app_user",
+    );
+    expect(loaded.migrations[34].sql).toContain(
+      "use-mink-ai-in-your-dashboard",
+    );
+    expect(loaded.migrations[35]).toMatchObject({
+      id: "20260829_0036_mink_conversation_ux",
+      transaction: true,
+      requires: ["20260829_0035_mink_dashboard_alpha"],
+      verify: {
+        queries: expect.arrayContaining([
+          expect.objectContaining({
+            name: "app_service can enforce the Mink conversation cap",
+            equals: "true",
+          }),
+          expect.objectContaining({
+            name: "no actor and store retain more than ten Mink conversations",
+            equals: "0",
+          }),
+        ]),
+      },
+    });
+    expect(loaded.migrations[35].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[35].sql).toContain(
+      "GRANT DELETE ON TABLE public.mink_conversations TO app_service",
+    );
+    expect(loaded.migrations[35].sql).toContain("position > 10");
+    expect(loaded.migrations[36]).toMatchObject({
+      id: "20260829_0037_mink_sidebar_composer",
+      transaction: true,
+      requires: ["20260829_0036_mink_conversation_ux"],
+      applyVerify: {
+        queries: expect.arrayContaining([
+          expect.objectContaining({
+            name: "the Mink dashboard guide documents the robot sidebar deletion and growing composer",
+            equals: "1",
+          }),
+        ]),
+      },
+    });
+    expect(loaded.migrations[36].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[36].sql).toContain(
+      "purple robot mark in the dashboard header",
+    );
+    expect(loaded.migrations[36].sql).toContain("Delete conversation");
+    expect(loaded.migrations[36].sql).toContain("Shift+Enter");
+    expect(loaded.migrations[37]).toMatchObject({
+      id: "20260829_0038_mink_phase_1b",
+      transaction: true,
+      requires: ["20260829_0037_mink_sidebar_composer"],
+      verify: {
+        columns: expect.arrayContaining([
+          "mink_runs.retry_count",
+          "mink_usage_ledger.estimated_cost_microusd",
+        ]),
+      },
+    });
+    expect(loaded.migrations[37].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[37].sql).toContain("mink_runs_started_idx");
+    expect(loaded.migrations[37].sql).toContain("Analytics → View");
+    expect(loaded.migrations[38]).toMatchObject({
+      id: "20260829_0039_mink_phase_2",
+      transaction: true,
+      requires: ["20260829_0038_mink_phase_1b"],
+      verify: {
+        tables: expect.arrayContaining(["mink_store_access", "mink_feedback"]),
+        columns: expect.arrayContaining([
+          "mink_conversations.summary_json",
+          "mink_usage_ledger.shadow_credits",
+        ]),
+      },
+    });
+    expect(loaded.migrations[38].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[38].sql).toContain("invited read-only beta");
+    expect(loaded.migrations[38].sql).toContain("Shadow credits");
+    expect(loaded.migrations[39]).toMatchObject({
+      id: "20260830_0040_mink_phase_3",
+      transaction: true,
+      requires: ["20260829_0039_mink_phase_2"],
+      verify: {
+        tables: expect.arrayContaining([
+          "mink_drafts",
+          "mink_draft_versions",
+          "mink_draft_credit_usage",
+        ]),
+        columns: [
+          "mink_store_access.drafting_enabled",
+          "mink_draft_credit_usage.period",
+        ],
+      },
+    });
+    expect(loaded.migrations[39].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[39].sql).toContain("consume_mink_draft_credits");
+    expect(loaded.migrations[39].sql).toContain(
+      "discard_failed_mink_run_drafts",
+    );
+    expect(loaded.migrations[39].sql).toContain(
+      "Refund for unseen Mink draft after failed or cancelled run",
+    );
+    expect(loaded.migrations[39].sql).toContain("Private content drafts");
+    expect(loaded.migrations[39].sql).toContain("draft_proposal");
+    expect(loaded.migrations[39].sql).toContain(
+      "cannot publish a product or blog",
+    );
+    expect(loaded.migrations[40]).toMatchObject({
+      id: "20260830_0041_mink_location_alias_help",
+      transaction: true,
+      requires: ["20260830_0040_mink_phase_3"],
+      applyVerify: {
+        queries: expect.arrayContaining([
+          expect.objectContaining({
+            name: expect.stringContaining("location name/type aliases"),
+            equals: "1",
+          }),
+        ]),
+      },
+    });
+    expect(loaded.migrations[40].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[40].sql).toContain("Delhi warehouse");
+    expect(loaded.migrations[40].sql).toContain(
+      "does not replace a failed named-location request with all-store results",
+    );
+    expect(loaded.migrations[41]).toMatchObject({
+      id: "20260830_0042_mink_phase_4a_product_actions",
+      transaction: true,
+      requires: ["20260830_0041_mink_location_alias_help"],
+      verify: {
+        tables: [
+          "mink_action_tool_access",
+          "mink_action_approvals",
+          "mink_action_audit",
+        ],
+        rlsTables: [
+          "mink_action_tool_access",
+          "mink_action_approvals",
+          "mink_action_audit",
+        ],
+      },
+    });
+    expect(loaded.migrations[41].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[41].sql).toContain(
+      "mink_action_approvals_idempotency_key",
+    );
+    expect(loaded.migrations[41].sql).toContain(
+      "mink_action_approvals_product_store_fkey",
+    );
+    expect(loaded.migrations[41].sql).toContain(
+      "GRANT SELECT, INSERT ON TABLE public.mink_action_audit",
+    );
+    expect(loaded.migrations[41].sql).toContain(
+      "Approved product-text actions",
+    );
+    expect(loaded.migrations[41].sql).toContain("Approve and apply");
+    expect(loaded.migrations[41].sql).toContain("Review safe rollback");
+    expect(loaded.migrations[42]).toMatchObject({
+      id: "20260830_0043_mink_phase_4b_4d_actions",
+      transaction: true,
+      requires: ["20260830_0042_mink_phase_4a_product_actions"],
+      verify: {
+        columns: expect.arrayContaining([
+          "mink_action_approvals.resource_type",
+          "mink_action_approvals.result_id",
+          "mink_action_audit.resource_version_after",
+        ]),
+      },
+    });
+    expect(loaded.migrations[42].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[42].sql).toContain("create_customer_group");
+    expect(loaded.migrations[42].sql).toContain("unpublished draft product");
+    expect(loaded.migrations[42].sql).toContain("safe rollback preview");
+    expect(loaded.migrations[43]).toMatchObject({
+      id: "20260830_0044_mink_action_reliability_help",
+      transaction: true,
+      requires: ["20260830_0043_mink_phase_4b_4d_actions"],
+    });
+    expect(loaded.migrations[43].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[43].sql).toContain(
+      "Proposal and approval reliability",
+    );
+    expect(loaded.migrations[43].sql).toContain(
+      "does not enable drafting for every store",
+    );
+    expect(loaded.migrations[43].sql).toContain(
+      "exact database checkpoint captured by the preview",
     );
     const repairChecks = [
       loaded.migrations[22].applyVerify,

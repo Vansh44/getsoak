@@ -1,12 +1,159 @@
 # Mink AI Dashboard Agent — Architecture and Delivery Plan
 
-> **Status:** Product and engineering plan; no dashboard-agent capability in
-> this document should be treated as shipped.
+> **Status:** Phases 0–4 are implemented in code. Phase 2 remains the invited
+> read-only merchant beta. Phase 3 adds a separate, fail-closed operator opt-in
+> for private versioned drafts and atomic weighted credits through migration
+> `20260830_0040_mink_phase_3`. Phase 4A adds separately gated, explicitly
+> approved description/SEO updates through migration
+> `20260830_0042_mink_phase_4a_product_actions`. Migration
+> `20260830_0043_mink_phase_4b_4d_actions` adds 4B unpublished draft-product
+> creation, 4C disabled/hidden coupon create/update, and 4D customer-group
+> metadata create/update. No inventory, order-status, publication, campaign,
+> customer-contact, membership, bulk-price or arbitrary-code authority is present.
 >
-> **Plan date:** 2026-08-29
+> **Plan date:** 2026-08-30
 >
 > **Platform constraint:** Mink AI must run on Google Cloud Vertex AI / Gemini
 > Enterprise Agent Platform. OpenAI models are out of scope.
+
+### Implementation checkpoint — 2026-08-30
+
+The current Phase 0/1/2 read slice, Phase 3 drafting slice and complete Phase 4
+guarded-action slice now include:
+
+- the official `@google/genai` SDK pinned to the supported 2.x line;
+- a Vertex-only Gemini 3.7 Flash client using ADC, the stable `v1` API,
+  low-level thinking and SDK-managed chat history/thought signatures;
+- a reviewed human-readable system-prompt contract in
+  `docs/mink-ai-system-prompt.md`, parsed as the executable runtime template by
+  `lib/mink/system-prompt.ts` and tied to versioned run telemetry;
+- trusted actor construction from the authenticated host, admin, database role,
+  permissions and effective plan;
+- a permission-filtered tool registry that rechecks authorization at execution;
+- five explicitly store-scoped read tools: `get_store_profile`,
+  `get_catalog_summary`, `search_products`, `get_sales_summary` and
+  `list_low_stock`; sales reuse the dashboard's recognized-order, refund,
+  timezone and location contract, while stock intersects exact location names
+  with trusted admin assignments and uses per-SKU thresholds;
+- a bounded multi-step orchestration loop with step, tool and parallel-read
+  limits;
+- an authenticated, same-origin, rate-limited SSE endpoint at
+  `POST /api/mink/stream` with an abort-aware Vertex session;
+- service-only, RLS-enabled persistent conversations, runs, successful-turn
+  history, redacted tool telemetry and an append-only raw token ledger;
+- an abortable streaming client integrated with the existing Home prompt,
+  drawer and expanded view, with tool progress, Stop, Retry and safe errors;
+- a store/admin-scoped ten-conversation sidebar that restores the newest
+  successful transcript after refresh, supports confirmed deletion, and
+  atomically removes the oldest thread when an eleventh is created;
+- a resizable side panel with a browser-local width preference, the same purple
+  robot identity as Help Centre Mink, an auto-growing multiline composer, and
+  safe emphasis/inline-code rendering without raw HTML;
+- a separate published Help Centre guide for the dashboard alpha's supported
+  questions, permission behavior, privacy and limits;
+- prompt-injection instructions that treat all tool values as untrusted data;
+- one abort-aware retry for transient model failures, bounded tool timeouts, a
+  hard run timeout and safe public errors while details remain in server logs;
+- complete/partial/unavailable usage states with a versioned micro-USD Gemini
+  3.7 Flash shadow estimate (unknown usage is never presented as free);
+- a page-gated operator inspector at `/dashboard/mink` for redacted status,
+  latency, retries, tool names, tokens and cost—never conversation content or
+  provider reasoning;
+- a 50-case live evaluation corpus and `npm run mink:eval` gate for tool choice,
+  security refusals, malformed calls, latency and manual grounding review;
+- a phase-wise manual acceptance catalogue in
+  `docs/mink-ai-test-prompts.md` covering read prompts, runtime UX, permissions,
+  tenancy, drafting, credits, exact approvals, concurrency, rollback and
+  unsupported-action refusals; and
+- focused tests for config fail-closed behavior, actor construction,
+  authorization/permission matrices, location scope, tenant-free tool schemas,
+  retry/cost logic, agent limits, operator filters and the SSE boundary;
+- operator-managed, per-store beta invitations in addition to the global kill
+  switch;
+- order list/current-order and selected-product reads with tenant revalidation,
+  location scoping and minimized/masked customer data;
+- unambiguous location name/type aliases such as `Delhi warehouse`, resolved
+  only inside the admin's trusted accessible-location scope; a failed named
+  location is never retried as an all-location request;
+- rich metric, order, product, inventory and Help-source cards that repeat the
+  applied date, location and channel scope;
+- normalized current-page/selected-record context, never trusted as identity;
+- published Help Centre hybrid lexical/vector retrieval as a bounded tool;
+- deterministic extractive compaction after 16 messages while retaining the
+  newest eight messages verbatim;
+- actor-owned answer feedback with bounded, privacy-redacted issue detail and
+  operator-visible trace correlation; and
+- shadow credit weights and cost cohorts stored with each read usage row;
+- an independent per-store drafting-beta switch controlled by a platform
+  superadmin;
+- product-description, product-SEO, blog, coupon-email and reusable
+  customer-message proposal tools filtered by Manage permission;
+- store brand voice carried as untrusted style context, never authority;
+- an expected weighted-credit preview in the composer and atomic server-side
+  2/1/5/2/2/3/1/1/1/1 charging from monthly allowance then credit balance;
+- editable before/after proposal cards, admin-private persistence, optimistic
+  version saves and append-only rollback history;
+- atomic compensation that discards an unseen proposal and restores its exact
+  plan/balance credits when the enclosing run fails or is cancelled; and
+- explicit absence of any model tool that publishes, sends, contacts a
+  customer or performs a general live-record write;
+- independent operator kill switches for product-description and product-SEO
+  actions, automatically shut when the parent beta or drafting gate closes;
+- saved-draft-only exact previews bound to the actor, tenant, draft version,
+  product content version, tool version and before/after field values;
+- an execute API that accepts only the approval id, writes only the approved
+  description or SEO fields in one transaction, and is idempotent under retry;
+- fail-closed concurrent edit/expiry handling with one append-only outcome row;
+- result cards linking to the product plus a second explicitly approved safe
+  rollback while the product still matches its post-action checkpoint; and
+- cache invalidation and the standard product-updated event only after commit;
+  and
+- redacted operator counts for action-enabled stores, executed actions and
+  refused conflicts/expiries without approval content;
+- charged private proposals for unpublished draft-product creation, disabled
+  coupon create/update and customer-group metadata create/update;
+- five additional independent live-action kill switches, with Manage
+  permission rechecked at both preview and execution;
+- a human-only action endpoint for those domains that accepts ids and
+  versions, never browser-supplied business fields;
+- forced product draft/untracked state and forced coupon disabled/hidden state
+  shown in exact previews, while coupon usage/audience and group membership
+  remain outside the write allowlist; and
+- safe create rollback only while the new record is unchanged and unused,
+  plus checkpointed update rollback for coupon terms and group metadata.
+
+The dev deployment has also passed manual acceptance for ten-conversation
+history, conversation deletion, panel resizing, multiline input growth and
+cross-tenant isolation. These checks validate the internal-alpha UX/security
+slice; they do not replace the evaluation and production-readiness gates below.
+
+The real client and endpoint are globally enabled when `MINK_AI_ENABLED` is
+unset and can be explicitly disabled with `MINK_AI_ENABLED=false`. With the
+default `MINK_BETA_REQUIRE_INVITE=true`, a store must still have an enabled
+operator invitation. Draft tools additionally require
+`drafting_enabled=true` and the related Manage permission. Every Phase 4 action
+also requires its matching per-tool operator switch and the destination
+section's Manage permission. The
+disabled/uninvited state keeps the canned coming-soon response. The current
+build charges live credits only when it creates a private proposal; the
+weighted schedule is 2/1/5/2/2 for the original proposal kinds, 3 for a draft
+product, and 1 each for coupon or customer-group create/update. Phase 4
+review/apply/rollback adds no model generation charge. It does not
+stream token deltas, expose raw customer contact details, perform coding work,
+publish products, activate coupons, alter non-approved fields or change group
+membership. The 50 cases are the
+first comparison set, not the complete 200-case Phase 0 corpus, and still need
+controlled live execution and cost reconciliation. Code-complete phases are
+not automatically deployed or accepted by those facts.
+
+The post-Phase-4 reliability review is implemented in code: proposal artifacts
+survive both live SSE parsing and retained-history restoration; disabling the
+invitation-only rollout preserves each store's independent drafting switch;
+PostgreSQL timestamp checkpoints keep microsecond precision through the driver;
+and coupon business dates are canonicalized before exact value comparison.
+This closes false apply/rollback conflicts without weakening real concurrent
+edit detection. Migration `20260830_0044_mink_action_reliability_help` keeps the
+published merchant guidance aligned with that contract.
 
 ## 1. Executive decision
 
@@ -102,8 +249,8 @@ unrelated second system:
 
 - `app/dashboard/dashboard-chat.tsx` already provides side-panel and expanded
   conversation surfaces.
-- `app/dashboard/mink-ai.ts` is intentionally a canned placeholder and is the
-  replacement seam for the real client.
+- `app/dashboard/mink-ai.ts` selects the canned response while the server flag
+  is off and the abortable SSE client while it is on.
 - `app/dashboard/chat-context.tsx` already shares one conversation between the
   Home prompt and the dashboard drawer.
 - `lib/ai/gemini.ts` already proves Vertex ADC calls from Cloud Run and emits
@@ -375,6 +522,7 @@ migrations.
 - `id`
 - `store_id`
 - `conversation_id`
+- `run_id`
 - `role`
 - `content_json`
 - `provider_state_json` for opaque Gemini parts/thought signatures
@@ -382,6 +530,10 @@ migrations.
 - `created_at`
 
 Never parse, display or log opaque thought-signature contents.
+
+The alpha schema creates this field for future opaque provider-state replay but
+currently persists only final user/assistant text. Within a live run the
+official SDK owns the exact function-call parts and thought signatures.
 
 ### `mink_runs`
 
@@ -397,6 +549,11 @@ Never parse, display or log opaque thought-signature contents.
 - estimated provider cost and charged credits
 - latency, step count, error code
 - idempotency key and timestamps
+
+The alpha implements the `running`, `succeeded`, `failed` and `cancelled`
+subset plus token counts, steps, tools, latency and error code. Queuing,
+approval pauses, unknown external outcomes, cost estimates and idempotent
+mutation fields arrive with the relevant later phases.
 
 ### `mink_tool_calls`
 
@@ -423,12 +580,18 @@ Append-only record of model, tokens, provider-cost estimate, tool cost, reserved
 credits, final credits and reversal. This should become the source of truth for
 Mink usage rather than inferring cost from chat messages.
 
+The alpha ledger records raw token counts and zero charged credits. Provider
+cost estimates, reservations, reconciliation and reversals are intentionally
+not active until pilot distributions are measured.
+
 ### `mink_memories` — not before the proactive phase
 
 Only store explicit, user-approved business preferences. Do not create inferred
 long-term memory from customer data, private messages or credentials.
 
 ## 10. Conversation and streaming protocol
+
+Target protocol:
 
 1. The browser sends the message, current route and optional selected record.
 2. The server reconstructs identity, tenant and permissions.
@@ -449,9 +612,16 @@ long-term memory from customer data, private messages or credentials.
 9. The UI renders facts, sources, planned actions and completed actions as
    separate visual blocks.
 
-The existing `useMinkAi` timeout should be replaced by an abortable streaming
-client. Closing the drawer must not necessarily cancel a background run;
-explicit Cancel does.
+The flag-enabled `useMinkAi` path now uses an abortable streaming client;
+closing the drawer does not cancel a run, while explicit Stop does. The
+flag-disabled path deliberately retains the timed canned response.
+
+The current alpha implements the abortable transport with coarser
+`status`/`tool`/`message`/`usage`/`done` events and one final assistant message.
+It creates and commits the run before returning completion, retains the newest
+ten conversations per actor/store, restores the latest thread after refresh,
+and treats explicit Stop as cancellation. Delta rendering, background
+continuation and approval-required events remain later work.
 
 ## 11. Model routing policy
 
@@ -632,6 +802,9 @@ Exit criteria:
 
 ### Phase 2 — Read-only merchant beta and grounded analytics
 
+**Implementation:** ✅ code-complete on 2026-08-29; migration, live evaluation
+and invited-store rollout validation remain deployment gates.
+
 **Duration:** 3–4 weeks
 
 Deliver:
@@ -656,6 +829,10 @@ Exit criteria:
 
 ### Phase 3 — Drafting and reversible work
 
+**Implementation:** ✅ code-complete on 2026-08-30; migration, regression
+tests, controlled-store opt-in and credit-ledger reconciliation remain rollout
+gates.
+
 **Duration:** 3–5 weeks
 
 Deliver:
@@ -678,6 +855,13 @@ Exit criteria:
 
 ### Phase 4 — Guarded single-domain actions
 
+**Implementation:** ✅ Phase 4A–4D are code-complete on 2026-08-30. Controlled
+migration, operator enablement and adversarial live acceptance remain rollout
+gates. Phase 4A covers product description/SEO. Phase 4B creates only
+unpublished, untracked draft products. Phase 4C creates or edits only disabled,
+hidden coupons without touching usage or audience. Phase 4D creates or edits
+only customer-group name, description and colour without touching membership.
+
 **Duration:** 5–6 weeks
 
 Start with Products because StoreMink already has mature CRUD, permissions,
@@ -693,6 +877,22 @@ Deliver:
 - result cards linking to changed records;
 - rollback where safe;
 - then repeat the pattern for coupons and customer groups.
+
+Phase 4A intentionally implements only updates from saved product-description
+and product-SEO drafts. It does not expose product creation or a model-callable
+mutation tool. The merchant's explicit approval click invokes the field-limited
+server action after seeing the exact database-derived before/after values.
+
+Phase 4B–4D reuse that human-only boundary. Gemini can create a charged private
+proposal, but the model never receives the execute tool. The browser can submit
+only a saved proposal version/idempotency key for preview or an approval id for
+execution. Product creation forces `draft` plus inventory tracking off and
+excludes variants, stock, images, category, tax, shipping and publication.
+Coupon writes require disabled/hidden state and exclude activation, visibility,
+usage, customer-group audience and sending. Customer-group writes allow only
+name, description and colour. Create rollback additionally proves the record
+is unchanged and unused before deleting it; update rollback requires the exact
+post-action version and values.
 
 Exit criteria for each domain:
 
@@ -1013,17 +1213,32 @@ would move risk into production rather than remove work.
 
 ## 21. Immediate next sprint
 
-The first sprint should produce evidence, not a broad demo:
+The next sprint should validate and safely roll out the complete Phase 4 before
+starting any Phase 5 domain:
 
-1. Add a standalone Gemini 3.7 Flash experiment using Vertex ADC.
-2. Implement five read-only tools against a demo store.
-3. Preserve and replay thought signatures through two sequential tool calls.
-4. Run 50 representative prompts on 2.5 Flash and 3.7 Flash.
-5. Compare correct tool selection, factual accuracy, token use, latency and
-   cost.
-6. Test cross-tenant IDs and prompt injections in product/customer text.
-7. Write the Phase 0 threat model and expand to the 200-case evaluation set.
-8. Make the go/no-go decision for the persistent Phase 1 runtime.
+1. Apply migration `20260830_0043_mink_phase_4b_4d_actions` after 0042 in the
+   controlled staging database, then deploy the matching application code.
+2. Keep all seven action tools disabled initially. On one synthetic/demo store,
+   enable beta, drafting and one tool at a time to prove every kill switch is
+   independent and shuts down when either parent gate closes.
+3. Verify permission and tenant matrices for Products, Marketing and Users:
+   Manage can preview/execute; View cannot; another admin cannot use the first
+   admin's proposal/approval; another store learns nothing about the record.
+4. Exercise create/apply/rollback for a draft product, new disabled coupon and
+   empty customer group, plus update/rollback for disabled coupon terms and
+   group metadata. Diff every excluded column and relationship before/after.
+5. Prove unsafe rollback refusals by adding a variant/order line, using or
+   linking a coupon, and adding a group member/coupon link. No case may delete
+   an in-use record.
+6. Run concurrent-tab, expiry, idempotency, uniqueness, plan-downgrade and
+   kill-switch-between-preview-and-execute tests. Reconcile every terminal
+   approval to one immutable `mink_action_audit` outcome.
+7. Run the 50 read cases plus all proposal/action regressions. The model tool
+   manifest must contain proposal tools only; no live execute mutation is
+   callable by Gemini.
+8. After four stable weeks and the Phase 4 exit criteria, begin Phase 5 as a
+   separate design/review. Inventory, orders, publishing, campaigns and bulk
+   price changes remain unavailable until those higher-risk gates exist.
 
 The intended outcome is not “Gemini 3.7 answered impressively.” It is:
 

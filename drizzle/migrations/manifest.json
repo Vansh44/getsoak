@@ -1143,6 +1143,429 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260829_0035_mink_dashboard_alpha",
+      "description": "Persist tenant-safe Mink dashboard alpha conversations, runs, tool telemetry, raw usage, and publish its Help Centre guide",
+      "file": "sql/20260829_0035_mink_dashboard_alpha.sql",
+      "transaction": true,
+      "requires": ["20260829_0034_pos_sales_refund_state_help"],
+      "verify": {
+        "tables": [
+          "mink_conversations",
+          "mink_messages",
+          "mink_runs",
+          "mink_tool_calls",
+          "mink_usage_ledger"
+        ],
+        "columns": [
+          "mink_messages.content_json",
+          "mink_messages.provider_state_json",
+          "mink_runs.total_tokens",
+          "mink_runs.tool_registry_version",
+          "mink_usage_ledger.charged_credits"
+        ],
+        "constraints": [
+          "mink_conversations_id_store_key",
+          "mink_conversations_status_check",
+          "mink_messages_content_check",
+          "mink_messages_conversation_store_fkey",
+          "mink_runs_request_id_key",
+          "mink_runs_status_check",
+          "mink_tool_calls_run_sequence_key",
+          "mink_tool_calls_status_check",
+          "mink_usage_ledger_run_key"
+        ],
+        "rlsTables": [
+          "mink_conversations",
+          "mink_messages",
+          "mink_runs",
+          "mink_tool_calls",
+          "mink_usage_ledger"
+        ]
+      },
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "the dashboard Mink AI alpha guide is published with limits and permissions",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%This alpha is read only.%' and body like '%Products → View%' and body like '%does not debit AI credits%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "the dashboard Mink AI alpha guide exists and remains published",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260829_0036_mink_conversation_ux",
+      "description": "Cap Mink history at ten actor/store conversations and document history, resizing, header identity, and answer formatting",
+      "file": "sql/20260829_0036_mink_conversation_ux.sql",
+      "transaction": true,
+      "requires": ["20260829_0035_mink_dashboard_alpha"],
+      "verify": {
+        "queries": [
+          {
+            "name": "app_service can enforce the Mink conversation cap",
+            "sql": "select has_table_privilege('app_service', 'public.mink_conversations', 'DELETE')::text",
+            "equals": "true"
+          },
+          {
+            "name": "no actor and store retain more than ten Mink conversations",
+            "sql": "select count(*)::text from (select store_id, admin_id from public.mink_conversations group by store_id, admin_id having count(*) > 10) overflow",
+            "equals": "0"
+          }
+        ]
+      },
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "the Mink dashboard guide documents history resizing and formatted answers",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%drag the left edge of the drawer%' and body like '%10 most recent conversations%' and body like '%double asterisks are not shown%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "the Mink dashboard guide documents history resizing and formatted answers",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%drag the left edge of the drawer%' and body like '%10 most recent conversations%' and body like '%double asterisks are not shown%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260829_0037_mink_sidebar_composer",
+      "description": "Document the unified Mink robot identity, conversation sidebar deletion, and growing multiline composer",
+      "file": "sql/20260829_0037_mink_sidebar_composer.sql",
+      "transaction": true,
+      "requires": ["20260829_0036_mink_conversation_ux"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "the Mink dashboard guide documents the robot sidebar deletion and growing composer",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%purple robot mark in the dashboard header%' and body like '%conversation-sidebar button%' and body like '%Delete conversation%' and body like '%message box grows as a prompt wraps%' and body like '%Shift+Enter%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "the Mink dashboard guide documents the robot sidebar deletion and growing composer",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%purple robot mark in the dashboard header%' and body like '%conversation-sidebar button%' and body like '%Delete conversation%' and body like '%message box grows as a prompt wraps%' and body like '%Shift+Enter%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260829_0038_mink_phase_1b",
+      "description": "Add Mink reliability and shadow-cost telemetry, operator inspection support, and sales/low-stock Help Centre guidance",
+      "file": "sql/20260829_0038_mink_phase_1b.sql",
+      "transaction": true,
+      "requires": ["20260829_0037_mink_sidebar_composer"],
+      "verify": {
+        "columns": [
+          "mink_runs.retry_count",
+          "mink_usage_ledger.usage_status",
+          "mink_usage_ledger.estimated_cost_microusd",
+          "mink_usage_ledger.pricing_version"
+        ],
+        "constraints": [
+          "mink_runs_counts_check",
+          "mink_usage_ledger_counts_check",
+          "mink_usage_ledger_status_check"
+        ],
+        "queries": [
+          {
+            "name": "the cross-store Mink run index exists",
+            "sql": "select (to_regclass('public.mink_runs_started_idx') is not null)::text",
+            "equals": "true"
+          }
+        ]
+      },
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "the Mink dashboard guide documents Phase 1B tools permissions and reliability",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%Analytics → View%' and body like '%Inventory → View%' and body like '%retries a transient model failure at most once%' and body like '%never displays prompts, answers, tool arguments, tool results or model reasoning%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "the Mink dashboard guide includes sales and low-stock permissions",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%Analytics → View%' and body like '%Inventory → View%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260829_0039_mink_phase_2",
+      "description": "Add invited Mink beta access, trusted page context, conversation compaction, answer feedback, and shadow cost cohorts",
+      "file": "sql/20260829_0039_mink_phase_2.sql",
+      "transaction": true,
+      "requires": ["20260829_0038_mink_phase_1b"],
+      "verify": {
+        "tables": ["mink_store_access", "mink_feedback"],
+        "columns": [
+          "mink_conversations.summary_json",
+          "mink_conversations.summarized_message_count",
+          "mink_runs.current_path",
+          "mink_runs.selected_resource_type",
+          "mink_runs.selected_resource_id",
+          "mink_usage_ledger.shadow_credits",
+          "mink_usage_ledger.cost_cohort"
+        ],
+        "constraints": [
+          "mink_store_access_invitation_check",
+          "mink_conversations_summary_check",
+          "mink_runs_context_check",
+          "mink_usage_ledger_cohort_check",
+          "mink_feedback_run_admin_key",
+          "mink_feedback_rating_check"
+        ],
+        "rlsTables": ["mink_store_access", "mink_feedback"]
+      },
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "the Mink dashboard guide documents the invited beta cards privacy compaction feedback and shadow metering",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%Cards, filters and dashboard context%' and body like '%Customers → View%' and body like '%bounded extractive summary%' and body like '%Shadow credits%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "the Mink dashboard guide contains merchant beta guidance",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%invited read-only beta%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260830_0040_mink_phase_3",
+      "description": "Add operator-gated private Mink proposals, immutable draft versions, and atomic weighted-credit charging",
+      "file": "sql/20260830_0040_mink_phase_3.sql",
+      "transaction": true,
+      "requires": ["20260829_0039_mink_phase_2"],
+      "verify": {
+        "tables": [
+          "mink_drafts",
+          "mink_draft_versions",
+          "mink_draft_credit_usage"
+        ],
+        "columns": [
+          "mink_store_access.drafting_enabled",
+          "mink_draft_credit_usage.period"
+        ],
+        "constraints": [
+          "mink_store_access_drafting_check",
+          "mink_usage_ledger_cohort_check",
+          "mink_drafts_run_store_fkey",
+          "mink_drafts_kind_check",
+          "mink_draft_versions_draft_version_key",
+          "mink_draft_credit_usage_draft_key",
+          "mink_draft_credit_usage_counts_check",
+          "mink_draft_credit_usage_period_check"
+        ],
+        "rlsTables": [
+          "mink_drafts",
+          "mink_draft_versions",
+          "mink_draft_credit_usage"
+        ],
+        "queries": [
+          {
+            "name": "the atomic Mink draft credit function exists",
+            "sql": "select (to_regprocedure('public.consume_mink_draft_credits(uuid,text,uuid,uuid,text,integer,integer,text)') is not null)::text",
+            "equals": "true"
+          },
+          {
+            "name": "the failed-run Mink draft compensation function exists",
+            "sql": "select (to_regprocedure('public.discard_failed_mink_run_drafts(uuid,uuid)') is not null)::text",
+            "equals": "true"
+          }
+        ]
+      },
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "the Mink dashboard guide documents private versioned weighted drafts and no publish or send authority",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%Private content drafts%' and body like '%Save private draft%' and body like '%cannot publish a product or blog%' and body like '%blog drafts cost 5%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "the Mink dashboard guide includes Phase 3 private draft guidance",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%Private content drafts%' and body like '%cannot publish a product or blog%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260830_0041_mink_location_alias_help",
+      "description": "Document Mink location name/type aliases and fail-closed named-location scope",
+      "file": "sql/20260830_0041_mink_location_alias_help.sql",
+      "transaction": true,
+      "requires": ["20260830_0040_mink_phase_3"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "the Mink dashboard guide documents safe location name/type aliases without all-store fallback",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%Delhi warehouse%' and body like '%does not replace a failed named-location request with all-store results%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "the Mink dashboard guide already documents safe location name/type aliases",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%Delhi warehouse%' and body like '%does not replace a failed named-location request with all-store results%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260830_0042_mink_phase_4a_product_actions",
+      "description": "Add exact approvals, per-tool operator kill switches, transactional product text actions, and append-only action audit",
+      "file": "sql/20260830_0042_mink_phase_4a_product_actions.sql",
+      "transaction": true,
+      "requires": ["20260830_0041_mink_location_alias_help"],
+      "verify": {
+        "tables": [
+          "mink_action_tool_access",
+          "mink_action_approvals",
+          "mink_action_audit"
+        ],
+        "columns": [
+          "mink_action_approvals.product_version",
+          "mink_action_approvals.request_hash",
+          "mink_action_audit.product_version_after",
+          "mink_action_audit.tool_version"
+        ],
+        "constraints": [
+          "mink_action_tool_access_pkey",
+          "mink_action_approvals_idempotency_key",
+          "mink_action_approvals_draft_store_fkey",
+          "mink_action_approvals_product_store_fkey",
+          "mink_action_approvals_source_store_fkey",
+          "mink_action_approvals_execution_check",
+          "mink_action_audit_approval_key",
+          "mink_action_audit_outcome_check"
+        ],
+        "rlsTables": [
+          "mink_action_tool_access",
+          "mink_action_approvals",
+          "mink_action_audit"
+        ]
+      },
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "the Mink dashboard guide documents exact approvals field limits audit conflicts and safe rollback",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%Approved product-text actions%' and body like '%Approve and apply%' and body like '%append-only audit row%' and body like '%Review safe rollback%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "the Mink dashboard guide already contains Phase 4A guarded product action guidance",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%Approved product-text actions%' and body like '%Approve and apply%' and body like '%Review safe rollback%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260830_0043_mink_phase_4b_4d_actions",
+      "description": "Add exact approvals for unpublished product creation, disabled coupon create/update, and customer-group metadata create/update",
+      "file": "sql/20260830_0043_mink_phase_4b_4d_actions.sql",
+      "transaction": true,
+      "requires": ["20260830_0042_mink_phase_4a_product_actions"],
+      "verify": {
+        "columns": [
+          "mink_action_approvals.resource_type",
+          "mink_action_approvals.resource_version",
+          "mink_action_approvals.result_id",
+          "mink_action_audit.resource_version_after",
+          "mink_action_audit.result_id"
+        ],
+        "constraints": [
+          "mink_drafts_kind_check",
+          "mink_action_tool_access_name_check",
+          "mink_action_approvals_resource_type_check",
+          "mink_action_audit_resource_type_check"
+        ]
+      },
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "the Mink guide documents guarded Phase 4B through 4D actions and safe rollback",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%Creating products, coupons and customer groups%' and body like '%unpublished draft product%' and body like '%disabled and hidden%' and body like '%safe rollback preview%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "the Mink guide already documents guarded Phase 4B through 4D actions",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%Creating products, coupons and customer groups%' and body like '%unpublished draft product%' and body like '%disabled and hidden%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260830_0044_mink_action_reliability_help",
+      "description": "Document restored proposal cards, independent drafting rollout, and exact Mink action checkpoints",
+      "file": "sql/20260830_0044_mink_action_reliability_help.sql",
+      "transaction": true,
+      "requires": ["20260830_0043_mink_phase_4b_4d_actions"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "the Mink guide documents proposal restoration independent drafting rollout and exact action checkpoints",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%Proposal and approval reliability%' and body like '%retained conversation after a refresh%' and body like '%does not enable drafting for every store%' and body like '%exact database checkpoint captured by the preview%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "the Mink guide already documents the proposal and action reliability contract",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%Proposal and approval reliability%' and body like '%exact database checkpoint captured by the preview%'",
+            "equals": "1"
+          }
+        ]
+      }
     }
   ]
 }

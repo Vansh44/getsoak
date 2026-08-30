@@ -1,6 +1,6 @@
 # StoreMink — Positioning Brief (one-page)
 
-> **Status:** draft v1 (2026-07-05) · **Owner:** Vansh · **Purpose:** the single
+> **Status:** v2 (2026-08-30) · **Owner:** Vansh · **Purpose:** the single
 > source of truth for who we're for, why we win, and what we say. Everything
 > below is defensible from the product as built today, except items marked
 > `[fill in]` (need your numbers/proof before external use).
@@ -9,18 +9,18 @@
 
 ## Category
 
-An **India-native, no-code storefront platform** — the fastest way for a small
-D2C brand to launch a real website and start selling, without a developer, an
-agency, or a cut of your sales.
+An **AI-powered commerce platform for Indian brands and retailers** — create an
+online store in minutes, connect online and in-person selling, and run the
+business from one dashboard without needing technical expertise.
 
 ## Positioning statement
 
-**For** India's small D2C brands, creators, and local retailers going online,
-**who** find Shopify too generic and pricey and StoreHippo too heavy and
-enterprise, **StoreMink is** a self-serve storefront platform **that** gets you
-a genuinely custom, editable website live in a day on India-native rails —
-**unlike** Shopify (global, Liquid-for-real-work, takes a cut of your sales) and
-StoreHippo (enterprise, headless, sales-led).
+**For** India's growing brands, creators and local retailers, **StoreMink is**
+an AI-powered commerce platform **that** creates a real, editable online store
+in minutes and keeps products, orders, customers, inventory, locations, online
+sales and POS connected in one dashboard. **Mink AI** makes the system easier
+to understand and operate through everyday language, beginning with grounded
+business answers and private drafts before guarded dashboard actions.
 
 ## Ideal customer (ICP)
 
@@ -31,36 +31,38 @@ StoreHippo (enterprise, headless, sales-led).
 
 ## The gap we own
 
-Too-basic tools (Dukaan, Instamojo) give a link-in-bio, not a brand. Shopify and
-StoreHippo give power but demand code, budget, or a sales call. **The open lane:
-India-native + self-serve + a _real_ editable website — more than basic, far
-simpler than enterprise.**
+Basic tools help merchants start selling but quickly split the website, counter,
+inventory and day-to-day operations across different systems. Large global
+platforms provide breadth but can be difficult for a non-technical merchant to
+configure and operate. **The open lane: India-native, AI-assisted unified
+commerce—a real storefront, connected POS and one understandable dashboard.**
 
 ## Why we win (3 sharp claims)
 
-1. **We don't tax your sales.** Bring your own gateway (Razorpay/Cashfree),
-   subscription-only pricing. Your margin stays yours. _(This is also our
-   revenue constraint — we win on volume + retention, not take-rate.)_
-2. **A real website you actually edit.** The builder _is_ the storefront: pages,
-   sections, menus, and even custom code are yours to change, no Liquid, no dev.
-   You start from a working themed store, not a blank canvas.
-3. **India-native by default.** Phone-OTP login, UPI, WhatsApp, INR/GST, and a
-   free `.storemink.com` domain in seconds.
+1. **One connected commerce system.** The storefront, dashboard, POS, customers,
+   orders, inventory, locations, pickup and returns share the same data.
+2. **AI that lowers the technical barrier.** Mink AI answers questions from the
+   merchant's own StoreMink data and prepares editable private drafts through
+   simple prompts; guarded actions expand only as their approval controls ship.
+3. **Built for how India sells.** INR pricing, GST workflows, bring-your-own
+   payments and logistics, plus 0% StoreMink transaction fees.
 
 ## Competitive frame
 
-|                | Shopify                | StoreHippo            | Basic tools               | **StoreMink**                      |
-| -------------- | ---------------------- | --------------------- | ------------------------- | ---------------------------------- |
-| For            | global SMB→mid         | India enterprise/B2B  | link-in-bio sellers       | **India SMB / creator / D2C**      |
-| Setup          | dev for real work      | sales-led             | instant but shallow       | **self-serve, real site in a day** |
-| Money model    | cut of GMV             | licence/impl.         | freemium                  | **subscription, no GMV cut**       |
-| Edge to attack | price + Liquid lock-in | weight + sales motion | can't grow with the brand | —                                  |
+|                | Shopify                | StoreHippo            | Basic tools               | **StoreMink**                        |
+| -------------- | ---------------------- | --------------------- | ------------------------- | ------------------------------------ |
+| For            | global SMB→mid         | India enterprise/B2B  | link-in-bio sellers       | **India SMB / creator / D2C**        |
+| Setup          | dev for real work      | sales-led             | instant but shallow       | **self-serve store in minutes**      |
+| Money model    | cut of GMV             | licence/impl.         | freemium                  | **subscription, no GMV cut**         |
+| Edge to attack | price + Liquid lock-in | weight + sales motion | can't grow with the brand | **AI simplicity + connected retail** |
 
 ## Messaging pillars (headline → proof)
 
-- **"Launch a real store, not a link."** → themed, editable site + custom domain. `[fill in: demo store URL]`
-- **"Keep every rupee you earn."** → BYO gateway, subscription-only. `[fill in: price]`
-- **"Built for how India sells."** → phone-OTP, UPI, WhatsApp, GST-ready.
+- **"Create your store."** → a themed, editable storefront live in minutes.
+- **"Sell everywhere."** → online sales, POS, inventory, locations, pickup
+  and returns in one connected operation.
+- **"Grow with AI."** → Mink AI turns store data and everyday prompts into
+  clear answers and editable work.
 
 ## Say no on purpose (anti-positioning)
 
@@ -74,13 +76,18 @@ Not a marketplace. Every "no" sharpens the "yes."
 - **No take-rate** → **retention + low run-cost + an integrations story** are the
   growth levers, not payment margin.
 - **No-code depth** (themes + settings as data) is the moat vs. basic tools —
-  keep widening it. Checkout/payments is the next unlock. `[fill in: timeline]`
+  keep widening it. Guarded Mink actions and a wider integrations story are the
+  next unlocks. `[fill in: timeline]`
 
-## Tagline candidates (pick/kill)
+## Selected tagline
 
-- _Your brand, online in a day._
-- _A real store. No code. No cut._
-- _Selling online, the India-native way._
+**Create your store. Sell everywhere. Grow with AI.**
+
+## Short description
+
+**StoreMink is an AI-powered commerce platform that lets you create a store in
+minutes and manage products, orders, customers, inventory, locations, online
+sales and POS from one connected dashboard.**
 
 ---
 

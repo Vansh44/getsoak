@@ -41,8 +41,11 @@ export const BRAND_SAME_AS: readonly string[] = [
 
 export const SUPPORT_EMAIL = "support@storemink.com";
 
-const BRAND_DESCRIPTION =
-  "India-first no-code store builder — storefront, blogs, reviews, coupons and email campaigns included. D2C + B2B, no transaction fees.";
+export const BRAND_TAGLINE =
+  "Create your store. Sell everywhere. Grow with AI.";
+
+export const BRAND_DESCRIPTION =
+  "StoreMink is an AI-powered commerce platform that lets you create a store in minutes and manage products, orders, inventory, locations, sales and POS.";
 
 /**
  * Safe fallbacks for Google's automated site-name system.

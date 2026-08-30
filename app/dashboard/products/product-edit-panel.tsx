@@ -44,7 +44,10 @@ export function ProductEditorPanel({
   const published = product?.status === "published";
 
   return (
-    <div>
+    <div
+      data-mink-resource-type={product ? "product" : undefined}
+      data-mink-resource-id={product?.id}
+    >
       {/* Full-width sticky header that sits FLUSH at the top of the scroll
           area. The scroll container (.dash-content) has 28px top / 32px side
           padding, and `position: sticky` pins to the container's CONTENT box

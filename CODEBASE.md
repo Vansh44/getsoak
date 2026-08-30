@@ -6,12 +6,21 @@
 
 ## 1. What this project is
 
-**StoreMink** (storemink.com) is a multi-tenant, no-code D2C SaaS platform — a
-Shopify-style product. Anyone can sign up, create their own store, and start
-selling within a day. Every store gets:
+**StoreMink** (storemink.com) is a multi-tenant, AI-powered commerce platform
+for Indian brands and retailers. Anyone can create an online store in minutes,
+then manage online and in-person commerce from one connected system. Its public
+positioning is **"Create your store. Sell everywhere. Grow with AI."** Every
+store gets:
 
 - A **storefront** on its own subdomain (`{slug}.storemink.com`) or a verified custom domain.
-- A full **admin dashboard** (`/dashboard`) to manage products, orders-adjacent data, blogs, marketing, users, branding, and settings — all no-code.
+- A full **admin dashboard** (`/dashboard`) to manage products, orders,
+  customers, inventory, locations, sales, blogs, marketing, branding and
+  settings — all no-code.
+- A connected, plan-gated **Point of Sale** for in-store checkout, shared
+  inventory, pickup, returns, shifts and staff operations.
+- **Mink AI**, currently an invited read, draft and guarded-product-action beta,
+  to answer questions from live store data, prepare private reversible content
+  drafts and apply an explicitly approved product description or SEO change.
 
 The codebase began as **WholeSip** (a single D2C juice brand, store #1) and was
 converted to multi-tenant in phases. It still exists as the fallback store
@@ -21,16 +30,16 @@ tokens were renamed to `--sm-*` and `WHOLESIP_STORE_ID` to `FALLBACK_STORE_ID`.
 
 ## 2. Tech stack
 
-| Layer     | Tech                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Framework | Next.js 16 (App Router, `--turbopack` dev) — **breaking-changes version; read `node_modules/next/dist/docs/` before writing code** (see AGENTS.md)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| UI        | React 19, Tailwind CSS v4, shadcn/ui (`components/ui/`), Base UI, lucide-react, sonner (toasts), recharts (charts), TipTap (rich-text editor), CodeMirror 6 (`@uiw/react-codemirror` — website-builder code editor, lazy-loaded)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| Backend   | Supabase (Postgres + Auth + Storage + RLS), server actions in `app/actions/`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| Email     | Resend + nodemailer (`lib/email/`), Vercel cron `/api/cron/send-emails` (daily, `vercel.json`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| AI        | Gemini (`lib/ai/gemini.ts`); per-store brand voice (`lib/ai/brand-voice.ts` + `store_brand_profiles`) with plan-capped usage metering (`lib/ai/quota.ts`); task prompts in `brand/tasks/`. The dashboard Mink AI drawer is still a canned placeholder; its Vertex/Gemini agent architecture and phased rollout are specified (not implemented) in `docs/mink-ai-dashboard-plan.md`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| Testing   | Vitest + Testing Library + jsdom, coverage via v8 (`coverage/` is generated output — never edit)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| Browsers  | **`browserslist` in package.json is the stated floor: Chrome/Edge 111, Firefox 128, Safari/iOS 16.4.** Not a preference — Tailwind v4 depends on `@property` and `color-mix()` and does not work below it, so this records a constraint a dependency already imposed rather than inventing one. Two authored CSS features sit BELOW that floor and so are always available: `:has()` (Chrome 105+/Safari 15.4+/Firefox 121+) and container queries (Chrome 105+/Safari 16+/Firefox 110+), both used by the dashboard table compaction, which is nonetheless wrapped in `@supports selector(:has(+ *)) and (container-type: inline-size)` so the dependency is stated where it is used and stays graceful if the floor is ever lowered. **⚠ There is NO cross-browser test infrastructure** — vitest runs in jsdom, which renders nothing. Chrome is the only browser this has been exercised in |
-| Deploy    | **Google Cloud Run** via branch-specific Cloud Build triggers (`staging` → `storemink-web`, `main` → `storemink-web-prod`; Dockerfile + `cloudbuild.yaml`). CI on GitHub Actions (`.github/workflows/ci.yml`: lint → typecheck → test → test:shuffle → prettier → build); `npm run typecheck` runs `next typegen` before `tsc --noEmit` because the Next-managed `next-env.d.ts` is deliberately gitignored and a clean checkout otherwise has no static-image or route declarations. Database DDL is a separate, checksummed release gate (`npm run db:migrate`; see `drizzle/manual/README.md`).                                                                                                                                                                                                                                                                                              |
+| Layer     | Tech                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Framework | Next.js 16 (App Router, `--turbopack` dev) — **breaking-changes version; read `node_modules/next/dist/docs/` before writing code** (see AGENTS.md)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| UI        | React 19, Tailwind CSS v4, shadcn/ui (`components/ui/`), Base UI, lucide-react, sonner (toasts), recharts (charts), TipTap (rich-text editor), CodeMirror 6 (`@uiw/react-codemirror` — website-builder code editor, lazy-loaded)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Backend   | Supabase (Postgres + Auth + Storage + RLS), server actions in `app/actions/`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| Email     | Resend + nodemailer (`lib/email/`), Vercel cron `/api/cron/send-emails` (daily, `vercel.json`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| AI        | Gemini (`lib/ai/gemini.ts`); per-store brand voice (`lib/ai/brand-voice.ts` + `store_brand_profiles`) with plan-capped usage metering (`lib/ai/quota.ts`); task prompts in `brand/tasks/`. The dashboard Mink drawer has a default-on, invitation-gated Vertex/Gemini 3.7 beta in `lib/mink/` + `app/api/mink/`: its marked runtime system prompt is `docs/mink-ai-system-prompt.md`, validated and rendered by `lib/mink/system-prompt.ts`. Phase 2 streams permission/location-aware store, catalogue, sales, order, inventory and Help reads; Phase 3 adds separately opted-in private proposals. Phase 4A adds independently gated product description/SEO actions; 4B adds unpublished, untracked draft-product creation; 4C adds disabled/hidden coupon create/update; and 4D adds customer-group metadata create/update. Every action uses a saved proposal, exact ten-minute human approval, tenant/permission/tool/version rechecks, idempotent transactional execution, append-only outcomes and checkpointed safe rollback. Gemini receives proposal tools but no live execute tool. Inventory, order status, publication, campaigns, customer contact/group membership, bulk prices and arbitrary coding remain unavailable. Operators control every gate and inspect redacted metrics at `/dashboard/mink`; the 50-case live harness is `npm run mink:eval`, and the phase-wise manual catalogue is `docs/mink-ai-test-prompts.md`. An explicit global disable or missing invite retains the canned coming-soon response. Architecture and phased rollout are tracked in `docs/mink-ai-dashboard-plan.md`. |
+| Testing   | Vitest + Testing Library + jsdom, coverage via v8 (`coverage/` is generated output — never edit)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Browsers  | **`browserslist` in package.json is the stated floor: Chrome/Edge 111, Firefox 128, Safari/iOS 16.4.** Not a preference — Tailwind v4 depends on `@property` and `color-mix()` and does not work below it, so this records a constraint a dependency already imposed rather than inventing one. Two authored CSS features sit BELOW that floor and so are always available: `:has()` (Chrome 105+/Safari 15.4+/Firefox 121+) and container queries (Chrome 105+/Safari 16+/Firefox 110+), both used by the dashboard table compaction, which is nonetheless wrapped in `@supports selector(:has(+ *)) and (container-type: inline-size)` so the dependency is stated where it is used and stays graceful if the floor is ever lowered. **⚠ There is NO cross-browser test infrastructure** — vitest runs in jsdom, which renders nothing. Chrome is the only browser this has been exercised in                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| Deploy    | **Google Cloud Run** via branch-specific Cloud Build triggers (`dev` → `storemink-web-dev`, `staging` → `storemink-web`, `main` → `storemink-web-prod`; Dockerfile + `cloudbuild.yaml`). The Cloud Build deploy owns the complete runtime environment; Mink's model/limit settings and separate invited-beta requirement are declared as substitutions. The global runtime defaults enabled, while the per-store invitation requirement defaults on and remains the fail-closed merchant boundary. CI on GitHub Actions (`.github/workflows/ci.yml`: lint → typecheck → test → test:shuffle → prettier → build); `npm run typecheck` runs `next typegen` before `tsc --noEmit` because the Next-managed `next-env.d.ts` is deliberately gitignored and a clean checkout otherwise has no static-image or route declarations. Database DDL is a separate, checksummed release gate (`npm run db:migrate`; see `drizzle/manual/README.md`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 
 ## 3. Multi-tenancy architecture (the core concept)
 
@@ -121,12 +130,14 @@ wholesip/
 ├── AGENTS.md / CLAUDE.md      # Agent instructions (CLAUDE.md just imports AGENTS.md)
 ├── CODEBASE.md                # ← this file
 ├── proxy.ts                   # Edge middleware: host routing + auth gates (see §3)
-├── next.config.ts             # output:"standalone" (Cloud Run), image formats, brand/
-│                              # file tracing, optimizePackageImports
+├── next.config.ts             # output:"standalone" (Cloud Run), image formats, runtime
+│                              # Markdown prompt tracing, optimizePackageImports
 ├── Dockerfile / .dockerignore / cloudbuild.yaml  # ★ Cloud Run container (GCP Phase 4 —
 │                              # see docs/gcp-migration-phase4-cloud-run.md). Multi-stage
 │                              # standalone build; NEXT_PUBLIC_* are build args, secrets
-│                              # runtime-only. Build linux/amd64 (Cloud Build or --platform).
+│                              # runtime-only. Cloud Build owns the complete Cloud Run env,
+│                              # including default-on Mink + fail-closed invitation substitutions.
+│                              # Build linux/amd64 (Cloud Build or --platform).
 ├── vercel.json                # INERT schedule record (prod = Cloud Scheduler):
 │                              # send-emails, plan-expiry, expire-pending-payments,
 │                              # seo-refresh, search-metrics, domain-reconcile, prune-logs,
@@ -238,6 +249,25 @@ wholesip/
 │   │   │                      # so local Cloud SQL latency is paid once, not serially;
 │   │   │                      # topbar Search/⌘K is a keyboard/touch command palette
 │   │   │                      # built only from the viewer's permission-filtered nav
+│   │   ├── mink-ai.ts         # ★ Flag-selected drawer client: disabled → canned reply;
+│   │   │                      # enabled → abortable SSE, restores/loads the actor's last
+│   │   │                      # ten conversations, deletes scoped threads, tool progress,
+│   │   │                      # proposal/read artifacts, safe errors, Stop + Retry.
+│   │   ├── mink-artifact-parser.ts # Restores every bounded card type, including private
+│   │   │                      # proposal review cards, from live SSE and saved history.
+│   │   ├── chat-context.tsx   # Shares the same Mink thread between Home, drawer and
+│   │   │                      # expanded view; receives the private server-side flag.
+│   │   ├── dashboard-chat.tsx # Mink panel/full-view renderer: Codex-style history sidebar
+│   │   │                      # with confirmed deletion, persisted drag/keyboard width,
+│   │   │                      # Help-matched robot identity and auto-growing composer.
+│   │   ├── mink-answer.tsx    # Safe React-rendered bold/inline-code subset; model text
+│   │   │                      # is never raw HTML and `**` markers do not leak into UI.
+│   │   ├── mink-artifacts.tsx # Permission-safe metric/order/product/inventory/source cards
+│   │   │                      # plus private proposal cards; mink-proposal-card.tsx edits,
+│   │   │                      # versions/restores proposals and provides Phase 4's exact,
+│   │   │                      # explicitly approved product/coupon/group action/rollback UX.
+│   │   ├── mink-feedback.tsx  # Per-answer thumbs + bounded, privacy-redacted issue report.
+│   │   ├── mink-mark.tsx      # Shared solid-purple robot mark matching Help Centre Mink.
 │   │   ├── page.tsx           # Overview: metrics, revenue chart, activity, inventory…
 │   │   ├── analytics/         # ★ Performance dashboard (§20): URL date/comparison
 │   │   │                      # filters, streamed commerce + tenant-scoped Google
@@ -388,6 +418,8 @@ wholesip/
 │   │                          # (ONE merchant, fully described), email-logs/,
 │   │                          # failures/ (the SAME feed as a store's, scoped
 │   │                          # { kind: "platform" } across every store, §33);
+│   │                          # mink/ (redacted cross-store run, reliability, token
+│   │                          # and shadow-cost inspector — no conversation content);
 │   │                          # ADMINISTRATION = help/, themes/, pricing/, analytics/,
 │   │                          # operators/, billing/. require-operator.ts is the
 │   │                          # per-PAGE gate — the layout's redirect does not abort a
@@ -517,6 +549,27 @@ wholesip/
 │   │   └── _test-helpers.ts   # Shared mocks for action tests (co-located *.test.ts)
 │   │
 │   └── api/
+│       ├── mink/stream/      # ★ Internal bounded Mink agent SSE boundary.
+│       │                      # Default-on unless MINK_AI_ENABLED=false; derives the
+│       │                      # actor/tenant/permissions server-side, rate-limits,
+│       │                      # validates browser Origin against x-forwarded-host/host
+│       │                      # (never the proxy's internal request.url host),
+│       │                      # creates a durable run, replays only successful prior
+│       │                      # turns, runs bounded Gemini 3.7 tool turns with one
+│       │                      # transient retry + a hard run timeout, records partial/
+│       │                      # unavailable usage honestly, records
+│       │                      # redacted tool/token telemetry, and emits typed status/
+│       │                      # tool/message/usage/done events to the dashboard client.
+│       ├── mink/conversations/ # ★ No-store, rate-limited recent-history API: list the
+│       │   └── [conversationId]/ # actor/store's last ten; load or same-origin delete one.
+│       ├── mink/feedback/    # ★ Authenticated same-origin rating/issue endpoint; accepts
+│       │                      # only the actor's own tenant run and stores redacted detail.
+│       ├── mink/drafts/[draftId]/ # ★ No-store private-draft read/save/rollback API;
+│       │                      # same-origin writes, optimistic versions, actor/store/RBAC scope.
+│       │   ├── product-action/ # ★ Phase 4A same-origin preview/execute/rollback endpoint;
+│       │                      # accepts ids/versions only, never browser-supplied product text.
+│       │   └── action/        # ★ Phase 4B–4D same-origin exact preview/execute/rollback;
+│       │                      # draft products, disabled coupons and group metadata only.
 │       ├── pos/live/          # ★ Authenticated no-store GET transport for every
 │       │                      # background POS read (badge, queue, stock, paged
 │       │                      # catalogue). Server Actions are client-serialized,
@@ -615,7 +668,10 @@ wholesip/
 │   │                          # return cross-tenant data. Both fail to an empty
 │   │                          # snapshot; getPlatformInsights returns `ok: false` so
 │   │                          # the page can say the figures are stale rather than
-│   │                          # present zeroes as good news
+│   │                          # present zeroes as good news. mink-runs.ts is the
+│   │                          # redacted Mink cross-store telemetry read: filters,
+│   │                          # aggregate reliability/cost cards and 100 recent rows;
+│   │                          # it never selects prompt/answer/tool payload/reasoning.
 │   ├── logistics/             # ★ §35 provider boundary: Shiprocket REST client + encrypted
 │   │                          # session, fulfilment work, stable status machine and tracking
 │   │                          # ingestion/order synchronization. Pure boundaries tested.
@@ -910,6 +966,43 @@ wholesip/
 │   ├── ai/gemini.ts           # Gemini/Vertex AI client for AI copy (dual backend, §7);
 │   │                          # emits ai.generate telemetry (latency + tokens) via observability
 │   ├── ai/credits.ts          # ★ AI credit pack catalog (pure — the one place to reprice)
+│   ├── db/pg-types.ts         # Keeps timestamp/timestamptz text at PostgreSQL's full
+│   │                          # microsecond precision for exact optimistic checkpoints.
+│   ├── mink/                  # ★ Dashboard agent foundation (docs/mink-ai-dashboard-plan.md):
+│   │                          # default-on global + fail-closed invited-store access;
+│   │                          # system-prompt.ts validates/renders the marked runtime
+│   │                          # template in docs/mink-ai-system-prompt.md; trusted actor,
+│   │                          # route and selected product/order construction; bounded
+│   │                          # orchestrator; official Google Gen AI SDK Vertex client;
+│   │                          # abort-aware one-retry transport + hard run/tool timeouts;
+│   │                          # permission-filtered/rechecked store/profile, catalogue,
+│   │                          # product, recognized-sales, low-stock, order/current-order
+│   │                          # and hybrid Help read tools. Quantitative tools return rich
+│   │                          # card artifacts carrying explicit date/location/channel scope.
+│   │                          # Location scope accepts a unique canonical name or safe
+│   │                          # name-plus-type alias and never broadens a failed named request.
+│   │                          # Order/customer output is role-gated and masks direct PII;
+│   │                          # selected IDs are revalidated against the trusted tenant.
+│   │                          # persistence.ts owns actor-scoped conversations/runs, redacted
+│   │                          # tool records, extractive history compaction, answer artifacts
+│   │                          # and append-only partial usage + versioned shadow cost/credits.
+│   │                          # feedback.ts accepts only actor-owned runs and redacts private
+│   │                          # detail; request-origin.ts is the shared Cloud Run CSRF boundary.
+│   │                          # drafts.ts + draft-types.ts and tools/draft-tools.ts implement
+│   │                          # the separately opted-in Phase 3 proposal boundary: five
+│   │                          # brand-voice draft kinds, atomic weighted plan/credit use,
+│   │                          # admin-private immutable versions and rollback. Phase 4 adds
+│   │                          # product-action-types.ts + product-actions.ts plus
+│   │                          # domain-action-types.ts + domain-actions.ts: exact short-lived
+│   │                          # approvals, seven per-tool gates, field-limited transactional
+│   │                          # writes, idempotency/conflict checks, immutable outcomes and
+│   │                          # safe rollback. Product creation stays unpublished/untracked;
+│   │                          # coupon writes stay disabled/hidden and group writes metadata-only.
+│   │                          # timestamps.ts canonicalizes coupon business dates without
+│   │                          # weakening full-precision resource-version checkpoints.
+│   │                          # No model tool can publish, send or execute a live mutation.
+│   │                          # `evals/mink/read-alpha.json` + `npm run mink:eval` are the
+│   │                          # 50-case live tool/safety/latency gate.
 │   ├── help/                   # ★ Public Help reads/types plus Mink AI retrieval (§21):
 │   │                          # assistant-input.ts rejects low-signal turns; chunks.ts
 │   │                          # creates heading-aware plain-text sections; embeddings.ts
@@ -1309,7 +1402,23 @@ wholesip/
 │                              # and the product-editor handoff to physical shelf quantities;
 │                              # 0029–0033 keep Locations and POS Help aligned through
 │                              # fulfilment navigation, phone-first checkout, pickup Razorpay,
-│                              # unified Sales, and policy-driven returns/exchanges.
+│                              # unified Sales, and policy-driven returns/exchanges; 0035 adds
+│                              # the service-only Mink conversation/run/message/tool/raw-usage
+│                              # tables and publishes the separate dashboard-agent alpha guide;
+│                              # 0036 prunes/caps actor-store history at ten, grants the service
+│                              # delete needed to enforce it, and documents history/resize/format UX;
+│                              # 0037 documents the robot identity, sidebar delete flow and composer;
+│                              # 0038 adds reliable-run/shadow-cost telemetry; 0039 adds invited
+│                              # beta access, trusted page context, compacted history, answer
+│                              # feedback, shadow credit cohorts and the Phase 2 Help contract;
+│                              # 0040 adds the independent drafting gate, private proposal/
+│                              # version/credit ledgers, atomic weighted charging and Phase 3 Help;
+│                              # 0041 documents safe location name/type aliases and no broad fallback;
+│                              # 0042 adds Phase 4A product-action gates, exact approvals and audit;
+│                              # 0043 extends the proposal/action boundary through Phase 4B–4D and
+│                              # documents draft-product, disabled-coupon and group-metadata limits;
+│                              # 0044 documents restored proposal cards, independent drafting
+│                              # rollout and exact action/rollback checkpoint behavior.
 ├── scripts/
 │   ├── dev-server.mjs         # ★ resource-aware Next dev runner: 2 GB heap on ≤12 GB
 │   │                          # machines, 3 GB on ≤20 GB, uncapped above; rotates
@@ -2719,6 +2828,155 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       store-wide Total customers slot. Current catalogue snapshots never show a
       fake period delta. The old unimported hard-coded performance, inventory
       and operational demo widgets were deleted.
+
+20a. **Mink AI dashboard agent — invited read, private drafting and guarded Phase 4 action beta.** This is separate
+from the public Help Centre assistant. `MINK_AI_ENABLED` is a private,
+server-read kill switch that defaults enabled and can be set explicitly false;
+`MINK_BETA_REQUIRE_INVITE` defaults true and requires an enabled
+`mink_store_access` row. Either an explicit global disable or a missing invite
+keeps the original canned drawer. An operator can add/remove the invitation from the store detail
+page; invited stores connect Home, the side panel and expanded view to
+`POST /api/mink/stream`. The route authenticates the dashboard request,
+derives host store/admin/RBAC/effective plan out of band, rejects foreign
+origins, rate-limits by store + actor and never accepts a tenant or
+permission map from the browser/model. The current Vertex-only Gemini 3.7
+loop has bounded steps/tool calls/parallel reads, one bounded retry for
+transient 408/429/5xx/network failures, per-tool timeouts and a hard run
+timeout. `docs/mink-ai-system-prompt.md` is the executable marked system-prompt
+template; `lib/mink/system-prompt.ts` reads and validates its markers, fence and
+required placeholders before injecting only trusted actor/tool context. Next
+output tracing and the narrow Docker-context exception ship that Markdown file
+with the standalone server.
+When invitation-only rollout is explicitly disabled, reads become available to
+all stores but the existing store row still controls the independent drafting
+opt-in; disabling the invitation boundary never discards a store's operator-set
+drafting entitlement.
+Its read tools cover store profile, catalogue summary, product search,
+recognized net sales, low stock, masked orders/current order, current product
+and published Help Centre retrieval. Sales and orders reuse the dashboard's
+date/timezone/refund/channel contract; stock uses per-SKU thresholds. Applied
+date/location/channel scope returns with structured metric, order, product,
+inventory or Help-source cards instead of living only in prose. Browser route
+and selected product/order IDs are hints only: the server normalizes the route
+and revalidates every record against the trusted store before exposing context.
+Model-supplied location names are intersected with server-derived assignments;
+the resolver accepts the canonical name or one unambiguous name-plus-type alias
+such as `Delhi warehouse`, but never fuzzy-matches or widens a failed named
+request to the all-location scope. Location/store/admin IDs are never tool inputs. Tool declarations are
+permission-filtered and execution rechecks RBAC; every database query carries
+the trusted `store_id`, and direct customer PII is minimized/masked.
+
+     Cloud Build declares the entire Mink runtime configuration because its
+     deploy uses authoritative `--set-env-vars`: model `gemini-3.7-flash`,
+     Vertex location `global`, 8 steps, 16 tool calls, 4 parallel reads,
+     2048 output tokens, 1 transient retry and a 120-second hard timeout. The
+     build-file global switch defaults true and the invitation requirement also
+     defaults true. The real agent therefore remains limited to
+     operator-invited stores; `_MINK_AI_ENABLED=false` is the explicit emergency
+     shutdown. Standard dev, staging and production trigger guidance keeps the
+     global switch true and the invitation gate true.
+
+     Migration `20260829_0035_mink_dashboard_alpha` creates service-only,
+     RLS-enabled `mink_conversations`, `mink_runs`, `mink_messages`,
+     `mink_tool_calls` and append-only `mink_usage_ledger`. Conversations are
+     owned by `(store_id, admin_id)`, expire after 90 days, and history replay
+     includes only successful prior runs. Tool arguments/results stay redacted
+     in telemetry; raw prompt/output/thought/total token counts are recorded
+     with `charged_credits=0` for shadow costing. Migration
+     `20260829_0036_mink_conversation_ux` caps retained data at the newest ten
+     conversations per actor/store, with serialized creation and cascading
+     deletion of the oldest. The UI restores the newest thread after refresh,
+     exposes all ten in a dedicated responsive sidebar, allows confirmed
+     same-origin deletion, renders supported Markdown without raw HTML,
+     remembers a bounded drag/keyboard panel width, and grows the multiline
+     composer to a scrollable cap. The dashboard and Help Centre share the same
+     solid-purple robot identity. Explicit Stop and Retry remain available.
+     Migration `20260829_0039_mink_phase_2` adds the invitation and feedback
+     tables, trusted run context, extractive conversation summaries and shadow
+     credit/cost cohorts. When a long thread passes 16 messages, persistence
+     stores a bounded extractive summary and keeps the newest eight messages
+     verbatim; no model is asked to invent or interpret the summary. Answer
+     feedback is tied to the actor's own run, and free text is bounded/redacted
+     before support sees it. `/dashboard/mink` shows invited-store count,
+     feedback and cost cohorts alongside the existing safe trace fields.
+     Phase 3 is independently controlled by `mink_store_access.drafting_enabled`.
+     A qualifying admin with the related Manage permission can request five
+     brand-voice proposal kinds: product description, product SEO, blog,
+     coupon email and reusable customer message. The composer previews the
+     documented 2/1/5/2/2 credit weights; the database atomically consumes the
+     monthly plan allowance before purchased/granted credits and records the
+     authoritative charge once per proposal. Proposal cards show current and
+     suggested text, stay editable, and save immutable admin-private versions;
+     restoring an old version creates a new audited version. These service-only
+     proposal writes are compensated on a failed/cancelled enclosing run: the
+     unseen draft is discarded and its exact plan/balance credits are restored.
+     Both live SSE answers and restored conversation history retain `proposal`
+     artifacts, so the private proposal card and Review controls are not dropped
+     after credits have been charged.
+     The rows are not product/blog/campaign/message rows, and no Phase 3 route can
+     publish, send, contact a customer or mutate a live record. Operators can
+     enable drafting only for an invited store and see aggregate drafting-store,
+     draft and charged-credit counts plus a `draft_proposal` cost cohort without
+     draft content. Migration
+     `20260830_0040_mink_phase_3` owns these tables, the atomic credit function
+     and the updated Help contract.
+
+     Phase 4A adds a separate operator kill switch for product descriptions and
+     product SEO. A saved admin-owned proposal and Products → Manage permission
+     are required before `POST /api/mink/drafts/[draftId]/product-action` can
+     create an exact ten-minute preview. `lib/mink/product-actions.ts` re-reads
+     the draft and linked product under the trusted tenant, binds the approval
+     hash to actor/draft/tool/fields/product content version, and accepts only
+     an approval id for execution—replacement copy never comes from the
+     browser. The transaction locks and rechecks both records, writes only
+     `description` or `seo_title` + `seo_description`, and records one immutable
+     outcome row. Executed approvals are idempotent; changed/expired inputs fail
+     closed with a durable conflict/expiry outcome. Rollback is another exact
+     approval and is available only while the product matches the original
+     post-action content checkpoint. The product cache and standard
+     `product.updated` event refresh only after commit. Migration
+     `20260830_0042_mink_phase_4a_product_actions` owns service-only,
+     RLS-enabled `mink_action_tool_access`, `mink_action_approvals` and
+     append-only `mink_action_audit`; disabling the beta or drafting also shuts
+     every live-action gate. The redacted `/dashboard/mink` summary exposes
+     action-enabled-store, executed and refused-action counts without selecting
+     draft text or approval payloads.
+
+     Phase 4B–4D extend the same human-only approval boundary through
+     `POST /api/mink/drafts/[draftId]/action`; Gemini receives proposal tools,
+     never this execute endpoint. `product_create` costs 3 draft credits and
+     can create only a category-less, unpublished product with inventory
+     tracking off and no variants, images or stock. Coupon and customer-group
+     create/update proposals cost 1 credit each. Coupon actions require and
+     preserve disabled/hidden state, never change `used_count`, audience links
+     or send a campaign. Group actions write only name, description and colour,
+     never membership. Preview and execution recheck tenant, admin, Manage
+     permission, independent tool gate, saved proposal version, resource
+     version, exact fields, uniqueness and current plan. Create rollback can
+     delete only an unchanged/unused draft product, coupon or empty group;
+     update rollback requires the exact post-action checkpoint. Migration
+     `20260830_0043_mink_phase_4b_4d_actions` extends the service-only approval
+     and audit rows with polymorphic resource/result checkpoints and updates the
+     published Help Centre guide. The database driver preserves PostgreSQL's
+     full microsecond timestamp text so valid apply/rollback predicates do not
+     conflict after JavaScript date conversion; coupon validity fields are
+     separately canonicalized so equivalent timestamp formats compare as the
+     same business value without weakening the version guard. Product inventory/variants/publication,
+     coupon activation/visibility/audience/sending, group membership, orders,
+     campaigns, bulk prices, customer contact and StoreMink source/deployment
+     access remain absent. Migration
+     `20260829_0038_mink_phase_1b` adds retry/partial-usage/versioned micro-USD
+     cost columns and a cross-store run index. `/dashboard/mink`, gated at its
+     page before the service-role read, shows operators status, p95 latency,
+     retries, tool names, tokens and known shadow cost but never selects or
+     renders prompts, answers, tool arguments/results, provider state or
+     reasoning. `evals/mink/read-alpha.json` and `npm run mink:eval` provide the
+     50-case live tool-choice/security/latency gate. The complementary
+     `docs/mink-ai-test-prompts.md` catalogue covers phase-wise manual prompts
+     plus UX, permission, tenancy, credit, approval, conflict, idempotency and
+     rollback acceptance scenarios. The original migration
+     publishes the guide; migrations 0036–0044 keep
+     `use-mink-ai-in-your-dashboard` aligned with these capabilities and limits.
 
 21. **Help Centre (`help.storemink.com`) — platform-global, operator-managed
     docs (Shopify-style).** StoreMink's OWN product docs, NOT per-store data, so
@@ -7660,6 +7918,24 @@ npm run format      # prettier --write
   768-dimensional schema contract. **`HELP_VECTOR_MIN_SIMILARITY`** optionally
   overrides the conservative `0.55` semantic-match floor (0–1); leave it unset
   until the retrieval evaluation set justifies a tuned value.
+  The separate dashboard-agent foundation in `lib/mink/` is **Vertex-only** and
+  uses the official `@google/genai` SDK with ADC; it never falls back to an API
+  key. Its global runtime is enabled when **`MINK_AI_ENABLED` is unset**;
+  **`MINK_AI_ENABLED=false`** is the explicit shutdown, while the independent
+  default-on store invitation remains the merchant access boundary. It reads
+  **`MINK_VERTEX_MODEL`** (default `gemini-3.7-flash`),
+  **`MINK_VERTEX_LOCATION`** (fallback `GCP_LOCATION`, then `global`), plus
+  bounded optional limits **`MINK_MAX_STEPS_PER_RUN`** (8),
+  **`MINK_MAX_TOOL_CALLS_PER_RUN`** (16),
+  **`MINK_MAX_PARALLEL_READ_TOOLS`** (4), and
+  **`MINK_MAX_OUTPUT_TOKENS`** (2048), plus reliability controls
+  **`MINK_MAX_MODEL_RETRIES`** (1, bounded 0–2) and
+  **`MINK_RUN_TIMEOUT_SECONDS`** (120, bounded 15–300). The dashboard layout reads the private
+  flag server-side: enabled sessions use the SSE client and durable alpha
+  records; disabled sessions keep the canned placeholder. Reported or partial
+  token usage receives a versioned provider-cost estimate; unavailable usage
+  stays null/Unknown rather than looking free. `charged_credits` remains zero,
+  so this build does not bill customers.
 - **Razorpay** (§18, §16): two SEPARATE credential sets. Per-store BYO gateway
   creds live in the DB (`store_payment_providers`, encrypted with env
   **`PAYMENT_CRED_KEY`** — 32-byte base64; generate with

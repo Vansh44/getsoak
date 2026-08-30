@@ -378,6 +378,64 @@ and does not offer a store-wide aggregate.
 As that Mumbai-bound admin, hit `/dashboard/inventory?location=<pune-id>`.
 **Expect:** refused server-side, not just hidden in the UI.
 
+**PS-3.4 ★★ — Mink AI reads the same shelves the admin may see**
+As the Mumbai-bound admin, ask Mink AI which items are low in stock, then ask
+for Pune by its exact name.
+**Expect:** the aggregate list is calculated only from the admin's trusted
+Mumbai assignment. The Pune request returns a safe inaccessible-location error;
+the prompt cannot supply a location ID or widen the assignment.
+
+**PS-3.5 — Inventory permission removes the Mink stock tool**
+Use an admin with Dashboard → View but without Inventory → View and ask for the
+low-stock list.
+**Expect:** `list_low_stock` is absent from the model's tool manifest and a
+direct function-call attempt is rejected again at execution. No inventory row
+is read and Mink explains that the current read-only assistant cannot access it.
+
+**PS-3.6 ★★ — Mink order cards preserve location and channel scope**
+As a Mumbai-bound admin with Orders → View, ask for today's Website orders,
+then today's POS orders, and then Pune orders.
+**Expect:** the first two answers render order cards and visibly repeat Today,
+the trusted Mumbai assignment and the selected Online/POS channel. The Pune
+request is refused; neither prompt text nor a supplied record identifier can
+widen the trusted assignment. Unassigned legacy/online orders follow the same
+aggregate scope contract as the dashboard order book.
+
+**PS-3.7 ★★ — Selected orders are tenant-revalidated and PII-minimized**
+Open an order drawer and ask Mink about “this order”; repeat as an admin without
+Customers → View, then attempt to place another store's order ID in the page
+markup or request body.
+**Expect:** `get_current_order` is offered only after the server confirms that
+the selected order belongs to the current store. Customer output is at most a
+first name plus surname initial when Customers → View is allowed, otherwise it
+says details are hidden; email, phone and address never appear. A foreign or
+invalid selection is discarded and cannot cause an order read.
+
+**PS-3.8 — Missing order permission removes both Mink order tools**
+Use an admin without Orders → View and ask for recent orders while an order
+drawer is open.
+**Expect:** both `list_orders` and `get_current_order` are absent from the model
+manifest, a direct call is rejected at execution, and no order/customer row is
+read.
+
+**PS-3.9 — Invited beta access fails closed per store**
+With `MINK_AI_ENABLED=true` and `MINK_BETA_REQUIRE_INVITE=true`, remove the
+store's invitation from its operator detail page, then add it again.
+**Expect:** the uninvited store receives the canned assistant and cannot call
+stream/history/feedback endpoints. The invited store receives the read-only
+agent; another store remains unchanged. The global flag can still stop all
+stores independently.
+
+**PS-3.10 ★★ — A displayed location type is a safe alias, not a wider scope**
+Keep **Delhi** as a Warehouse and ask Mink for “today's sales for Delhi
+warehouse”. Repeat with “warehouse Delhi”, then ask for “Delhi shop”; run the
+same prompts as an admin assigned only to Mumbai.
+**Expect:** the first two owner requests resolve to the canonical **Delhi** row
+and the answer card names Delhi rather than all locations. “Delhi shop” is
+refused because the type is wrong. The Mumbai-bound admin cannot resolve any
+Delhi alias. A missing, ambiguous or inaccessible named location is never
+silently retried as an all-location sales, inventory or order request.
+
 ---
 
 ## 4. Inventory — the dashboard

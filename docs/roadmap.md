@@ -25,45 +25,53 @@ sequence AND the spec for everything still to build.
 
 ## Status at a glance
 
-| #      | Step                                                            | Size | State   |
-| ------ | --------------------------------------------------------------- | ---- | ------- |
-| —      | POS 0–4: locations, register, GST, shifts, shop-floor stock     | —    | ✅ done |
-| —      | LOC A–F: capabilities, scope, routing, reservations, pickup     | —    | ✅ done |
-| —      | Refunds, cancellation, returns, exchanges, BORIS, credit notes  | —    | ✅ done |
-| —      | Store credit                                                    | —    | ✅ done |
-| —      | Metered extra-location billing (POS 7)                          | —    | ✅ done |
-| —      | Signup recovery, full business address + live pricing           | —    | ✅ done |
-| —      | Shopify-shaped fulfilment + Shiprocket logistics core           | L    | ✅ done |
-| —      | Checkout shipping policies, live courier rates and ETAs         | M    | ✅ done |
-| —      | Shopper Online / In-store omnichannel order history             | S    | ✅ done |
-| —      | POS-gated dashboard All / Website / POS order books             | S    | ✅ done |
-| —      | Plan matrix + transactional soft-downgrade entitlements         | M    | ✅ done |
-| —      | Post-review order, entitlement and Help compatibility hardening | M    | ✅ done |
-| —      | Location-first inventory and product stock workflow             | S    | ✅ done |
-| —      | Locations fulfilment navigation and aligned routing workspace   | S    | ✅ done |
-| **P1** | **Release verification and high-risk action hardening**         | XL   | ◐ part  |
-| **0**  | **Platform → merchant billing rebuild**                         | XL   | ◐ part  |
-| **1**  | Checkout payment defaults + pickup payment policy               | S    | ✅ done |
-| **2**  | Cancellation & refund flow                                      | M    | ✅ done |
-| **3**  | Pickup end to end: collection code, QR, role split              | L    | ✅ done |
-| **4**  | POS customer capture (Shopify parity) + claim/merge             | L    | ✅ done |
-| **12** | POS payments — gateway tender at the till                       | M    | ✅ done |
-| **13** | Return restock lands at the shop that took it                   | S    | ✅ done |
-| **14** | Money-event audit — who discounted, overrode, refunded          | M    | ✅ done |
-| **15** | Hourly sweep + held sales expire                                | S    | ✅ done |
-| **16** | Check the shelf before taking counter payment (rescoped)        | S    | ✅ done |
-| **17** | Dashboard shift history + Z-reports (sales-by-X → analytics)    | M    | ✅ done |
-| **18** | Collection counter: deposits + expiry banner (discount dropped) | M    | ✅ done |
-| **19** | Catalogue delta sync                                            | M    | ✅ done |
-| **20** | `placePosSale` round trips (11 → few)                           | M    | ✅ done |
-| **5**  | **Receipts — SMS opt-out webhook, then a real send (POS 6)**    | M    | ⏭ next |
-| **6**  | Channel stock policy, per location and configurable (LOC H)     | M    | ⏳      |
-| **7**  | Transfer dispatch note (LOC I — rescoped, no in-transit state)  | S    | ⏳      |
-| **8**  | More routing strategies (LOC J)                                 | M    | ⏳      |
-| **9**  | Gift cards                                                      | M    | ⏳      |
-| **21** | Raw ESC/POS printing, serial/lot, bundles (POS 10)              | L    | ⏳      |
-| **10** | Offline outbox (POS 9)                                          | XL   | ⏳      |
-| **11** | Full omnichannel (POS 8 = LOC K)                                | XL   | ⏳      |
+| #      | Step                                                              | Size | State   |
+| ------ | ----------------------------------------------------------------- | ---- | ------- |
+| —      | POS 0–4: locations, register, GST, shifts, shop-floor stock       | —    | ✅ done |
+| —      | LOC A–F: capabilities, scope, routing, reservations, pickup       | —    | ✅ done |
+| —      | Refunds, cancellation, returns, exchanges, BORIS, credit notes    | —    | ✅ done |
+| —      | Store credit                                                      | —    | ✅ done |
+| —      | Metered extra-location billing (POS 7)                            | —    | ✅ done |
+| —      | Signup recovery, full business address + live pricing             | —    | ✅ done |
+| —      | Shopify-shaped fulfilment + Shiprocket logistics core             | L    | ✅ done |
+| —      | Checkout shipping policies, live courier rates and ETAs           | M    | ✅ done |
+| —      | Shopper Online / In-store omnichannel order history               | S    | ✅ done |
+| —      | POS-gated dashboard All / Website / POS order books               | S    | ✅ done |
+| —      | Plan matrix + transactional soft-downgrade entitlements           | M    | ✅ done |
+| —      | Post-review order, entitlement and Help compatibility hardening   | M    | ✅ done |
+| —      | Location-first inventory and product stock workflow               | S    | ✅ done |
+| —      | Permission/location-scoped Mink low-stock visibility              | S    | ✅ done |
+| —      | Invited Mink order/analytics cards, scope filters and PII masking | M    | ✅ done |
+| —      | Mink name-plus-type location resolution without scope fallback    | S    | ✅ done |
+| —      | Mink private drafts, version rollback and weighted AI credits     | M    | ✅ done |
+| —      | Mink guarded product description/SEO approval and safe rollback   | M    | ✅ done |
+| —      | Mink guarded draft-product creation (Phase 4B)                    | M    | ✅ done |
+| —      | Mink guarded disabled coupon create/update (Phase 4C)             | M    | ✅ done |
+| —      | Mink guarded customer-group metadata create/update (Phase 4D)     | M    | ✅ done |
+| —      | Locations fulfilment navigation and aligned routing workspace     | S    | ✅ done |
+| **P1** | **Release verification and high-risk action hardening**           | XL   | ◐ part  |
+| **0**  | **Platform → merchant billing rebuild**                           | XL   | ◐ part  |
+| **1**  | Checkout payment defaults + pickup payment policy                 | S    | ✅ done |
+| **2**  | Cancellation & refund flow                                        | M    | ✅ done |
+| **3**  | Pickup end to end: collection code, QR, role split                | L    | ✅ done |
+| **4**  | POS customer capture (Shopify parity) + claim/merge               | L    | ✅ done |
+| **12** | POS payments — gateway tender at the till                         | M    | ✅ done |
+| **13** | Return restock lands at the shop that took it                     | S    | ✅ done |
+| **14** | Money-event audit — who discounted, overrode, refunded            | M    | ✅ done |
+| **15** | Hourly sweep + held sales expire                                  | S    | ✅ done |
+| **16** | Check the shelf before taking counter payment (rescoped)          | S    | ✅ done |
+| **17** | Dashboard shift history + Z-reports (sales-by-X → analytics)      | M    | ✅ done |
+| **18** | Collection counter: deposits + expiry banner (discount dropped)   | M    | ✅ done |
+| **19** | Catalogue delta sync                                              | M    | ✅ done |
+| **20** | `placePosSale` round trips (11 → few)                             | M    | ✅ done |
+| **5**  | **Receipts — SMS opt-out webhook, then a real send (POS 6)**      | M    | ⏭ next |
+| **6**  | Channel stock policy, per location and configurable (LOC H)       | M    | ⏳      |
+| **7**  | Transfer dispatch note (LOC I — rescoped, no in-transit state)    | S    | ⏳      |
+| **8**  | More routing strategies (LOC J)                                   | M    | ⏳      |
+| **9**  | Gift cards                                                        | M    | ⏳      |
+| **21** | Raw ESC/POS printing, serial/lot, bundles (POS 10)                | L    | ⏳      |
+| **10** | Offline outbox (POS 9)                                            | XL   | ⏳      |
+| **11** | Full omnichannel (POS 8 = LOC K)                                  | XL   | ⏳      |
 
 **★★ HOW STEPS 14–21 ARE ORDERED (added 2026-08-18).** They fold the POS gap
 list into this table rather than starting a second plan — one ordered plan is

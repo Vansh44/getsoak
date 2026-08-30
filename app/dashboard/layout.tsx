@@ -13,6 +13,8 @@ import { SwitchAccountButton } from "./switch-account-button";
 import { getNewEnquiriesCount } from "./enquiries/data";
 import { getPosState, getStoreLocations } from "@/lib/pos/locations";
 import { outstandingDocs } from "@/lib/legal/store";
+import { getMinkConfig } from "@/lib/mink/config";
+import { isMinkStoreInvited } from "@/lib/mink/access";
 import { ChatProvider } from "./chat-context";
 import { DashboardChat } from "./dashboard-chat";
 import {
@@ -185,6 +187,10 @@ export default async function DashboardLayout({
   // moment "which location?" starts being a real question.
   const showLocations =
     posState.posAvailable && (locationCount > 1 || posState.posEnabled);
+  const minkConfig = getMinkConfig();
+  const minkEnabled =
+    minkConfig.enabled &&
+    (!minkConfig.betaRequireInvite || (await isMinkStoreInvited(store.id)));
 
   // Build the sidebar from the permission catalog: a section appears only when
   // the viewer can view it. The Dashboard home is always shown so everyone has
@@ -242,7 +248,7 @@ export default async function DashboardLayout({
       // frame (100vh, overflow hidden) that only this element should have.
       className={`dashboard-shell dashboard-frame ${dashFont.variable} ${dashMono.variable} flex flex-col`}
     >
-      <ChatProvider>
+      <ChatProvider minkEnabled={minkEnabled}>
         <MobileNavProvider>
           <DashboardTopbar
             email={profile.email}

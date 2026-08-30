@@ -16,7 +16,8 @@
 - `.dockerignore` — small context; **keeps `brand/tasks/*.md`** (read at runtime by the AI actions).
 - `cloudbuild.yaml` — builds `linux/amd64` in-cloud and pushes to Artifact Registry.
 
-Verified: `npm run build` produces `.next/standalone/server.js` with `brand/tasks` and `sharp` traced in.
+Verified: `npm run build` produces `.next/standalone/server.js` with
+`brand/tasks`, `docs/mink-ai-system-prompt.md` and `sharp` traced in.
 
 > **⚠ Architecture:** Cloud Run runs `linux/amd64`. Build with Cloud Build (below)
 > or, if using local Docker on an Apple-Silicon Mac, you MUST pass

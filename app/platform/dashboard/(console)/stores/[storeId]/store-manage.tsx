@@ -3,13 +3,31 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { ArrowUpCircle, Coins, Power, Trash2 } from "lucide-react";
+import {
+  ArrowUpCircle,
+  Bot,
+  Coins,
+  FilePenLine,
+  Power,
+  ShieldCheck,
+  Trash2,
+} from "lucide-react";
 import {
   deleteStore,
   grantAiCredits,
   setStorePlan,
   setStoreStatus,
 } from "@/app/actions/platform";
+import {
+  setMinkActionToolAccess,
+  setMinkBetaAccess,
+  setMinkDraftingAccess,
+} from "@/app/actions/mink-operator-actions";
+import {
+  MINK_ACTION_TOOLS,
+  MINK_ACTION_TOOL_LABELS,
+  type MinkActionTool,
+} from "@/lib/mink/product-action-types";
 import { PLAN_IDS, PLAN_META, normalizePlan, type Plan } from "@/lib/plans";
 
 // ---------------------------------------------------------------------------
@@ -67,6 +85,9 @@ export function StoreManageBar({
   status,
   plan,
   canManage,
+  minkBetaEnabled,
+  minkDraftingEnabled,
+  minkEnabledActionTools,
 }: {
   storeId: string;
   slug: string;
@@ -74,6 +95,9 @@ export function StoreManageBar({
   status: string;
   plan: Plan;
   canManage: boolean;
+  minkBetaEnabled: boolean;
+  minkDraftingEnabled: boolean;
+  minkEnabledActionTools: MinkActionTool[];
 }) {
   const router = useRouter();
   const [, startTransition] = useTransition();
@@ -105,6 +129,39 @@ export function StoreManageBar({
     setBusy(false);
     if (res.error) return void toast.error(res.error);
     done(next === "suspended" ? "Store suspended." : "Store reactivated.");
+  }
+
+  async function toggleMinkBeta() {
+    setBusy(true);
+    const res = await setMinkBetaAccess(storeId, !minkBetaEnabled);
+    setBusy(false);
+    if (res.error) return void toast.error(res.error);
+    done(
+      minkBetaEnabled
+        ? `Removed ${name} from the Mink AI beta.`
+        : `Invited ${name} to the Mink AI beta.`,
+    );
+  }
+
+  async function toggleMinkDrafting() {
+    setBusy(true);
+    const res = await setMinkDraftingAccess(storeId, !minkDraftingEnabled);
+    setBusy(false);
+    if (res.error) return void toast.error(res.error);
+    done(
+      minkDraftingEnabled
+        ? `Disabled private Mink drafts for ${name}.`
+        : `Enabled private Mink drafts for ${name}.`,
+    );
+  }
+
+  async function toggleMinkAction(toolName: MinkActionTool, current: boolean) {
+    setBusy(true);
+    const res = await setMinkActionToolAccess(storeId, toolName, !current);
+    setBusy(false);
+    if (res.error) return void toast.error(res.error);
+    const label = MINK_ACTION_TOOL_LABELS[toolName].toLocaleLowerCase("en-IN");
+    done(`${current ? "Disabled" : "Enabled"} Mink ${label} for ${name}.`);
   }
 
   /** The expiry the current selection resolves to, or an error to show. */
@@ -179,6 +236,43 @@ export function StoreManageBar({
         >
           <Coins className="h-4 w-4" /> Credits
         </button>
+        <button
+          onClick={toggleMinkBeta}
+          disabled={busy}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-violet-50 px-3.5 py-2 text-sm font-semibold text-violet-700 transition hover:bg-violet-100 disabled:opacity-50"
+        >
+          <Bot className="h-4 w-4" />
+          {minkBetaEnabled ? "Remove Mink beta" : "Invite to Mink beta"}
+        </button>
+        <button
+          onClick={toggleMinkDrafting}
+          disabled={busy || !minkBetaEnabled}
+          title={
+            minkBetaEnabled
+              ? "Control private, charged Mink proposal tools"
+              : "Invite this store to the Mink beta first"
+          }
+          className="inline-flex items-center gap-1.5 rounded-lg bg-fuchsia-50 px-3.5 py-2 text-sm font-semibold text-fuchsia-700 transition hover:bg-fuchsia-100 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <FilePenLine className="h-4 w-4" />
+          {minkDraftingEnabled ? "Disable Mink drafts" : "Enable Mink drafts"}
+        </button>
+        {MINK_ACTION_TOOLS.map((toolName) => {
+          const enabled = minkEnabledActionTools.includes(toolName);
+          return (
+            <button
+              key={toolName}
+              onClick={() => toggleMinkAction(toolName, enabled)}
+              disabled={busy || !minkDraftingEnabled}
+              title={`Independent kill switch for ${MINK_ACTION_TOOL_LABELS[toolName].toLocaleLowerCase("en-IN")}`}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-50 px-3.5 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <ShieldCheck className="h-4 w-4" />
+              {enabled ? "Disable" : "Enable"}{" "}
+              {MINK_ACTION_TOOL_LABELS[toolName]}
+            </button>
+          );
+        })}
         <button
           onClick={toggleStatus}
           disabled={busy}
