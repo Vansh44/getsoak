@@ -6,13 +6,13 @@ const nextConfig: NextConfig = {
   // server.js, so the runtime image stays small. Ignored by Vercel (which uses
   // its own build adapter), so this is safe to keep on during the transition.
   output: "standalone",
-  // The AI copy actions read brand/tasks/*.md at runtime via fs. On serverless
+  // AI copy actions and Mink read Markdown prompts at runtime via fs. On serverless
   // hosts (e.g. Vercel) a function only bundles files Next.js traces, and a
-  // runtime readFile path isn't traced automatically — so force the brand task
-  // prompts into every server trace. Also ensures they land in .next/standalone
-  // for the container. Harmless on Node hosts.
+  // runtime readFile path isn't traced automatically — force both prompt sources
+  // into every server trace. This also puts them in .next/standalone for Cloud
+  // Run. Harmless on Node hosts.
   outputFileTracingIncludes: {
-    "/**": ["./brand/tasks/**"],
+    "/**": ["./brand/tasks/**", "./docs/mink-ai-system-prompt.md"],
   },
   images: {
     // Serve modern formats — AVIF (~50% smaller than JPEG) with WebP fallback.

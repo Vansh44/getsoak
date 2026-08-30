@@ -52,7 +52,7 @@ ENV NODE_ENV=production \
 RUN groupadd --system --gid 1001 nodejs \
     && useradd --system --uid 1001 --gid nodejs nextjs
 
-# Standalone server + its traced node_modules (incl. sharp + brand/tasks).
+# Standalone server + its traced node_modules and runtime Markdown prompts.
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 # Static assets and public/ are NOT part of standalone — copy them explicitly.
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
