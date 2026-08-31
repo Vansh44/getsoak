@@ -3,16 +3,36 @@ import {
   BookOpen,
   Boxes,
   ChartNoAxesCombined,
+  CircleHelp,
+  MapPin,
   PackageSearch,
 } from "lucide-react";
 import type { MinkArtifact } from "@/lib/mink/types";
 import { MinkProposalCard } from "./mink-proposal-card";
 
-export function MinkArtifacts({ artifacts }: { artifacts: MinkArtifact[] }) {
+export function MinkArtifacts({
+  artifacts,
+  onPrompt,
+  promptDisabled = false,
+}: {
+  artifacts: MinkArtifact[];
+  onPrompt?: (prompt: string) => void;
+  promptDisabled?: boolean;
+}) {
   if (!artifacts.length) return null;
   return (
     <div className="mt-2 space-y-2">
       {artifacts.map((artifact, index) => {
+        if (artifact.type === "clarification") {
+          return (
+            <ClarificationArtifact
+              key={`${artifact.type}-${index}`}
+              artifact={artifact}
+              onPrompt={onPrompt}
+              disabled={promptDisabled}
+            />
+          );
+        }
         if (artifact.type === "metrics") {
           return (
             <MetricArtifact
@@ -34,6 +54,8 @@ export function MinkArtifacts({ artifacts }: { artifacts: MinkArtifact[] }) {
             <CatalogArtifact
               key={`${artifact.type}-${index}`}
               artifact={artifact}
+              onPrompt={onPrompt}
+              promptDisabled={promptDisabled}
             />
           );
         }
@@ -56,10 +78,58 @@ export function MinkArtifacts({ artifacts }: { artifacts: MinkArtifact[] }) {
   );
 }
 
+function ClarificationArtifact({
+  artifact,
+  onPrompt,
+  disabled,
+}: {
+  artifact: Extract<MinkArtifact, { type: "clarification" }>;
+  onPrompt?: (prompt: string) => void;
+  disabled: boolean;
+}) {
+  return (
+    <section className="overflow-hidden rounded-2xl border border-[#ded8f4] bg-[#fcfbff] shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
+      <ArtifactHeader
+        title={artifact.title}
+        icon={<CircleHelp className="h-3.5 w-3.5" />}
+      />
+      <div className="p-3">
+        <p className="text-xs font-medium leading-5 text-[#29272d]">
+          {artifact.question}
+        </p>
+        <div className="mt-2 grid gap-1.5 sm:grid-cols-2">
+          {artifact.choices.map((choice) => (
+            <button
+              key={`${choice.label}-${choice.prompt}`}
+              type="button"
+              disabled={disabled || !onPrompt}
+              onClick={() => onPrompt?.(choice.prompt)}
+              className="rounded-xl border border-[#ded8f4] bg-white px-3 py-2 text-left transition-colors hover:border-[#b9a9f4] hover:bg-[#f8f5ff] disabled:cursor-not-allowed disabled:opacity-55"
+            >
+              <span className="block text-[11px] font-semibold text-[#3f2a7c]">
+                {choice.label}
+              </span>
+              {choice.description ? (
+                <span className="mt-0.5 block text-[9px] leading-3.5 text-[#74707d]">
+                  {choice.description}
+                </span>
+              ) : null}
+            </button>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function CatalogArtifact({
   artifact,
+  onPrompt,
+  promptDisabled,
 }: {
   artifact: Extract<MinkArtifact, { type: "catalog" }>;
+  onPrompt?: (prompt: string) => void;
+  promptDisabled: boolean;
 }) {
   const publicationCounts = [
     ["Products", artifact.counts.total],
@@ -97,95 +167,175 @@ function CatalogArtifact({
             </div>
           ))}
         </div>
-        <div className="mt-1.5 grid grid-cols-2 gap-1.5">
-          {stockCounts.map(([label, value, tone]) => (
-            <div
-              key={label}
-              className={`rounded-xl border px-2.5 py-2 ${
-                tone === "out"
-                  ? "border-rose-100 bg-rose-50/70"
-                  : "border-amber-100 bg-amber-50/70"
-              }`}
-            >
-              <div className="text-[9px] font-medium leading-3 text-[#777b82]">
-                {label}
-              </div>
-              <div className="mt-0.5 text-base font-semibold tabular-nums text-[#18181b]">
-                {value == null ? "Hidden" : value.toLocaleString("en-IN")}
-              </div>
-            </div>
-          ))}
-        </div>
-
-        <div className="mt-4 flex items-center justify-between gap-3">
-          <h4 className="text-[11px] font-semibold text-[#29272d]">
-            Products &amp; variants
-          </h4>
-          {safeHref(artifact.inventoryDashboardPath) ? (
-            <a
-              href={artifact.inventoryDashboardPath}
-              className="text-[10px] font-medium text-[#5b3fd0] hover:underline"
-            >
-              Open inventory
-            </a>
-          ) : null}
-        </div>
-        <div className="mt-1 divide-y divide-[#eeeeef]">
-          {artifact.items.map((item) => (
-            <div key={item.id} className="py-2.5 first:pt-1.5">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  {safeHref(item.dashboardPath) ? (
-                    <a
-                      href={item.dashboardPath}
-                      className="block truncate text-xs font-semibold text-[#29272d] hover:text-[#5b3fd0] hover:underline"
-                    >
-                      {item.title}
-                    </a>
-                  ) : (
-                    <div className="truncate text-xs font-semibold text-[#29272d]">
-                      {item.title}
+        {artifact.locations?.length ? (
+          <div className="mt-3">
+            <h4 className="mb-1.5 text-[11px] font-semibold text-[#29272d]">
+              Inventory by location
+            </h4>
+            <div className="space-y-1.5">
+              {artifact.locations.map((location) => (
+                <div
+                  key={location.id}
+                  className="rounded-xl border border-[#ece9f2] bg-[#fafafa] px-2.5 py-2"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1 text-[11px] font-semibold text-[#29272d]">
+                        <MapPin className="h-3 w-3 shrink-0 text-[#6d4dff]" />
+                        <span className="truncate">{location.name}</span>
+                      </div>
+                      <div className="mt-0.5 text-[9px] capitalize text-[#777b82]">
+                        {location.type.replaceAll("_", " ")} ·{" "}
+                        {location.trackedItems.toLocaleString("en-IN")} tracked
+                        SKUs
+                      </div>
                     </div>
-                  )}
-                  <div className="mt-0.5 truncate text-[10px] text-[#777b82]">
-                    {[item.variant, item.sku].filter(Boolean).join(" · ")}
+                    {safeHref(location.dashboardPath) ? (
+                      <a
+                        href={location.dashboardPath}
+                        className="shrink-0 text-[9px] font-medium text-[#5b3fd0] hover:underline"
+                      >
+                        Open inventory
+                      </a>
+                    ) : null}
+                  </div>
+                  <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+                    <div className="rounded-lg border border-amber-100 bg-amber-50/70 px-2 py-1.5">
+                      <div className="text-[8px] font-medium text-[#777b82]">
+                        Low stock
+                      </div>
+                      <div className="text-sm font-semibold tabular-nums text-[#29272d]">
+                        {location.lowStock.toLocaleString("en-IN")}
+                      </div>
+                    </div>
+                    <div className="rounded-lg border border-rose-100 bg-rose-50/70 px-2 py-1.5">
+                      <div className="text-[8px] font-medium text-[#777b82]">
+                        Out of stock
+                      </div>
+                      <div className="text-sm font-semibold tabular-nums text-[#29272d]">
+                        {location.outOfStock.toLocaleString("en-IN")}
+                      </div>
+                    </div>
+                  </div>
+                  {onPrompt ? (
+                    <button
+                      type="button"
+                      disabled={promptDisabled}
+                      onClick={() => onPrompt(location.prompt)}
+                      className="mt-1.5 text-[9px] font-semibold text-[#5b3fd0] hover:underline disabled:cursor-not-allowed disabled:opacity-55"
+                    >
+                      List this location&apos;s SKUs
+                    </button>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+            {artifact.locationsTruncated ? (
+              <div className="mt-2 text-[10px] leading-4 text-[#7b7f86]">
+                Showing the first 20 accessible locations. Name another exact
+                dashboard location to inspect it.
+              </div>
+            ) : null}
+          </div>
+        ) : artifact.counts.inventoryItems != null ? (
+          <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+            {stockCounts.map(([label, value, tone]) => (
+              <div
+                key={label}
+                className={`rounded-xl border px-2.5 py-2 ${
+                  tone === "out"
+                    ? "border-rose-100 bg-rose-50/70"
+                    : "border-amber-100 bg-amber-50/70"
+                }`}
+              >
+                <div className="text-[9px] font-medium leading-3 text-[#777b82]">
+                  {label}
+                </div>
+                <div className="mt-0.5 text-base font-semibold tabular-nums text-[#18181b]">
+                  {value?.toLocaleString("en-IN")}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : null}
+
+        {!artifact.locations?.length ? (
+          <>
+            <div className="mt-4 flex items-center justify-between gap-3">
+              <h4 className="text-[11px] font-semibold text-[#29272d]">
+                Products &amp; variants
+              </h4>
+              {safeHref(artifact.inventoryDashboardPath) ? (
+                <a
+                  href={artifact.inventoryDashboardPath}
+                  className="text-[10px] font-medium text-[#5b3fd0] hover:underline"
+                >
+                  Open inventory
+                </a>
+              ) : null}
+            </div>
+            <div className="mt-1 divide-y divide-[#eeeeef]">
+              {artifact.items.map((item) => (
+                <div key={item.id} className="py-2.5 first:pt-1.5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      {safeHref(item.dashboardPath) ? (
+                        <a
+                          href={item.dashboardPath}
+                          className="block truncate text-xs font-semibold text-[#29272d] hover:text-[#5b3fd0] hover:underline"
+                        >
+                          {item.title}
+                        </a>
+                      ) : (
+                        <div className="truncate text-xs font-semibold text-[#29272d]">
+                          {item.title}
+                        </div>
+                      )}
+                      <div className="mt-0.5 truncate text-[10px] text-[#777b82]">
+                        {[item.variant, item.sku].filter(Boolean).join(" · ")}
+                      </div>
+                    </div>
+                    {item.stock != null &&
+                    item.inventoryStatus !== "untracked" ? (
+                      <div className="shrink-0 text-right">
+                        <div className="text-xs font-semibold tabular-nums text-[#29272d]">
+                          {item.stock.toLocaleString("en-IN")}
+                        </div>
+                        <div className="text-[9px] text-[#8c9196]">
+                          in stock
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                  <div className="mt-1.5 flex flex-wrap gap-1">
+                    {item.publicationTags.map((tag) => (
+                      <StatusTag key={tag} status={tag} />
+                    ))}
+                    {item.inventoryStatus ? (
+                      <StatusTag status={item.inventoryStatus} />
+                    ) : null}
+                    {item.inventoryStatus === "low" &&
+                    item.threshold != null ? (
+                      <span className="rounded-full bg-[#f4f4f5] px-2 py-0.5 text-[9px] font-medium text-[#69696f]">
+                        Threshold {item.threshold.toLocaleString("en-IN")}
+                      </span>
+                    ) : null}
                   </div>
                 </div>
-                {item.stock != null ? (
-                  <div className="shrink-0 text-right">
-                    <div className="text-xs font-semibold tabular-nums text-[#29272d]">
-                      {item.stock.toLocaleString("en-IN")}
-                    </div>
-                    <div className="text-[9px] text-[#8c9196]">in stock</div>
-                  </div>
-                ) : null}
-              </div>
-              <div className="mt-1.5 flex flex-wrap gap-1">
-                {item.publicationTags.map((tag) => (
-                  <StatusTag key={tag} status={tag} />
-                ))}
-                {item.inventoryStatus ? (
-                  <StatusTag status={item.inventoryStatus} />
-                ) : null}
-                {item.inventoryStatus === "low" && item.threshold != null ? (
-                  <span className="rounded-full bg-[#f4f4f5] px-2 py-0.5 text-[9px] font-medium text-[#69696f]">
-                    Threshold {item.threshold.toLocaleString("en-IN")}
-                  </span>
-                ) : null}
-              </div>
+              ))}
+              {!artifact.items.length ? (
+                <div className="py-3 text-xs text-[#7b7f86]">
+                  No matching products or variants.
+                </div>
+              ) : null}
             </div>
-          ))}
-          {!artifact.items.length ? (
-            <div className="py-3 text-xs text-[#7b7f86]">
-              No matching products or variants.
-            </div>
-          ) : null}
-        </div>
-        {artifact.truncated ? (
-          <div className="mt-2 text-[10px] leading-4 text-[#7b7f86]">
-            Showing the first bounded set, with stock exceptions first. Open
-            Products or Inventory for the full catalogue.
-          </div>
+            {artifact.truncated ? (
+              <div className="mt-2 text-[10px] leading-4 text-[#7b7f86]">
+                Showing the first bounded set, with stock exceptions first. Open
+                Products or Inventory for the full catalogue.
+              </div>
+            ) : null}
+          </>
         ) : null}
         <DataAsOf value={artifact.dataAsOf} />
       </div>

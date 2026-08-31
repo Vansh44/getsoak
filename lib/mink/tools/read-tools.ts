@@ -7,7 +7,10 @@ import { products, stores } from "@/drizzle/schema";
 import { parseAnalyticsRange } from "@/lib/analytics/range";
 import { withUser } from "@/lib/db/client";
 import { readLowStockItems } from "@/lib/inventory/low-stock-read";
-import { readMinkCatalogHealth } from "../catalog-health-read";
+import {
+  readMinkCatalogHealth,
+  readMinkCatalogHealthByLocation,
+} from "../catalog-health-read";
 import { MinkToolInputError } from "../errors";
 import type { MinkActorContext, MinkArtifact } from "../types";
 import { resolveMinkLocation } from "./location-scope";
@@ -54,14 +57,26 @@ const getCatalogSummary: MinkTool = {
   declaration: {
     name: "get_catalog_summary",
     description:
-      "Return product-level publication counts and a bounded product/variant list tagged published, unpublished, draft, archived, in stock, low stock, out of stock, or untracked. Inventory counts use the same sellable-SKU and threshold rules as the dashboard. If location_name is supplied they describe only that accessible shelf; otherwise they describe the actor's trusted all/assigned-location scope. Stock is omitted without Inventory View permission.",
+      "Return product-level publication counts and, when requested, sellable-SKU inventory health using the dashboard's thresholds. You MUST classify inventory_scope: publication_only when no stock fact was requested; clarify when stock was requested without an explicit all/combined, each/by-location, or named-location scope; combined only when the user explicitly asks across/all/combined locations; by_location when the user asks for each location or a comparison; location only with an exact location_name. A clarify request automatically uses the only accessible location, but returns permission-safe choices when several locations could materially differ. Never silently treat a missing location as combined stock.",
     parametersJsonSchema: {
       type: "object",
       properties: {
+        inventory_scope: {
+          type: "string",
+          enum: [
+            "publication_only",
+            "clarify",
+            "combined",
+            "by_location",
+            "location",
+          ],
+          description:
+            "Required inventory intent. Use clarify for a vague low/out-of-stock request, not combined.",
+        },
         location_name: {
           type: "string",
           description:
-            "Optional accessible dashboard location name. Use it whenever the user asks about a named shop or warehouse. Never use or invent a location ID.",
+            "Exact accessible dashboard location name. Supply only with inventory_scope=location. Never use or invent a location ID.",
           minLength: 1,
           maxLength: 100,
         },
@@ -73,6 +88,7 @@ const getCatalogSummary: MinkTool = {
           default: 20,
         },
       },
+      required: ["inventory_scope"],
       additionalProperties: false,
     },
   },
@@ -80,30 +96,136 @@ const getCatalogSummary: MinkTool = {
   timeoutMs: 7_000,
   artifact: catalogSummaryArtifact,
   async execute(actor, args) {
+    const inventoryScope = readCatalogInventoryScope(args.inventory_scope);
     const inventoryAccess = can(
       actor.permissions,
       "inventory",
       "view",
       actor.isSuperadmin,
     );
+    if (inventoryScope === "location" && !args.location_name) {
+      throw new MinkToolInputError(
+        "location_name is required when inventory_scope is location.",
+      );
+    }
+    if (inventoryScope !== "location" && args.location_name) {
+      throw new MinkToolInputError(
+        "location_name may be used only when inventory_scope is location.",
+      );
+    }
+
     const location = inventoryAccess
-      ? await resolveMinkLocation(actor, args.location_name)
+      ? await resolveMinkLocation(
+          actor,
+          inventoryScope === "location" ? args.location_name : undefined,
+        )
       : null;
+    const identity = { uid: actor.adminId, email: actor.email };
+    const dataAsOf = new Date().toISOString();
+
+    if (
+      inventoryAccess &&
+      location &&
+      inventoryScope === "clarify" &&
+      location.availableLocations.length > 1
+    ) {
+      const availableLocations = location.availableLocations.slice(0, 6);
+      return {
+        requiresClarification: true,
+        question:
+          "Stock can differ by location. Which inventory scope should I use?",
+        choices: [
+          {
+            label: "Compare locations",
+            description: "See low-stock and out-of-stock counts side by side.",
+            prompt:
+              "Compare low-stock and out-of-stock SKU counts for each accessible location, together with the current product publication summary.",
+          },
+          {
+            label: "Combined stock",
+            description: "Use the all-accessible-location aggregate.",
+            prompt:
+              "Show low-stock and out-of-stock SKU counts across all accessible locations combined, together with the current product publication summary.",
+          },
+          ...availableLocations.slice(0, 4).map((option) => ({
+            label: option.name,
+            description: `Check only this ${displayLocationType(option.type)}.`,
+            prompt: `Show the product publication summary and low-stock and out-of-stock SKUs at the exact dashboard location ${JSON.stringify(option.name)}.`,
+          })),
+        ],
+        availableLocations: availableLocations.map((option) => ({
+          name: option.name,
+          type: option.type,
+        })),
+        locationsTruncated: location.availableLocations.length > 6,
+        dataAsOf,
+      };
+    }
+
+    if (inventoryAccess && location && inventoryScope === "by_location") {
+      const comparedLocations = location.availableLocations.slice(0, 20);
+      const comparison = await readMinkCatalogHealthByLocation({
+        storeId: actor.storeId,
+        identity,
+        locationIds: comparedLocations.map((option) => option.id),
+        defaultThreshold: actor.defaultLowStockThreshold,
+      });
+      return {
+        ...comparison,
+        inventoryAccess: true,
+        inventoryView: "by_location",
+        locationScope: "Each accessible store location",
+        locationsTruncated: location.availableLocations.length > 20,
+        dataAsOf,
+        dashboardPath: "/dashboard/products",
+      };
+    }
+
+    let effectiveLocationIds: string[] | null = [];
+    let locationScope = "Inventory not requested";
+    let selectedId: string | null = null;
+    let includeInventory = false;
+    if (inventoryAccess && location && inventoryScope !== "publication_only") {
+      if (location.availableLocations.length === 0) {
+        locationScope = "No accessible active locations";
+      } else if (
+        inventoryScope === "clarify" &&
+        location.availableLocations.length === 1
+      ) {
+        includeInventory = true;
+        effectiveLocationIds = [location.availableLocations[0].id];
+        selectedId = location.availableLocations[0].id;
+        locationScope = location.availableLocations[0].name;
+      } else {
+        includeInventory = true;
+        effectiveLocationIds =
+          inventoryScope === "location"
+            ? location.locationIds
+            : location.availableLocations.map((option) => option.id);
+        selectedId = location.selectedId;
+        locationScope = location.label;
+      }
+    } else if (!inventoryAccess) {
+      locationScope = "Inventory hidden by permission";
+    }
+
     const summary = await readMinkCatalogHealth({
       storeId: actor.storeId,
-      identity: { uid: actor.adminId, email: actor.email },
-      locationIds: location ? location.locationIds : [],
+      identity,
+      locationIds: effectiveLocationIds,
       defaultThreshold: actor.defaultLowStockThreshold,
-      includeInventory: inventoryAccess,
+      includeInventory,
       limit: readLimit(args.limit, 20),
     });
     return {
       ...summary,
       inventoryAccess,
-      locationScope: location?.label ?? "Inventory hidden by permission",
-      dataAsOf: new Date().toISOString(),
-      inventoryDashboardPath: location?.selectedId
-        ? `/dashboard/inventory?location=${encodeURIComponent(location.selectedId)}`
+      inventoryVisible: includeInventory,
+      inventoryView: includeInventory ? "summary" : "hidden",
+      locationScope,
+      dataAsOf,
+      inventoryDashboardPath: selectedId
+        ? `/dashboard/inventory?location=${encodeURIComponent(selectedId)}`
         : "/dashboard/inventory",
       dashboardPath: "/dashboard/products",
     };
@@ -416,6 +538,26 @@ const listLowStock: MinkTool = {
 };
 
 function catalogSummaryArtifact(output: Record<string, unknown>): MinkArtifact {
+  if (output.requiresClarification === true) {
+    const choices = Array.isArray(output.choices)
+      ? (output.choices as Array<Record<string, unknown>>)
+      : [];
+    return {
+      type: "clarification",
+      title: "Choose inventory scope",
+      question: String(
+        output.question ?? "Which inventory scope should I use?",
+      ),
+      choices: choices.slice(0, 6).map((choice) => ({
+        label: String(choice.label ?? "Choose"),
+        description:
+          typeof choice.description === "string"
+            ? choice.description
+            : undefined,
+        prompt: String(choice.prompt ?? ""),
+      })),
+    };
+  }
   const items = Array.isArray(output.items)
     ? (output.items as Array<Record<string, unknown>>)
     : [];
@@ -453,9 +595,34 @@ function catalogSummaryArtifact(output: Record<string, unknown>): MinkArtifact {
       dashboardPath:
         typeof item.dashboardPath === "string" ? item.dashboardPath : undefined,
     })),
+    locations: Array.isArray(output.locations)
+      ? (output.locations as Array<Record<string, unknown>>).map(
+          (location) => ({
+            id: String(location.id ?? ""),
+            name: String(location.name ?? "Location"),
+            type: String(location.type ?? "location"),
+            inventoryItems: Number(location.inventoryItems ?? 0),
+            trackedItems: Number(location.trackedItems ?? 0),
+            lowStock: Number(location.lowStock ?? 0),
+            outOfStock: Number(location.outOfStock ?? 0),
+            dashboardPath:
+              typeof location.dashboardPath === "string"
+                ? location.dashboardPath
+                : undefined,
+            prompt: `Show the product publication summary and low-stock and out-of-stock SKUs at the exact dashboard location ${JSON.stringify(String(location.name ?? "Location"))}.`,
+          }),
+        )
+      : undefined,
     filters: [
       { label: "Publication", value: "Current store" },
-      { label: "Inventory", value: String(output.locationScope ?? "Hidden") },
+      ...(output.locationScope === "Inventory not requested"
+        ? []
+        : [
+            {
+              label: "Inventory",
+              value: String(output.locationScope ?? "Hidden"),
+            },
+          ]),
     ],
     dataAsOf: typeof output.dataAsOf === "string" ? output.dataAsOf : undefined,
     dashboardPath:
@@ -463,12 +630,39 @@ function catalogSummaryArtifact(output: Record<string, unknown>): MinkArtifact {
         ? output.dashboardPath
         : undefined,
     inventoryDashboardPath:
-      output.inventoryAccess === true &&
+      output.inventoryVisible === true &&
       typeof output.inventoryDashboardPath === "string"
         ? output.inventoryDashboardPath
         : undefined,
     truncated: output.truncated === true,
+    locationsTruncated: output.locationsTruncated === true,
   };
+}
+
+type CatalogInventoryScope =
+  | "publication_only"
+  | "clarify"
+  | "combined"
+  | "by_location"
+  | "location";
+
+function readCatalogInventoryScope(value: unknown): CatalogInventoryScope {
+  if (
+    value === "publication_only" ||
+    value === "clarify" ||
+    value === "combined" ||
+    value === "by_location" ||
+    value === "location"
+  ) {
+    return value;
+  }
+  throw new MinkToolInputError(
+    "inventory_scope must classify the request as publication_only, clarify, combined, by_location, or location.",
+  );
+}
+
+function displayLocationType(value: string): string {
+  return value.replaceAll("_", " ").toLocaleLowerCase("en-IN");
 }
 
 function productsArtifact(output: Record<string, unknown>): MinkArtifact {

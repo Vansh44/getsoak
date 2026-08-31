@@ -27,6 +27,10 @@ describe("Mink system prompt document", () => {
       "distinguish product publication counts from sellable-SKU inventory counts",
     );
     expect(template).toContain(
+      "If the user asks for low-stock or out-of-stock facts without explicitly saying",
+    );
+    expect(template).toContain("Never silently choose combined");
+    expect(template).toContain(
       "structured artifact already contains the full record list",
     );
     expect(template).toContain("There is no model tool to approve");

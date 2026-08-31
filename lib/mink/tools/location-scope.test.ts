@@ -35,6 +35,9 @@ describe("resolveMinkLocation", () => {
       selectedId: "location-1",
       label: "Main Store",
       includeUnassigned: false,
+      availableLocations: [
+        { id: "location-1", name: "Main Store", type: "shop" },
+      ],
     });
   });
 
@@ -50,6 +53,9 @@ describe("resolveMinkLocation", () => {
       selectedId: "location-1",
       label: "Delhi",
       includeUnassigned: false,
+      availableLocations: [
+        { id: "location-1", name: "Delhi", type: "warehouse" },
+      ],
     });
     await expect(
       resolveMinkLocation(ACTOR, "warehouse Delhi"),
@@ -90,6 +96,9 @@ describe("resolveMinkLocation", () => {
       selectedId: null,
       label: "1 assigned location",
       includeUnassigned: true,
+      availableLocations: [
+        { id: "location-1", name: "Main Store", type: "shop" },
+      ],
     });
   });
 

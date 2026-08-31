@@ -4,6 +4,12 @@ import { readMinkArtifacts } from "./mink-artifact-parser";
 describe("readMinkArtifacts", () => {
   it("restores proposal cards alongside read-only artifacts", () => {
     const artifacts = [
+      {
+        type: "clarification",
+        title: "Choose inventory scope",
+        question: "Which inventory scope should I use?",
+        choices: [{ label: "Shop", prompt: "Show Shop inventory" }],
+      },
       { type: "metrics", marker: "metrics" },
       {
         type: "catalog",
@@ -18,6 +24,7 @@ describe("readMinkArtifacts", () => {
     ];
 
     expect(readMinkArtifacts(artifacts).map((item) => item.type)).toEqual([
+      "clarification",
       "metrics",
       "catalog",
       "records",
@@ -42,6 +49,26 @@ describe("readMinkArtifacts", () => {
           counts: {},
           items: Array.from({ length: 21 }, () => ({})),
           filters: [],
+        },
+      ]),
+    ).toEqual([]);
+  });
+
+  it("rejects unsafe or oversized clarification choices", () => {
+    expect(
+      readMinkArtifacts([
+        {
+          type: "clarification",
+          question: "Choose",
+          choices: [{ label: "Shop", prompt: "" }],
+        },
+        {
+          type: "clarification",
+          question: "Choose",
+          choices: Array.from({ length: 7 }, () => ({
+            label: "Location",
+            prompt: "Show this location",
+          })),
         },
       ]),
     ).toEqual([]);

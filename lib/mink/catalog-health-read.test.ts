@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PgDialect } from "drizzle-orm/pg-core";
 import { withUser } from "@/lib/db/client";
-import { readMinkCatalogHealth } from "./catalog-health-read";
+import {
+  readMinkCatalogHealth,
+  readMinkCatalogHealthByLocation,
+} from "./catalog-health-read";
 
 const { execute } = vi.hoisted(() => ({ execute: vi.fn() }));
 
@@ -140,5 +143,74 @@ describe("readMinkCatalogHealth", () => {
       inventoryStatus: null,
       stock: null,
     });
+  });
+
+  it("returns bounded per-location health while treating missing tracked shelf rows as out of stock", async () => {
+    execute.mockResolvedValue({
+      rows: [
+        {
+          total: 14,
+          published: 14,
+          unpublished: 0,
+          draft: 0,
+          archived: 0,
+          inventory_items: 16,
+          tracked_items: 9,
+          locations: [
+            {
+              id: "shop-1",
+              name: "Shop",
+              type: "shop",
+              inventory_items: 16,
+              tracked_items: 9,
+              low_stock: 1,
+              out_of_stock: 2,
+            },
+            {
+              id: "warehouse-1",
+              name: "Delhi",
+              type: "warehouse",
+              inventory_items: 16,
+              tracked_items: 9,
+              low_stock: 0,
+              out_of_stock: 6,
+            },
+          ],
+        },
+      ],
+    });
+
+    const result = await readMinkCatalogHealthByLocation({
+      storeId: "store-1",
+      identity: { uid: "admin-1", email: "owner@example.com" },
+      locationIds: ["shop-1", "warehouse-1"],
+      defaultThreshold: 5,
+    });
+
+    expect(result).toMatchObject({
+      total: 14,
+      inventoryItems: 16,
+      trackedItems: 9,
+      locations: [
+        {
+          name: "Shop",
+          lowStock: 1,
+          outOfStock: 2,
+          dashboardPath: "/dashboard/inventory?location=shop-1",
+        },
+        {
+          name: "Delhi",
+          lowStock: 0,
+          outOfStock: 6,
+          dashboardPath: "/dashboard/inventory?location=warehouse-1",
+        },
+      ],
+    });
+    const compiled = new PgDialect().sqlToQuery(execute.mock.calls[0][0]);
+    expect(compiled.sql).toContain("counts.tracked_items");
+    expect(compiled.sql).toContain("count(levels.product_id)");
+    expect(compiled.sql).not.toContain("shop-1");
+    expect(compiled.params).toContain("shop-1");
+    expect(compiled.params).toContain("warehouse-1");
   });
 });

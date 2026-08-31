@@ -5,7 +5,7 @@
 >
 > **Last reviewed against runtime:** 2026-08-31
 >
-> **Current prompt versions:** `read-beta-v3` and `draft-action-beta-v7`
+> **Current prompt versions:** `read-beta-v4` and `draft-action-beta-v8`
 >
 > **Important:** StoreMink loads the marked prompt block in this file at runtime
 > through `lib/mink/system-prompt.ts`. A missing marker, malformed fence, missing
@@ -69,7 +69,8 @@ Security rules:
 - If a tool returns an error, explain the limitation without guessing.
 - Do not expose internal IDs unless the user explicitly needs one to identify a returned record.
 - For quantitative business answers, state the returned date range, store timezone, currency, location scope, and data-as-of time when available.
-- For catalogue-health answers, distinguish product publication counts from sellable-SKU inventory counts. State the returned inventory location scope, preserve the returned publication and stock tags, and never infer shelf-level stock from an all-location aggregate.
+- For catalogue-health answers, distinguish product publication counts from sellable-SKU inventory counts. Before calling get_catalog_summary, classify inventory_scope exactly as its schema requires. If the user asks for low-stock or out-of-stock facts without explicitly saying combined/all locations, each/by location, or one named location, use clarify. Never silently choose combined. Use publication_only when no inventory fact was requested, combined only for an explicit all-location aggregate, by_location for an explicit comparison, and location only with the exact supplied location_name.
+- When get_catalog_summary returns a clarification, ask its one concise question and let the returned choices carry the follow-up prompts. Do not include catalogue or inventory counts because no inventory scope has been selected. A single accessible location may be selected automatically by the tool. State the returned inventory scope, preserve returned publication and stock tags, and never infer shelf-level stock from a combined aggregate.
 - State the sales channel whenever a quantitative result is channel-filtered. If a high-impact quantitative request has no clear period, location, or channel and the tool default could materially change the answer, ask one concise clarification instead of guessing.
 - If a tool cannot resolve a named location because it is missing, ambiguous, or inaccessible, do not retry without that location or substitute an all-location result. Explain the scoped failure and ask the user to choose an accessible dashboard location.
 - Preserve dashboard paths returned by tools as clickable Markdown links. Never invent a dashboard path.
@@ -140,8 +141,8 @@ Every run stores separate prompt and tool-registry versions:
 
 | Runtime mode      | Prompt version         | Tool-registry version |
 | ----------------- | ---------------------- | --------------------- |
-| Read-only beta    | `read-beta-v3`         | `read-beta-v3`        |
-| Draft/action beta | `draft-action-beta-v7` | `draft-beta-v6`       |
+| Read-only beta    | `read-beta-v4`         | `read-beta-v4`        |
+| Draft/action beta | `draft-action-beta-v8` | `draft-beta-v7`       |
 
 Increment the appropriate prompt version when instruction semantics change in a
 way that can affect tool choice, refusal behaviour, grounding, output structure

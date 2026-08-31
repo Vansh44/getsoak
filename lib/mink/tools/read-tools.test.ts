@@ -1,5 +1,19 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MinkActorContext } from "../types";
+
+const mocks = vi.hoisted(() => ({
+  readCatalog: vi.fn(),
+  readByLocation: vi.fn(),
+  resolveLocation: vi.fn(),
+}));
+vi.mock("../catalog-health-read", () => ({
+  readMinkCatalogHealth: mocks.readCatalog,
+  readMinkCatalogHealthByLocation: mocks.readByLocation,
+}));
+vi.mock("./location-scope", () => ({
+  resolveMinkLocation: mocks.resolveLocation,
+}));
+
 import { minkReadToolRegistry } from "./read-tools";
 
 const ACTOR: MinkActorContext = {
@@ -16,6 +30,32 @@ const ACTOR: MinkActorContext = {
   defaultLowStockThreshold: 5,
   requestId: "request-1",
 };
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocks.resolveLocation.mockResolvedValue({
+    locationIds: null,
+    selectedId: null,
+    label: "All store locations",
+    includeUnassigned: true,
+    availableLocations: [
+      { id: "shop-1", name: "Shop", type: "shop" },
+      { id: "delhi-1", name: "Delhi", type: "warehouse" },
+    ],
+  });
+  mocks.readCatalog.mockResolvedValue({
+    total: 14,
+    published: 14,
+    unpublished: 0,
+    draft: 0,
+    archived: 0,
+    inventoryItems: 16,
+    lowStock: 1,
+    outOfStock: 0,
+    items: [],
+    truncated: false,
+  });
+});
 
 describe("Mink read-tool declarations", () => {
   it("never lets the model provide a tenant or actor identifier", () => {
@@ -44,7 +84,18 @@ describe("Mink read-tool declarations", () => {
     );
     expect(catalog?.parametersJsonSchema).toMatchObject({
       additionalProperties: false,
+      required: ["inventory_scope"],
       properties: {
+        inventory_scope: {
+          type: "string",
+          enum: [
+            "publication_only",
+            "clarify",
+            "combined",
+            "by_location",
+            "location",
+          ],
+        },
         location_name: { type: "string", maxLength: 100 },
         limit: { type: "integer", minimum: 1, maximum: 20, default: 20 },
       },
@@ -82,6 +133,142 @@ describe("Mink read-tool declarations", () => {
       "list_orders",
       "search_help_centre",
     ]);
+  });
+
+  it("returns bounded scope choices instead of silently aggregating a vague multi-location stock request", async () => {
+    const result = await minkReadToolRegistry.execute(ACTOR, {
+      id: "call-1",
+      name: "get_catalog_summary",
+      args: { inventory_scope: "clarify" },
+    });
+
+    expect(mocks.readCatalog).not.toHaveBeenCalled();
+    expect(mocks.readByLocation).not.toHaveBeenCalled();
+    expect(result.response.output).toMatchObject({
+      requiresClarification: true,
+      question: expect.stringContaining("Which inventory scope"),
+      choices: expect.arrayContaining([
+        expect.objectContaining({ label: "Compare locations" }),
+        expect.objectContaining({ label: "Combined stock" }),
+        expect.objectContaining({ label: "Shop" }),
+        expect.objectContaining({ label: "Delhi" }),
+      ]),
+    });
+    expect(result.artifact).toMatchObject({
+      type: "clarification",
+      choices: expect.arrayContaining([
+        expect.objectContaining({ label: "Compare locations" }),
+      ]),
+    });
+  });
+
+  it("automatically uses the only accessible location for a vague stock request", async () => {
+    mocks.resolveLocation.mockResolvedValue({
+      locationIds: ["shop-1"],
+      selectedId: null,
+      label: "1 assigned location",
+      includeUnassigned: true,
+      availableLocations: [{ id: "shop-1", name: "Shop", type: "shop" }],
+    });
+
+    await minkReadToolRegistry.execute(ACTOR, {
+      id: "call-2",
+      name: "get_catalog_summary",
+      args: { inventory_scope: "clarify", limit: 10 },
+    });
+
+    expect(mocks.readCatalog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        locationIds: ["shop-1"],
+        includeInventory: true,
+        limit: 10,
+      }),
+    );
+  });
+
+  it("compares only trusted accessible location ids for an explicit by-location request", async () => {
+    mocks.readByLocation.mockResolvedValue({
+      total: 14,
+      published: 14,
+      unpublished: 0,
+      draft: 0,
+      archived: 0,
+      inventoryItems: 16,
+      trackedItems: 9,
+      locations: [
+        {
+          id: "shop-1",
+          name: "Shop",
+          type: "shop",
+          inventoryItems: 16,
+          trackedItems: 9,
+          lowStock: 1,
+          outOfStock: 2,
+          dashboardPath: "/dashboard/inventory?location=shop-1",
+        },
+      ],
+    });
+
+    const result = await minkReadToolRegistry.execute(ACTOR, {
+      id: "call-3",
+      name: "get_catalog_summary",
+      args: { inventory_scope: "by_location" },
+    });
+
+    expect(mocks.readByLocation).toHaveBeenCalledWith(
+      expect.objectContaining({ locationIds: ["shop-1", "delhi-1"] }),
+    );
+    expect(result.artifact).toMatchObject({
+      type: "catalog",
+      locations: [
+        expect.objectContaining({
+          name: "Shop",
+          lowStock: 1,
+          outOfStock: 2,
+        }),
+      ],
+    });
+  });
+
+  it("builds an explicit combined total from active accessible locations only", async () => {
+    await minkReadToolRegistry.execute(ACTOR, {
+      id: "call-4",
+      name: "get_catalog_summary",
+      args: { inventory_scope: "combined" },
+    });
+
+    expect(mocks.readCatalog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        locationIds: ["shop-1", "delhi-1"],
+        includeInventory: true,
+      }),
+    );
+  });
+
+  it("never resolves or exposes location choices without Inventory View", async () => {
+    const result = await minkReadToolRegistry.execute(
+      {
+        ...ACTOR,
+        isSuperadmin: false,
+        permissions: { products: ["view"] },
+      },
+      {
+        id: "call-5",
+        name: "get_catalog_summary",
+        args: { inventory_scope: "clarify" },
+      },
+    );
+
+    expect(mocks.resolveLocation).not.toHaveBeenCalled();
+    expect(mocks.readCatalog).toHaveBeenCalledWith(
+      expect.objectContaining({ includeInventory: false, locationIds: [] }),
+    );
+    expect(result.response.output).toMatchObject({
+      inventoryAccess: false,
+      inventoryVisible: false,
+      locationScope: "Inventory hidden by permission",
+    });
+    expect(result.artifact?.type).toBe("catalog");
   });
 
   it("exposes proposal tools only behind drafting opt-in, manage permission, and context", () => {

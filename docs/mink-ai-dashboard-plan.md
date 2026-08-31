@@ -16,7 +16,11 @@
 > five-credit, maximum-20-line bulk adjustment with line-level validation and
 > atomic all-or-nothing execution. Migration
 > `20260831_0048_mink_catalog_health_ui` documents the aligned location-aware
-> sellable-SKU catalogue health card and safe structured answer renderer. No
+> sellable-SKU catalogue health card and safe structured answer renderer.
+> Migration `20260831_0049_mink_inventory_scope_clarification` adds explicit
+> inventory intent, multiple-choice clarification and bounded per-location
+> comparison. Migration `20260901_0050_mink_full_view_takeover` makes maximize
+> cover the complete browser viewport, including dashboard chrome. No
 > transfer, order-status, publication, campaign, customer-contact, membership,
 > bulk-price or arbitrary-code authority is present.
 >
@@ -45,7 +49,9 @@ guarded-action slice now include:
   timezone and location contract. Catalogue health separates product publication
   counts from simple-product/variant SKU stock, intersects exact location names
   with trusted admin assignments, applies Inventory's threshold rules and
-  returns a bounded status-tagged list;
+  returns a bounded status-tagged list; ambiguous multi-location stock asks
+  return quick clarification choices, explicit comparisons calculate every
+  accessible shelf independently, and single-location stores proceed directly;
 - a bounded multi-step orchestration loop with step, tool and parallel-read
   limits;
 - an authenticated, same-origin, rate-limited SSE endpoint at
@@ -60,7 +66,9 @@ guarded-action slice now include:
 - a resizable side panel with a browser-local width preference, the same purple
   robot identity as Help Centre Mink, an auto-growing multiline composer, and a
   safe ChatGPT-style React renderer for headings, lists, tables, code, emphasis
-  and allowlisted StoreMink links without raw HTML;
+  and allowlisted StoreMink links without raw HTML; maximize opens a true
+  viewport takeover above the dashboard topbar, navigation and page content,
+  while restore returns to the remembered side-panel width;
 - a separate published Help Centre guide for the dashboard alpha's supported
   questions, permission behavior, privacy and limits;
 - prompt-injection instructions that treat all tool values as untrusted data;

@@ -22,7 +22,7 @@ describe("database migration controls", () => {
   it("loads the repository manifest and checksums the enrolled SQL", async () => {
     const loaded = await loadManifest();
     expect(loaded.baseline.id).toBe("baseline:cloudsql-2026-08-14");
-    expect(loaded.migrations).toHaveLength(48);
+    expect(loaded.migrations).toHaveLength(50);
     expect(loaded.migrations[0]).toMatchObject({
       id: "20260814_0001_logistics_shiprocket",
       transaction: true,
@@ -607,6 +607,27 @@ describe("database migration controls", () => {
     );
     expect(loaded.migrations[47].sql).toContain(
       "Model text is never treated as raw HTML",
+    );
+    expect(loaded.migrations[48]).toMatchObject({
+      id: "20260831_0049_mink_inventory_scope_clarification",
+      transaction: true,
+      requires: ["20260831_0048_mink_catalog_health_ui"],
+    });
+    expect(loaded.migrations[48].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[48].sql).toContain(
+      "does not silently assume an all-location total",
+    );
+    expect(loaded.migrations[48].sql).toContain(
+      "missing inventory-level row counts as zero at that shelf",
+    );
+    expect(loaded.migrations[49]).toMatchObject({
+      id: "20260901_0050_mink_full_view_takeover",
+      transaction: true,
+      requires: ["20260831_0049_mink_inventory_scope_clarification"],
+    });
+    expect(loaded.migrations[49].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[49].sql).toContain(
+      "covering the dashboard topbar, left navigation and page content",
     );
     const repairChecks = [
       loaded.migrations[22].applyVerify,

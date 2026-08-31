@@ -440,16 +440,22 @@ silently retried as an all-location sales, inventory or order request.
 Create a published variant product with one variant at 4 units and an effective
 threshold of 5, plus another variant with 0 at Shop but stock at another
 location. Ask “How many products are published, unpublished, draft, archived,
-low in stock and out of stock?” and repeat with “at Shop”.
+low in stock and out of stock?”, then choose **Compare locations**. Repeat with
+**Combined stock** and with “at Shop”.
 **Expect:** publication totals count products; Draft and Archived are subsets of
 Unpublished. Stock totals count sellable SKUs (simple products without variants
 plus each variant), use per-SKU threshold with the store default fallback, and
-match Inventory. The all-location answer reports the aggregate and the Shop
-answer reports that shelf; neither scope is presented as the other. The bounded
-card lists products/variants with publication and stock badges, quantities,
-thresholds and trusted dashboard links. Without Inventory → View, publication
-data remains available but stock counts/fields say hidden and no shelf data is
-read.
+match Inventory. With multiple accessible locations, the vague question first
+offers permission-safe Compare, Combined and exact-location choices instead of
+returning counts. Compare shows Shop and the other accessible shelves
+independently; a missing tracked shelf row counts as zero/out of stock. Combined
+reports only the aggregate, and Shop reports only that shelf; none is presented
+as another. The bounded exact/combined card lists products/variants with
+publication and stock badges, quantities, thresholds and trusted dashboard
+links. The comparison is bounded to 20 locations and each row can request its
+exact SKU list. With one accessible location, Mink uses it automatically.
+Without Inventory → View, publication data remains available but stock
+counts/fields stay hidden and no shelf data is read.
 
 **PS-3.12 — Mink answers remain readable and inert**
 Return an answer containing headings, paragraphs, ordered and nested lists, a

@@ -228,7 +228,7 @@ export function DashboardChat({
   const hasThread = messages.length > 0 || isReplying || Boolean(error);
   const draftEstimate = estimateMinkDraftIntent(input);
   const wrapperClass = isOverlay
-    ? "absolute inset-0 z-20 flex flex-col overflow-hidden bg-white"
+    ? "fixed inset-0 z-[90] flex min-h-0 flex-col overflow-hidden bg-white"
     : "dash-chat relative flex h-full flex-shrink-0 flex-col overflow-hidden border-l border-t border-[#e5e5e5] bg-white shadow-sm";
   const columnClass = isOverlay ? "mx-auto w-full max-w-3xl" : "w-full";
   const panelStyle = isOverlay
@@ -236,7 +236,11 @@ export function DashboardChat({
     : ({ "--mink-chat-width": `${panelWidth}px` } as CSSProperties);
 
   return (
-    <div className={wrapperClass} style={panelStyle}>
+    <div
+      data-testid="mink-chat-surface"
+      className={wrapperClass}
+      style={panelStyle}
+    >
       {!isOverlay && (
         <div
           role="separator"
@@ -381,7 +385,11 @@ export function DashboardChat({
                         <div className="pr-1">
                           <MinkAnswer text={message.text} />
                         </div>
-                        <MinkArtifacts artifacts={message.artifacts ?? []} />
+                        <MinkArtifacts
+                          artifacts={message.artifacts ?? []}
+                          onPrompt={send}
+                          promptDisabled={isReplying || isHistoryLoading}
+                        />
                         <MinkFeedbackControls
                           message={message}
                           submitting={feedbackSubmittingRunId === message.runId}
