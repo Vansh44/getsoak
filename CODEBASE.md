@@ -260,9 +260,9 @@ wholesip/
 │   │   ├── dashboard-chat.tsx # Mink panel/full-view renderer: Codex-style history sidebar
 │   │   │                      # with confirmed deletion, persisted drag/keyboard width,
 │   │   │                      # Help-matched robot identity and auto-growing composer.
-│   │   ├── mink-answer.tsx    # Safe React-rendered bold/inline-code subset; model text
-│   │   │                      # is never raw HTML and `**` markers do not leak into UI.
-│   │   ├── mink-artifacts.tsx # Permission-safe metric/order/product/inventory/source cards
+│   │   ├── mink-answer.tsx    # Safe React-rendered headings/lists/tables/emphasis/code plus
+│   │   │                      # allowlisted dashboard/Help links; no model HTML is executed.
+│   │   ├── mink-artifacts.tsx # Permission-safe metric/catalog/order/product/inventory/source cards
 │   │   │                      # plus private proposal cards; mink-proposal-card.tsx edits,
 │   │   │                      # versions/restores proposals and provides Phase 4's exact,
 │   │   │                      # explicitly approved product/coupon/group action/rollback UX.
@@ -1011,6 +1011,9 @@ wholesip/
 │   │                          # per-line validation and atomic all-or-nothing level/movement batch.
 │   │                          # Neither inventory action has automatic physical-stock rollback;
 │   │                          # transfer authority remains unavailable.
+│   │                          # catalog-health-read.ts returns bounded product publication plus
+│   │                          # location-aware sellable-SKU stock counts/lists using Inventory's
+│   │                          # simple-product/variant and effective-threshold contract.
 │   │                          # timestamps.ts canonicalizes coupon business dates without
 │   │                          # weakening full-precision resource-version checkpoints.
 │   │                          # No model tool can publish, send or execute a live mutation.
@@ -1436,7 +1439,8 @@ wholesip/
 │                              # 0046 adds Phase 5A exact single-SKU/location inventory approvals,
 │                              # trusted target columns, indexes and the matching Help contract;
 │                              # 0047 adds the separate bounded atomic Phase 5B bulk gate,
-│                              # constraints/indexes and line-by-line Help guidance.
+│                              # constraints/indexes and line-by-line Help guidance; 0048 documents
+│                              # location-aware SKU catalogue health and safe structured answers.
 ├── scripts/
 │   ├── dev-server.mjs         # ★ resource-aware Next dev runner: 2 GB heap on ≤12 GB
 │   │                          # machines, 3 GB on ≤20 GB, uncapped above; rotates
@@ -2872,9 +2876,18 @@ drafting entitlement.
 Its read tools cover store profile, catalogue summary, product search,
 recognized net sales, low stock, masked orders/current order, current product
 and published Help Centre retrieval. Sales and orders reuse the dashboard's
-date/timezone/refund/channel contract; stock uses per-SKU thresholds. Applied
-date/location/channel scope returns with structured metric, order, product,
-inventory or Help-source cards instead of living only in prose. Browser route
+date/timezone/refund/channel contract. Catalogue health now separates
+product-level publication counts from sellable-SKU inventory counts, evaluates
+simple products and variants with the Inventory workspace's effective-threshold
+rules, and reads either the trigger-maintained all-location aggregate or the
+exact trusted shelf scope. Its bounded catalogue card lists each returned SKU
+with publication and stock badges; stock fields are omitted without Inventory
+View permission. Applied date/location/channel scope returns with structured
+metric, catalogue, order, product, inventory or Help-source cards instead of
+living only in prose. Assistant prose uses a safe ChatGPT-style React renderer
+for headings, paragraphs, nested lists, tables, quotes, code, emphasis and only
+allowlisted dashboard/StoreMink Help links; raw model HTML and arbitrary links
+remain inert. Browser route
 and selected product/order IDs are hints only: the server normalizes the route
 and revalidates every record against the trusted store before exposing context.
 Model-supplied location names are intersected with server-derived assignments;

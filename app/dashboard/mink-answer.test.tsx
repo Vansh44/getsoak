@@ -24,4 +24,52 @@ describe("MinkAnswer", () => {
     expect(container.querySelector("script")).toBeNull();
     expect(container.querySelector("code")?.textContent).toContain("<script>");
   });
+
+  it("renders dashboard Markdown links and structured lists", () => {
+    render(
+      <MinkAnswer
+        text={[
+          "## Stock at Shop",
+          "1. [Cobalt Lounge Chair](/dashboard/products/product-1) — **Bone**",
+          "   - Stock: `0` · Out of stock",
+          "2. Form No. 03 Art Print — A2",
+        ].join("\n")}
+      />,
+    );
+
+    expect(
+      screen.getByRole("link", { name: "Cobalt Lounge Chair" }),
+    ).toHaveAttribute("href", "/dashboard/products/product-1");
+    expect(screen.getAllByRole("list")).toHaveLength(2);
+    expect(screen.getByText("Stock at Shop")).toHaveClass("font-semibold");
+    expect(screen.getByText("0").tagName).toBe("CODE");
+  });
+
+  it("never turns arbitrary model URLs or raw HTML into active content", () => {
+    const { container } = render(
+      <MinkAnswer
+        text={
+          '[Sign in](https://evil.example/login) <img src=x onerror="alert(1)">'
+        }
+      />,
+    );
+
+    expect(screen.queryByRole("link")).toBeNull();
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.textContent).toContain("<img");
+  });
+
+  it("renders compact Markdown tables", () => {
+    render(
+      <MinkAnswer
+        text={["| Status | Count |", "| --- | ---: |", "| Draft | 2 |"].join(
+          "\n",
+        )}
+      />,
+    );
+
+    expect(screen.getByRole("table")).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Status" })).toBeVisible();
+    expect(screen.getByRole("cell", { name: "Draft" })).toBeVisible();
+  });
 });

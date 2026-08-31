@@ -13,7 +13,7 @@
 
 ## 1. How to use this catalogue
 
-1. Apply all Mink migrations through `20260831_0047_mink_phase_5b_bulk_inventory`.
+1. Apply all Mink migrations through `20260831_0048_mink_catalog_health_ui`.
 2. Deploy the matching application revision with Mink globally enabled.
 3. Invite only the synthetic test store. Enable drafting and action tools only
    when the relevant section asks for them.
@@ -84,7 +84,7 @@ Run this small pack after every deployment before the full catalogue.
 | ID    | Prompt or action                                                                                                              | Expected result                                                                                          |
 | ----- | ----------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
 | SM-01 | `What plan is my store using, and is the store active?`                                                                       | Uses `get_store_profile`; returns only the current store.                                                |
-| SM-02 | `How many products are published, draft, archived, low in stock and out of stock?`                                            | Uses `get_catalog_summary`; counts match the dashboard.                                                  |
+| SM-02 | `How many products are published, unpublished, draft, archived, low in stock and out of stock? List them with status tags.`   | Uses `get_catalog_summary`; product publication and scoped SKU stock counts/list match the dashboard.    |
 | SM-03 | `Show today's net sales, order count, units sold and average order value for [LOCATION]. State the timezone and exact scope.` | Uses `get_sales_summary`; exact named location, period, timezone and currency are visible.               |
 | SM-04 | `Which five tracked items are closest to running out at [LOCATION]?`                                                          | Uses `list_low_stock`; thresholds and location scope are visible.                                        |
 | SM-05 | `List today's pending online orders for [LOCATION].`                                                                          | Uses `list_orders`; customer data is minimized according to permission.                                  |
@@ -166,22 +166,27 @@ These require browser developer tools or an API client rather than a chat prompt
 
 ### 4.1 Store and catalogue reads
 
-| ID      | Prompt                                                             | Expected tool/result                                          |
-| ------- | ------------------------------------------------------------------ | ------------------------------------------------------------- |
-| P1-C-01 | `What plan is my store using?`                                     | `get_store_profile`; correct effective plan.                  |
-| P1-C-02 | `What is my store name, slug and operating status?`                | `get_store_profile`; current store only.                      |
-| P1-C-03 | `How many products do I have in total?`                            | `get_catalog_summary`.                                        |
-| P1-C-04 | `How many products are published?`                                 | Published catalogue count.                                    |
-| P1-C-05 | `Give me total, published, draft and archived product counts.`     | All four counts match dashboard filters.                      |
-| P1-C-06 | `Summarise the health of my product catalogue.`                    | Includes low/out-of-stock counts without inventing causes.    |
-| P1-C-07 | `Find the product named [PRODUCT_NAME].`                           | `search_products`; product card and dashboard link.           |
-| P1-C-08 | `Look up SKU [PRODUCT_SKU].`                                       | Exact/partial SKU search and grounded facts only.             |
-| P1-C-09 | `Search my products for [partial product name].`                   | At most 20 scoped matches.                                    |
-| P1-C-10 | `Find a product called Definitely Missing [UNIQUE_SUFFIX].`        | Honest zero-result answer; no invented product.               |
-| P1-C-11 | `What plan am I on, and how many published products do I have?`    | `get_store_profile` plus `get_catalog_summary`.               |
-| P1-C-12 | `What plan am I on, and find [PRODUCT_NAME].`                      | Profile plus product search; no unnecessary tools.            |
-| P1-C-13 | `In no more than three bullets, give me the catalogue summary.`    | Concise answer obeying requested format.                      |
-| P1-C-14 | `Find [PRODUCT_NAME] and only state fields returned by StoreMink.` | No invented dimensions, ingredients, tax, category or margin. |
+| ID      | Prompt                                                                                                                                 | Expected tool/result                                                                                       |
+| ------- | -------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| P1-C-01 | `What plan is my store using?`                                                                                                         | `get_store_profile`; correct effective plan.                                                               |
+| P1-C-02 | `What is my store name, slug and operating status?`                                                                                    | `get_store_profile`; current store only.                                                                   |
+| P1-C-03 | `How many products do I have in total?`                                                                                                | `get_catalog_summary`.                                                                                     |
+| P1-C-04 | `How many products are published?`                                                                                                     | Published catalogue count.                                                                                 |
+| P1-C-05 | `Give me total, published, draft and archived product counts.`                                                                         | All four counts match dashboard filters.                                                                   |
+| P1-C-06 | `Summarise the health of my product catalogue.`                                                                                        | Includes low/out-of-stock counts without inventing causes.                                                 |
+| P1-C-07 | `Find the product named [PRODUCT_NAME].`                                                                                               | `search_products`; product card and dashboard link.                                                        |
+| P1-C-08 | `Look up SKU [PRODUCT_SKU].`                                                                                                           | Exact/partial SKU search and grounded facts only.                                                          |
+| P1-C-09 | `Search my products for [partial product name].`                                                                                       | At most 20 scoped matches.                                                                                 |
+| P1-C-10 | `Find a product called Definitely Missing [UNIQUE_SUFFIX].`                                                                            | Honest zero-result answer; no invented product.                                                            |
+| P1-C-11 | `What plan am I on, and how many published products do I have?`                                                                        | `get_store_profile` plus `get_catalog_summary`.                                                            |
+| P1-C-12 | `What plan am I on, and find [PRODUCT_NAME].`                                                                                          | Profile plus product search; no unnecessary tools.                                                         |
+| P1-C-13 | `In no more than three bullets, give me the catalogue summary.`                                                                        | Concise answer obeying requested format.                                                                   |
+| P1-C-14 | `Find [PRODUCT_NAME] and only state fields returned by StoreMink.`                                                                     | No invented dimensions, ingredients, tax, category or margin.                                              |
+| P1-C-15 | `List every returned product or variant with published, unpublished, draft, archived, low-stock or out-of-stock tags.`                 | Bounded structured catalogue card; Draft/Archived are also Unpublished.                                    |
+| P1-C-16 | `How many low-stock and out-of-stock SKUs do I have across all locations? State the inventory scope.`                                  | Uses aggregate sellable-SKU stock and effective thresholds; never claims a named shelf.                    |
+| P1-C-17 | `How many low-stock and out-of-stock SKUs do I have at Shop? List them.`                                                               | Resolves exact accessible Shop; count/list matches that Inventory shelf, including variants at zero.       |
+| P1-C-18 | Repeat P1-C-15 without Inventory → View.                                                                                               | Publication counts/list remain; stock counts and fields are hidden rather than leaked or reported as zero. |
+| P1-C-19 | Return `[Product](/dashboard/products/KNOWN_ID)`, `[Phish](https://evil.example)`, `<img src=x onerror=alert(1)>`, a list and a table. | Dashboard link, list and table render; arbitrary link and raw HTML remain inert.                           |
 
 ### 4.2 Sales analytics
 

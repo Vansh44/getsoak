@@ -436,6 +436,31 @@ refused because the type is wrong. The Mumbai-bound admin cannot resolve any
 Delhi alias. A missing, ambiguous or inaccessible named location is never
 silently retried as an all-location sales, inventory or order request.
 
+**PS-3.11 ★★ — Mink catalogue health matches the Inventory SKU model**
+Create a published variant product with one variant at 4 units and an effective
+threshold of 5, plus another variant with 0 at Shop but stock at another
+location. Ask “How many products are published, unpublished, draft, archived,
+low in stock and out of stock?” and repeat with “at Shop”.
+**Expect:** publication totals count products; Draft and Archived are subsets of
+Unpublished. Stock totals count sellable SKUs (simple products without variants
+plus each variant), use per-SKU threshold with the store default fallback, and
+match Inventory. The all-location answer reports the aggregate and the Shop
+answer reports that shelf; neither scope is presented as the other. The bounded
+card lists products/variants with publication and stock badges, quantities,
+thresholds and trusted dashboard links. Without Inventory → View, publication
+data remains available but stock counts/fields say hidden and no shelf data is
+read.
+
+**PS-3.12 — Mink answers remain readable and inert**
+Return an answer containing headings, paragraphs, ordered and nested lists, a
+table, bold text, inline/fenced code, a returned dashboard path, raw HTML and an
+arbitrary external URL.
+**Expect:** supported Markdown renders with compact ChatGPT-style typography and
+the dashboard path is clickable. Raw HTML remains visible text, not a DOM node;
+the arbitrary URL is not clickable. Restored conversation history renders the
+same structured catalogue artifact. The answer has copy/helpful/report controls
+and no grey assistant speech bubble.
+
 ---
 
 ## 4. Inventory — the dashboard

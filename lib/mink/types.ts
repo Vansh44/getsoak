@@ -38,6 +38,37 @@ export type MinkArtifact =
       dashboardPath?: string;
     }
   | {
+      type: "catalog";
+      title: string;
+      counts: {
+        total: number;
+        published: number;
+        unpublished: number;
+        draft: number;
+        archived: number;
+        inventoryItems: number | null;
+        lowStock: number | null;
+        outOfStock: number | null;
+      };
+      items: Array<{
+        id: string;
+        title: string;
+        variant?: string;
+        sku: string;
+        publicationStatus: string;
+        publicationTags: string[];
+        inventoryStatus: string | null;
+        stock: number | null;
+        threshold: number | null;
+        dashboardPath?: string;
+      }>;
+      filters: MinkFilter[];
+      dataAsOf?: string;
+      dashboardPath?: string;
+      inventoryDashboardPath?: string;
+      truncated?: boolean;
+    }
+  | {
       type: "records";
       title: string;
       recordType: "order" | "product" | "inventory";

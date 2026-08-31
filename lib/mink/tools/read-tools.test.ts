@@ -39,6 +39,16 @@ describe("Mink read-tool declarations", () => {
       expect(properties).not.toHaveProperty("adminId");
       expect(properties).not.toHaveProperty("permissions");
     }
+    const catalog = declarations.find(
+      (tool) => tool.name === "get_catalog_summary",
+    );
+    expect(catalog?.parametersJsonSchema).toMatchObject({
+      additionalProperties: false,
+      properties: {
+        location_name: { type: "string", maxLength: 100 },
+        limit: { type: "integer", minimum: 1, maximum: 20, default: 20 },
+      },
+    });
   });
 
   it("exposes each business tool only with its trusted section permission", () => {
