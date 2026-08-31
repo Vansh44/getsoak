@@ -1,7 +1,8 @@
 # Mink AI Dashboard Agent — Architecture and Delivery Plan
 
-> **Status:** Phases 0–4 and Phase 5A are implemented in code. Phase 2 remains the invited
-> read-only merchant beta. Phase 3 adds a separate, fail-closed operator opt-in
+> **Status:** Phases 0–4 and Phases 5A–5B are implemented in code. Phase 2
+> remains the invited read-only merchant beta. Phase 3 adds a separate,
+> fail-closed operator opt-in
 > for private versioned drafts and atomic weighted credits through migration
 > `20260830_0040_mink_phase_3`. Phase 4A adds separately gated, explicitly
 > approved description/SEO updates through migration
@@ -10,8 +11,10 @@
 > creation, 4C disabled/hidden coupon create/update, and 4D customer-group
 > metadata create/update. Migration
 > `20260831_0046_mink_phase_5a_inventory_actions` adds one independently gated,
-> explicitly approved tracked-SKU adjustment at one exact active location. No
-> bulk inventory, transfer, order-status, publication, campaign,
+> explicitly approved tracked-SKU adjustment at one exact active location.
+> Migration `20260831_0047_mink_phase_5b_bulk_inventory` adds a separate,
+> five-credit, maximum-20-line bulk adjustment with line-level validation and
+> atomic all-or-nothing execution. No transfer, order-status, publication, campaign,
 > customer-contact, membership, bulk-price or arbitrary-code authority is present.
 >
 > **Plan date:** 2026-08-30
@@ -124,6 +127,12 @@ guarded-action slice now include:
   remain outside the write allowlist; and
 - safe create rollback only while the new record is unchanged and unused,
   plus checkpointed update rollback for coupon terms and group metadata.
+- independent one-line and maximum-20-line inventory proposal gates with exact
+  trusted SKU/location checkpoint resolution and no model-callable executor;
+- five-minute bulk review, deterministic row locking and all-or-nothing stock,
+  movement and audit writes when every line still matches; and
+- strict same-origin, streamed byte, field, rate, tenant and permission
+  boundaries around the human-only bulk preview/execute endpoint.
 
 The dev deployment has also passed manual acceptance for ten-conversation
 history, conversation deletion, panel resizing, multiline input growth and
@@ -134,14 +143,15 @@ The real client and endpoint are globally enabled when `MINK_AI_ENABLED` is
 unset and can be explicitly disabled with `MINK_AI_ENABLED=false`. With the
 default `MINK_BETA_REQUIRE_INVITE=true`, a store must still have an enabled
 operator invitation. Draft tools additionally require
-`drafting_enabled=true` and the related Manage permission. Every Phase 4 action
-also requires its matching per-tool operator switch and the destination
+`drafting_enabled=true` and the related Manage permission. Every Phase 4 or 5
+action also requires its matching per-tool operator switch and the destination
 section's Manage permission. The
 disabled/uninvited state keeps the canned coming-soon response. The current
 build charges live credits only when it creates a private proposal; the
 weighted schedule is 2/1/5/2/2 for the original proposal kinds, 3 for a draft
-product, and 1 each for coupon or customer-group create/update. Phase 4
-review/apply/rollback adds no model generation charge. It does not
+product, 1 each for coupon or customer-group create/update, 1 for a single
+inventory adjustment and 5 for a maximum-20-line bulk inventory proposal.
+Human review/execution adds no model generation charge. It does not
 stream token deltas, expose raw customer contact details, perform coding work,
 publish products, activate coupons, alter non-approved fields or change group
 membership. The 50 cases are the
@@ -922,9 +932,10 @@ Deliver in separate gates:
 5. campaign audience preview, sample, schedule and final send confirmation;
 6. bulk price changes with revenue-impact summary.
 
-**Implementation:** ✅ Phase 5A (item 1) is code-complete on 2026-08-31 behind
-the independent `adjust_inventory` operator gate. Gemini receives only an exact
-SKU/location checkpoint reader and private proposal tool; the authenticated
+**Implementation:** ✅ Phases 5A–5B (items 1–2) are code-complete on 2026-08-31
+behind independent `adjust_inventory` and `bulk_adjust_inventory` operator
+gates. In Phase 5A, Gemini receives only an exact SKU/location checkpoint reader
+and private proposal tool; the authenticated
 browser endpoint is the sole executor. It rechecks tenant, Inventory Manage,
 active assigned location, tracking state, saved version, ten-minute approval,
 current `on_hand`/`reserved`/timestamp checkpoint and a ±1,000,000 bound. It
@@ -932,7 +943,18 @@ refuses stock below zero or reserved quantity and atomically writes one
 `inventory_levels` row plus one `stock_movements` ledger row. Execution retries
 are idempotent and all terminal outcomes are audited. There is intentionally no
 automatic inventory rollback: a correction needs a new review against current
-physical stock. Items 2–6 remain unbuilt and separately gated.
+physical stock. Phase 5B resolves 1–20 exact SKU/location lines through four
+bounded tenant-scoped checkpoint queries, returns an error for every invalid
+line, and refuses to create or charge a proposal unless all lines are valid.
+Its five-minute human approval rechecks every saved checkpoint, locks and
+mutates in deterministic order, and commits every level plus one movement per
+line and one batch audit in a single transaction. Any stale or invalid line
+rolls the whole batch back. Approval replay returns the original result without
+another mutation, event, alert or charge. The model receives checkpoint and
+proposal tools, never an execute tool; the browser endpoint has a real streamed
+body limit, strict fields, same-origin enforcement and actor/store rate limiting.
+There is no automatic bulk rollback: corrections require a new proposal against
+current physical stock. Items 3–6 remain unbuilt and separately gated.
 
 Exit criteria:
 
@@ -1228,35 +1250,35 @@ would move risk into production rather than remove work.
 
 ## 21. Immediate next sprint
 
-The next sprint should validate and safely roll out Phase 5A before starting
-Phase 5B bulk inventory:
+The next sprint should validate and safely roll out Phase 5B before designing
+Phase 5C order-status transitions:
 
-1. Apply migration `20260831_0046_mink_phase_5a_inventory_actions` after 0045
-   in controlled staging, deploy the matching application code, and leave
-   `adjust_inventory` disabled for every merchant store.
-2. On one synthetic store, enable beta, drafting and only `adjust_inventory`.
-   Prove that the global, invitation, drafting and tool gates each independently
-   stop preview and execution, including a gate disabled between those steps.
-3. Verify Inventory View versus Manage, assigned versus inaccessible/inactive
-   locations, product versus variant SKUs, untracked SKUs and cross-store/admin
-   proposal and approval isolation.
-4. Exercise positive and negative adjustments, zero/malformed/over-limit input,
-   below-zero and below-reserved refusal, a previously absent inventory-level
-   row, and one exact movement-ledger record per successful approval.
-5. Race preview/execute against POS, order reservation, manual adjustment and a
-   second browser tab. Every stale checkpoint must conflict without changing
-   stock; duplicate execution must return the first result without a second
-   level change, movement, event or alert.
-6. Reconcile executed, expired and conflicted approvals to immutable audit
-   outcomes. Confirm no automatic rollback appears and correction requires a
-   new proposal against current stock.
-7. Run the 50 read cases plus all proposal/action regressions. The model tool
-   manifest must contain proposal tools only; no live execute mutation is
-   callable by Gemini.
-8. After four stable weeks and the Phase 5A exit criteria, design Phase 5B as a
-   separate bulk-inventory gate with capped rows, line-by-line preview and
-   partial-error reporting. Transfers, order status, publishing, campaigns and
-   bulk prices remain unavailable.
+1. Apply migration `20260831_0047_mink_phase_5b_bulk_inventory` after 0046 in
+   controlled staging, deploy matching application code, and leave
+   `bulk_adjust_inventory` disabled for every merchant store.
+2. On one synthetic store, enable beta, drafting and only the bulk gate. Prove
+   that global, invitation, drafting, permission and tool gates each stop both
+   preview and execution, including a gate disabled between those steps.
+3. Exercise one, 20 and 21 lines; repeated SKU/location pairs; parent and
+   variant SKUs; untracked products; inaccessible/inactive locations; absent
+   inventory rows; negative/below-reserved results; malformed and over-limit
+   quantities. Invalid requests must return per-line corrections without a
+   charged proposal.
+4. Race one line against POS, reservations, manual adjustment and a second tab.
+   A stale checkpoint on any line must commit zero level or movement writes.
+   Confirm deterministic lock order avoids deadlocks for reversed line order.
+5. Prove a valid batch creates one movement per line, one batch audit and only
+   bounded post-commit events/alerts. Duplicate approval must return the first
+   result with no repeated mutation, event, alert or credit charge.
+6. Verify the five-minute expiry, streamed request-size bound, strict input
+   allowlist, actor/store rate limit, same-origin check and cross-tenant/admin
+   isolation. Treat product, SKU, location and note text as untrusted data.
+7. Run the read corpus plus all proposal/action/migration regressions and inspect
+   query plans for the capped checkpoint reads. The model manifest must expose
+   bulk checkpoint/proposal tools but no browser-only execute capability.
+8. After four stable weeks and reconciled audits, design Phase 5C against the
+   authoritative order lifecycle. Transfers, publishing, campaigns, bulk prices
+   and customer contact remain unavailable.
 
 The intended outcome is not “Gemini 3.7 answered impressively.” It is:
 

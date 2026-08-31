@@ -165,6 +165,8 @@ describe("Mink read-tool declarations", () => {
       "list_low_stock",
       "get_inventory_item_for_adjustment",
       "propose_inventory_adjustment",
+      "get_inventory_items_for_bulk_adjustment",
+      "propose_bulk_inventory_adjustment",
     ]);
     const proposal = minkReadToolRegistry
       .declarationsFor({
@@ -195,6 +197,44 @@ describe("Mink read-tool declarations", () => {
     expect(proposal?.parametersJsonSchema.properties).toHaveProperty(
       "target_quantity",
     );
+    const bulkReader = minkReadToolRegistry
+      .declarationsFor({
+        ...ACTOR,
+        isSuperadmin: false,
+        draftingEnabled: true,
+        permissions: { inventory: ["view", "manage"] },
+      })
+      .find((tool) => tool.name === "get_inventory_items_for_bulk_adjustment");
+    const bulkProposal = minkReadToolRegistry
+      .declarationsFor({
+        ...ACTOR,
+        isSuperadmin: false,
+        draftingEnabled: true,
+        permissions: { inventory: ["view", "manage"] },
+      })
+      .find((tool) => tool.name === "propose_bulk_inventory_adjustment");
+    expect(bulkReader?.parametersJsonSchema).toMatchObject({
+      required: ["lines"],
+      additionalProperties: false,
+      properties: {
+        lines: { minItems: 1, maxItems: 20 },
+      },
+    });
+    expect(bulkProposal?.parametersJsonSchema).toMatchObject({
+      required: ["lines"],
+      additionalProperties: false,
+      properties: {
+        lines: { minItems: 1, maxItems: 20 },
+      },
+    });
+    const bulkItems = (
+      bulkProposal?.parametersJsonSchema.properties as {
+        lines?: { items?: { properties?: Record<string, unknown> } };
+      }
+    )?.lines?.items?.properties;
+    expect(bulkItems).not.toHaveProperty("product_id");
+    expect(bulkItems).not.toHaveProperty("location_id");
+    expect(bulkItems).toHaveProperty("inventory_snapshot");
   });
 
   it("rejects direct calls to every hidden business tool before data access", async () => {

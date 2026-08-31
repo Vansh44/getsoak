@@ -12,14 +12,22 @@ import { withUser } from "@/lib/db/client";
 import { slugify } from "@/lib/slug";
 import { limitsFor } from "@/lib/plans";
 import { createMinkDraftProposal } from "../drafts";
-import { INVENTORY_ADJUSTMENT_REASONS } from "../draft-types";
+import {
+  INVENTORY_ADJUSTMENT_REASONS,
+  MAX_MINK_BULK_INVENTORY_LINES,
+} from "../draft-types";
 import { MinkToolInputError } from "../errors";
 import type { MinkActorContext, MinkArtifact } from "../types";
+import {
+  resolveMinkBulkInventoryTargets,
+  type MinkBulkInventoryLookupInput,
+} from "../bulk-inventory-targets";
 import type { MinkTool } from "./registry";
 import { resolveMinkLocation } from "./location-scope";
 
 const draftingAvailable = (actor: MinkActorContext) =>
   actor.draftingEnabled === true;
+const MAX_POSTGRES_INTEGER = 2_147_483_647;
 const currentProductAvailable = (actor: MinkActorContext) =>
   draftingAvailable(actor) && actor.selectedResource?.type === "product";
 const customerGroupCreateAvailable = (actor: MinkActorContext) =>
@@ -720,6 +728,231 @@ export const proposeInventoryAdjustmentTool: MinkTool = {
   },
 };
 
+const bulkLookupLineSchema = {
+  type: "object",
+  properties: {
+    product_sku: { type: "string", minLength: 1, maxLength: 100 },
+    location_name: { type: "string", minLength: 1, maxLength: 100 },
+  },
+  required: ["product_sku", "location_name"],
+  additionalProperties: false,
+};
+
+export const getInventoryItemsForBulkAdjustmentTool: MinkTool = {
+  declaration: {
+    name: "get_inventory_items_for_bulk_adjustment",
+    description:
+      "Read 1-20 exact tracked SKU/location pairs in one bounded request before a bulk inventory proposal. Returns each line as ready with an opaque inventory_snapshot, or a line-specific validation error. Never use IDs and never silently replace a missing line.",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {
+        lines: {
+          type: "array",
+          minItems: 1,
+          maxItems: MAX_MINK_BULK_INVENTORY_LINES,
+          items: bulkLookupLineSchema,
+        },
+      },
+      required: ["lines"],
+      additionalProperties: false,
+    },
+  },
+  permission: { section: "inventory", action: "view" },
+  available: draftingAvailable,
+  timeoutMs: 10_000,
+  async execute(actor, args) {
+    const inputs = readBulkLookupLines(args.lines);
+    const resolved = await withActor(actor, (db) =>
+      resolveMinkBulkInventoryTargets(db, actor, inputs),
+    );
+    return {
+      status: resolved.every((line) => !line.error)
+        ? "ready"
+        : "needs_correction",
+      max_lines: MAX_MINK_BULK_INVENTORY_LINES,
+      lines: await Promise.all(
+        resolved.map(async (line) =>
+          line.error
+            ? {
+                line: line.line,
+                sku: line.input.sku,
+                location: line.input.locationName,
+                status: "error",
+                error_code: line.error.code,
+                error: line.error.message,
+              }
+            : {
+                line: line.line,
+                product: line.target.productName,
+                variant: line.target.variantName,
+                sku: line.target.sku,
+                location: line.target.locationName,
+                on_hand: line.target.onHand,
+                reserved: line.target.reserved,
+                available: line.target.onHand - line.target.reserved,
+                status: "ready",
+                inventory_snapshot: await bulkInventorySnapshot(
+                  actor,
+                  line.target,
+                ),
+              },
+        ),
+      ),
+      dataAsOf: new Date().toISOString(),
+    };
+  },
+};
+
+const bulkProposalLineSchema = {
+  type: "object",
+  properties: {
+    ...bulkLookupLineSchema.properties,
+    inventory_snapshot: { type: "string", minLength: 64, maxLength: 64 },
+    quantity_change: {
+      type: "integer",
+      minimum: -1_000_000,
+      maximum: 1_000_000,
+    },
+    target_quantity: {
+      type: "integer",
+      minimum: 0,
+      maximum: 2_147_483_647,
+    },
+    reason: { type: "string", enum: [...INVENTORY_ADJUSTMENT_REASONS] },
+    note: { type: "string", maxLength: 200 },
+  },
+  required: ["product_sku", "location_name", "inventory_snapshot", "reason"],
+  additionalProperties: false,
+};
+
+export const proposeBulkInventoryAdjustmentTool: MinkTool = {
+  declaration: {
+    name: "propose_bulk_inventory_adjustment",
+    description:
+      "Create a charged private proposal for 1-20 exact SKU/location inventory adjustments. First call get_inventory_items_for_bulk_adjustment and pass every returned snapshot unchanged. Each line supplies exactly one signed quantity_change or absolute target_quantity plus its reason. Invalid lines are reported individually and no proposal is created until every line is valid. This never changes stock; a human must save, review and approve the whole atomic batch.",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {
+        lines: {
+          type: "array",
+          minItems: 1,
+          maxItems: MAX_MINK_BULK_INVENTORY_LINES,
+          items: bulkProposalLineSchema,
+        },
+      },
+      required: ["lines"],
+      additionalProperties: false,
+    },
+  },
+  permission: { section: "inventory", action: "manage" },
+  available: draftingAvailable,
+  timeoutMs: 10_000,
+  artifact: proposalArtifact,
+  async execute(actor, args) {
+    const lines = readBulkProposalLines(args.lines);
+    const inputs = lines.map((line) => ({
+      sku: line.sku,
+      locationName: line.location,
+    }));
+    const resolved = await withActor(actor, (db) =>
+      resolveMinkBulkInventoryTargets(db, actor, inputs),
+    );
+    const errors: Array<Record<string, unknown>> = [];
+    const contentLines: Array<Record<string, unknown>> = [];
+    for (const result of resolved) {
+      const input = lines[result.line - 1];
+      if (!input) throw new MinkToolInputError("A bulk line is unavailable.");
+      if (result.error) {
+        errors.push({
+          line: result.line,
+          sku: input.sku,
+          location: input.location,
+          code: result.error.code,
+          message: result.error.message,
+        });
+        continue;
+      }
+      if (
+        input.snapshot !== (await bulkInventorySnapshot(actor, result.target))
+      ) {
+        errors.push({
+          line: result.line,
+          sku: input.sku,
+          location: input.location,
+          code: "snapshot_conflict",
+          message:
+            "The SKU, location or stock checkpoint changed. Read this line again.",
+        });
+        continue;
+      }
+      let quantityChange: number;
+      try {
+        quantityChange = resolveInventoryQuantityChange(
+          input.quantityChange,
+          input.targetQuantity,
+          result.target.onHand,
+        );
+      } catch (error) {
+        errors.push({
+          line: result.line,
+          sku: input.sku,
+          location: input.location,
+          code: "quantity_invalid",
+          message: error instanceof Error ? error.message : "Invalid quantity.",
+        });
+        continue;
+      }
+      const resulting = result.target.onHand + quantityChange;
+      if (
+        resulting < 0 ||
+        resulting < result.target.reserved ||
+        resulting > MAX_POSTGRES_INTEGER
+      ) {
+        errors.push({
+          line: result.line,
+          sku: input.sku,
+          location: input.location,
+          code: "stock_invariant",
+          message:
+            resulting < 0
+              ? "The adjustment would reduce on-hand stock below zero."
+              : resulting < result.target.reserved
+                ? `The adjustment would reduce on-hand stock below ${result.target.reserved} reserved units.`
+                : "The resulting stock is outside the supported range.",
+        });
+        continue;
+      }
+      contentLines.push({
+        sku: result.target.sku,
+        location: result.target.locationName,
+        quantity_change: quantityChange,
+        reason: input.reason,
+        note: input.note,
+      });
+    }
+    if (errors.length) {
+      return {
+        status: "needs_correction",
+        proposal_created: false,
+        valid_lines: contentLines.length,
+        invalid_lines: errors.length,
+        line_errors: errors,
+      };
+    }
+    return proposalOutput(
+      await createMinkDraftProposal({
+        actor,
+        kind: "bulk_inventory_adjustment",
+        title: `Bulk inventory adjustment · ${contentLines.length} lines`,
+        destinationType: "inventory_bulk",
+        destinationLabel: `${contentLines.length} inventory adjustments`,
+        destinationPath: "/dashboard/inventory",
+        content: { lines_json: JSON.stringify(contentLines) },
+      }),
+    );
+  },
+};
+
 export const minkDraftTools = [
   proposeCurrentProductDescriptionTool,
   proposeCurrentProductSeoTool,
@@ -735,7 +968,136 @@ export const minkDraftTools = [
   proposeCustomerGroupUpdateTool,
   getInventoryItemForAdjustmentTool,
   proposeInventoryAdjustmentTool,
+  getInventoryItemsForBulkAdjustmentTool,
+  proposeBulkInventoryAdjustmentTool,
 ];
+
+type BulkProposalInput = {
+  sku: string;
+  location: string;
+  snapshot: string;
+  quantityChange: unknown;
+  targetQuantity: unknown;
+  reason: string;
+  note: string;
+};
+
+function readBulkLookupLines(value: unknown): MinkBulkInventoryLookupInput[] {
+  if (
+    !Array.isArray(value) ||
+    value.length < 1 ||
+    value.length > MAX_MINK_BULK_INVENTORY_LINES
+  ) {
+    throw new MinkToolInputError(
+      `lines must contain 1-${MAX_MINK_BULK_INVENTORY_LINES} items.`,
+    );
+  }
+  return value.map((item, index) => {
+    const row = readBulkObject(item, index, ["product_sku", "location_name"]);
+    return {
+      sku: readString(row.product_sku, `lines[${index}].product_sku`, 100),
+      locationName: readString(
+        row.location_name,
+        `lines[${index}].location_name`,
+        100,
+      ),
+    };
+  });
+}
+
+function readBulkProposalLines(value: unknown): BulkProposalInput[] {
+  if (
+    !Array.isArray(value) ||
+    value.length < 1 ||
+    value.length > MAX_MINK_BULK_INVENTORY_LINES
+  ) {
+    throw new MinkToolInputError(
+      `lines must contain 1-${MAX_MINK_BULK_INVENTORY_LINES} items.`,
+    );
+  }
+  return value.map((item, index) => {
+    const row = readBulkObject(item, index, [
+      "product_sku",
+      "location_name",
+      "inventory_snapshot",
+      "quantity_change",
+      "target_quantity",
+      "reason",
+      "note",
+    ]);
+    const reason = readString(row.reason, `lines[${index}].reason`, 20);
+    if (!INVENTORY_ADJUSTMENT_REASONS.includes(reason as never)) {
+      throw new MinkToolInputError(
+        `lines[${index}].reason must be one of: ${INVENTORY_ADJUSTMENT_REASONS.join(", ")}.`,
+      );
+    }
+    const note = readOptionalString(row.note, `lines[${index}].note`, 200);
+    if (reason === "other" && !note) {
+      throw new MinkToolInputError(
+        `lines[${index}].note is required when reason is other.`,
+      );
+    }
+    return {
+      sku: readString(row.product_sku, `lines[${index}].product_sku`, 100),
+      location: readString(
+        row.location_name,
+        `lines[${index}].location_name`,
+        100,
+      ),
+      snapshot: readString(
+        row.inventory_snapshot,
+        `lines[${index}].inventory_snapshot`,
+        64,
+      ),
+      quantityChange: row.quantity_change,
+      targetQuantity: row.target_quantity,
+      reason,
+      note,
+    };
+  });
+}
+
+function readBulkObject(
+  value: unknown,
+  index: number,
+  allowed: string[],
+): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new MinkToolInputError(`lines[${index}] must be an object.`);
+  }
+  const row = value as Record<string, unknown>;
+  if (Object.keys(row).some((key) => !allowed.includes(key))) {
+    throw new MinkToolInputError(
+      `lines[${index}] contains unsupported fields.`,
+    );
+  }
+  return row;
+}
+
+function bulkInventorySnapshot(
+  actor: MinkActorContext,
+  target: {
+    productId: string;
+    variantId: string | null;
+    locationId: string;
+    sku: string;
+    onHand: number;
+    reserved: number;
+    version: string | null;
+  },
+) {
+  return sha256([
+    actor.storeId,
+    actor.adminId,
+    target.productId,
+    target.variantId,
+    target.locationId,
+    target.sku,
+    target.onHand,
+    target.reserved,
+    target.version,
+  ]);
+}
 
 async function readInventoryAdjustmentTarget(
   actor: MinkActorContext,

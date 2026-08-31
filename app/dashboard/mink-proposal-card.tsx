@@ -7,13 +7,18 @@ import {
   Eye,
   History,
   LoaderCircle,
+  Plus,
   RotateCcw,
   Save,
   ShieldCheck,
+  Trash2,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import {
   MINK_DRAFT_CONFIG,
+  INVENTORY_ADJUSTMENT_REASONS,
+  MAX_MINK_BULK_INVENTORY_LINES,
+  type MinkBulkInventoryDraftLine,
   type MinkDraftContent,
   type MinkDraftCreditSource,
   type MinkDraftKind,
@@ -37,17 +42,24 @@ import {
   type MinkInventoryActionApproval,
   type MinkInventoryActionResult,
 } from "@/lib/mink/inventory-action-types";
+import type {
+  MinkBulkInventoryActionApproval,
+  MinkBulkInventoryActionResult,
+  MinkBulkInventoryValidationDetail,
+} from "@/lib/mink/bulk-inventory-action-types";
 import type { MinkArtifact } from "@/lib/mink/types";
 
 type Proposal = Extract<MinkArtifact, { type: "proposal" }>;
 type MinkActionApproval =
   | MinkProductActionApproval
   | MinkDomainActionApproval
-  | MinkInventoryActionApproval;
+  | MinkInventoryActionApproval
+  | MinkBulkInventoryActionApproval;
 type MinkActionResult =
   | MinkProductActionResult
   | MinkDomainActionResult
-  | MinkInventoryActionResult;
+  | MinkInventoryActionResult
+  | MinkBulkInventoryActionResult;
 type DraftResponse = {
   id: string;
   kind: MinkDraftKind;
@@ -65,6 +77,7 @@ type DraftResponse = {
   lastProductAction: MinkProductActionResult | null;
   lastDomainAction: MinkDomainActionResult | null;
   lastInventoryAction: MinkInventoryActionResult | null;
+  lastBulkInventoryAction: MinkBulkInventoryActionResult | null;
 };
 
 export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
@@ -92,8 +105,13 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
   const supportsDomainAction =
     domainActionToolForDraftKind(draft.kind) !== null;
   const supportsInventoryAction = draft.kind === "inventory_adjustment";
+  const supportsBulkInventoryAction =
+    draft.kind === "bulk_inventory_adjustment";
   const supportsLiveAction =
-    supportsProductAction || supportsDomainAction || supportsInventoryAction;
+    supportsProductAction ||
+    supportsDomainAction ||
+    supportsInventoryAction ||
+    supportsBulkInventoryAction;
 
   useEffect(() => {
     const controller = new AbortController();
@@ -105,7 +123,8 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
         setActionResult(
           next.lastProductAction ??
             next.lastDomainAction ??
-            next.lastInventoryAction,
+            next.lastInventoryAction ??
+            next.lastBulkInventoryAction,
         );
         setError(null);
       })
@@ -143,7 +162,8 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
       setActionResult(
         next.lastProductAction ??
           next.lastDomainAction ??
-          next.lastInventoryAction,
+          next.lastInventoryAction ??
+          next.lastBulkInventoryAction,
       );
     } catch (saveError) {
       setError(
@@ -175,7 +195,8 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
       setActionResult(
         next.lastProductAction ??
           next.lastDomainAction ??
-          next.lastInventoryAction,
+          next.lastInventoryAction ??
+          next.lastBulkInventoryAction,
       );
     } catch (rollbackError) {
       setError(
@@ -194,11 +215,13 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
     try {
       const next = await requestLiveAction(
         proposal.draftId,
-        supportsInventoryAction
-          ? "inventory"
-          : supportsDomainAction
-            ? "domain"
-            : "product",
+        supportsBulkInventoryAction
+          ? "bulk_inventory"
+          : supportsInventoryAction
+            ? "inventory"
+            : supportsDomainAction
+              ? "domain"
+              : "product",
         {
           action: "preview",
           expectedDraftVersion: draft.currentVersion,
@@ -225,11 +248,13 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
     try {
       const next = await requestLiveAction(
         proposal.draftId,
-        supportsInventoryAction
-          ? "inventory"
-          : supportsDomainAction
-            ? "domain"
-            : "product",
+        supportsBulkInventoryAction
+          ? "bulk_inventory"
+          : supportsInventoryAction
+            ? "inventory"
+            : supportsDomainAction
+              ? "domain"
+              : "product",
         {
           action: "execute",
           approvalId: approval.id,
@@ -251,7 +276,8 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
   }
 
   async function reviewLiveRollback() {
-    if (!actionResult || supportsInventoryAction) return;
+    if (!actionResult || supportsInventoryAction || supportsBulkInventoryAction)
+      return;
     setActionBusy("rollback");
     setError(null);
     try {
@@ -304,52 +330,62 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
       </header>
 
       <div className="space-y-3 p-3">
-        {fields.map((field) => (
-          <label key={field.key} className="block">
-            <span className="mb-1 block text-[10px] font-semibold text-[#5f5868]">
-              {field.label}
-            </span>
-            {draft.before[field.key] ? (
-              <details className="mb-1.5 rounded-lg bg-[#f6f6f7] px-2.5 py-2 text-[10px] text-[#77717d]">
-                <summary className="cursor-pointer font-medium">
-                  Current text
-                </summary>
-                <div className="mt-1 whitespace-pre-wrap break-words">
-                  {draft.before[field.key]}
-                </div>
-              </details>
-            ) : null}
-            {field.multiline ? (
-              <textarea
-                value={content[field.key] ?? ""}
-                maxLength={field.maxLength}
-                rows={field.key === "content" ? 8 : 4}
-                onChange={(event) =>
-                  changeContent(field.key, event.target.value)
-                }
-                className="w-full resize-y rounded-lg border border-[#dfdce5] bg-white px-2.5 py-2 text-xs leading-5 text-[#252228] outline-none focus:border-[#6d4dff] focus:ring-1 focus:ring-[#6d4dff]"
-              />
-            ) : (
-              <input
-                value={content[field.key] ?? ""}
-                maxLength={field.maxLength}
-                onChange={(event) =>
-                  changeContent(field.key, event.target.value)
-                }
-                className="h-9 w-full rounded-lg border border-[#dfdce5] bg-white px-2.5 text-xs text-[#252228] outline-none focus:border-[#6d4dff] focus:ring-1 focus:ring-[#6d4dff]"
-              />
-            )}
-            <span className="mt-0.5 block text-right text-[9px] text-[#99939f]">
-              {(content[field.key] ?? "").length.toLocaleString("en-IN")} /{" "}
-              {field.maxLength.toLocaleString("en-IN")}
-            </span>
-          </label>
-        ))}
+        {draft.kind === "bulk_inventory_adjustment" ? (
+          <BulkInventoryDraftEditor
+            value={content.lines_json ?? "[]"}
+            disabled={busy !== null || actionBusy !== null}
+            onChange={(lines) =>
+              changeContent("lines_json", JSON.stringify(lines))
+            }
+          />
+        ) : (
+          fields.map((field) => (
+            <label key={field.key} className="block">
+              <span className="mb-1 block text-[10px] font-semibold text-[#5f5868]">
+                {field.label}
+              </span>
+              {draft.before[field.key] ? (
+                <details className="mb-1.5 rounded-lg bg-[#f6f6f7] px-2.5 py-2 text-[10px] text-[#77717d]">
+                  <summary className="cursor-pointer font-medium">
+                    Current text
+                  </summary>
+                  <div className="mt-1 whitespace-pre-wrap break-words">
+                    {draft.before[field.key]}
+                  </div>
+                </details>
+              ) : null}
+              {field.multiline ? (
+                <textarea
+                  value={content[field.key] ?? ""}
+                  maxLength={field.maxLength}
+                  rows={field.key === "content" ? 8 : 4}
+                  onChange={(event) =>
+                    changeContent(field.key, event.target.value)
+                  }
+                  className="w-full resize-y rounded-lg border border-[#dfdce5] bg-white px-2.5 py-2 text-xs leading-5 text-[#252228] outline-none focus:border-[#6d4dff] focus:ring-1 focus:ring-[#6d4dff]"
+                />
+              ) : (
+                <input
+                  value={content[field.key] ?? ""}
+                  maxLength={field.maxLength}
+                  onChange={(event) =>
+                    changeContent(field.key, event.target.value)
+                  }
+                  className="h-9 w-full rounded-lg border border-[#dfdce5] bg-white px-2.5 text-xs text-[#252228] outline-none focus:border-[#6d4dff] focus:ring-1 focus:ring-[#6d4dff]"
+                />
+              )}
+              <span className="mt-0.5 block text-right text-[9px] text-[#99939f]">
+                {(content[field.key] ?? "").length.toLocaleString("en-IN")} /{" "}
+                {field.maxLength.toLocaleString("en-IN")}
+              </span>
+            </label>
+          ))
+        )}
 
         {error ? (
           <p
             role="alert"
-            className="rounded-lg bg-[#fff3f2] p-2 text-[10px] leading-4 text-[#9a2c20]"
+            className="whitespace-pre-wrap rounded-lg bg-[#fff3f2] p-2 text-[10px] leading-4 text-[#9a2c20]"
           >
             {error}
           </p>
@@ -463,18 +499,25 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
                     Expires {formatActionTime(approval.expiresAt)}
                   </span>
                 </div>
-                {actionPreviewFields(approval, fields).map((field) => (
-                  <div key={field.key} className="space-y-1">
-                    <div className="text-[9px] font-semibold text-[#5f5868]">
-                      {field.label}
+                {isBulkInventoryApproval(approval) ? (
+                  <BulkInventoryActionPreview lines={approval.lines} />
+                ) : (
+                  actionPreviewFields(approval, fields).map((field) => (
+                    <div key={field.key} className="space-y-1">
+                      <div className="text-[9px] font-semibold text-[#5f5868]">
+                        {field.label}
+                      </div>
+                      <div className="grid gap-1.5 sm:grid-cols-[1fr_auto_1fr] sm:items-center">
+                        <ActionValue value={approval.before[field.key]} />
+                        <ArrowRight className="mx-auto h-3 w-3 text-[#8a8194]" />
+                        <ActionValue
+                          value={approval.after[field.key]}
+                          proposed
+                        />
+                      </div>
                     </div>
-                    <div className="grid gap-1.5 sm:grid-cols-[1fr_auto_1fr] sm:items-center">
-                      <ActionValue value={approval.before[field.key]} />
-                      <ArrowRight className="mx-auto h-3 w-3 text-[#8a8194]" />
-                      <ActionValue value={approval.after[field.key]} proposed />
-                    </div>
-                  </div>
-                ))}
+                  ))
+                )}
                 <div className="flex flex-wrap justify-end gap-2 pt-1">
                   <button
                     type="button"
@@ -526,7 +569,7 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
                   </div>
                 </div>
                 {actionResult.approval.operation === "apply" &&
-                actionResult.approval.toolName !== "adjust_inventory" ? (
+                !isAnyInventoryApproval(actionResult.approval) ? (
                   <button
                     type="button"
                     onClick={reviewLiveRollback}
@@ -552,9 +595,9 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
           action changes only the exact fields shown after you approve its
           preview. Product creation stays draft-only, coupon actions stay
           disabled and hidden, and customer-group membership is never changed.
-          Inventory proposals affect only one exact tracked SKU at one exact
-          active location after a separate approval; they never bulk-adjust
-          stock.
+          Single-SKU inventory proposals affect one exact tracked item and
+          location. Bulk proposals are separately gated, capped at 20 lines,
+          reviewed line by line and applied atomically only after approval.
         </p>
       </div>
     </section>
@@ -615,6 +658,7 @@ function fromProposal(proposal: Proposal): DraftResponse {
     lastProductAction: null,
     lastDomainAction: null,
     lastInventoryAction: null,
+    lastBulkInventoryAction: null,
   };
 }
 
@@ -638,18 +682,20 @@ async function requestDraft(
 
 async function requestLiveAction(
   draftId: string,
-  actionType: "product" | "domain" | "inventory",
+  actionType: "product" | "domain" | "inventory" | "bulk_inventory",
   body: Record<string, unknown>,
 ): Promise<{
   approval?: MinkActionApproval;
   result?: MinkActionResult;
 }> {
   const endpoint =
-    actionType === "inventory"
-      ? "inventory-action"
-      : actionType === "domain"
-        ? "action"
-        : "product-action";
+    actionType === "bulk_inventory"
+      ? "bulk-inventory-action"
+      : actionType === "inventory"
+        ? "inventory-action"
+        : actionType === "domain"
+          ? "action"
+          : "product-action";
   const response = await fetch(`/api/mink/drafts/${draftId}/${endpoint}`, {
     method: "POST",
     cache: "no-store",
@@ -660,9 +706,21 @@ async function requestLiveAction(
     approval?: MinkActionApproval;
     result?: MinkActionResult;
     error?: string;
+    lineErrors?: MinkBulkInventoryValidationDetail[];
   };
   if (!response.ok) {
-    throw new Error(payload.error ?? "The Mink action is unavailable.");
+    const lineDetail = payload.lineErrors
+      ?.slice(0, MAX_MINK_BULK_INVENTORY_LINES)
+      .map(
+        (line) =>
+          `Line ${line.line} (${line.sku} at ${line.location}): ${line.message}`,
+      )
+      .join("\n");
+    throw new Error(
+      [payload.error ?? "The Mink action is unavailable.", lineDetail]
+        .filter(Boolean)
+        .join("\n"),
+    );
   }
   return payload;
 }
@@ -672,12 +730,13 @@ function actionPreviewFields(
   draftFields: Array<{ key: string; label: string }>,
 ) {
   if ("product" in approval) return draftFields;
-  if (isInventoryApproval(approval)) {
+  if (isSingleInventoryApproval(approval)) {
     return MINK_INVENTORY_ACTION_FIELDS.map((key) => ({
       key,
       label: MINK_INVENTORY_FIELD_LABELS[key] ?? key.replaceAll("_", " "),
     }));
   }
+  if (isBulkInventoryApproval(approval)) return [];
   return domainActionFields(approval.toolName).map((key) => ({
     key,
     label: MINK_DOMAIN_FIELD_LABELS[key] ?? key.replaceAll("_", " "),
@@ -704,6 +763,9 @@ function actionHeading(kind: MinkDraftKind) {
   if (kind === "customer_group_create") return "Create customer-group metadata";
   if (kind === "customer_group_update") return "Update customer-group metadata";
   if (kind === "inventory_adjustment") return "Adjust one SKU at one location";
+  if (kind === "bulk_inventory_adjustment") {
+    return "Adjust up to 20 SKU/location lines atomically";
+  }
   return "Apply to the linked product";
 }
 
@@ -720,6 +782,9 @@ function actionScope(kind: MinkDraftKind) {
   if (kind === "inventory_adjustment") {
     return "Requires Inventory Manage and its independent operator kill switch. SKU, active location, signed quantity, resulting stock, reason and note are rechecked at approval; bulk changes are outside this action.";
   }
+  if (kind === "bulk_inventory_adjustment") {
+    return "Requires Inventory Manage and a separate bulk-action kill switch. Every exact line is revalidated; one invalid or stale line prevents the entire batch from changing stock.";
+  }
   return "Requires Products Manage permission and a separate operator kill switch. Price, stock, status and publishing are outside this action.";
 }
 
@@ -727,8 +792,11 @@ function actionSuccessMessage(approval: MinkActionApproval) {
   if (approval.operation === "rollback")
     return "Approved safe rollback completed.";
   if ("product" in approval) return "Approved text applied to the product.";
-  if (isInventoryApproval(approval)) {
+  if (isSingleInventoryApproval(approval)) {
     return "Approved inventory adjustment recorded for the exact SKU and location.";
+  }
+  if (isBulkInventoryApproval(approval)) {
+    return `Approved atomic inventory batch recorded for ${approval.lines.length} lines.`;
   }
   if (isCreateDomainTool(approval.toolName)) {
     return `Approved ${approval.resource.type.replace("_", " ")} created.`;
@@ -739,14 +807,262 @@ function actionSuccessMessage(approval: MinkActionApproval) {
 function actionRemovedResource(approval: MinkActionApproval) {
   return (
     !("product" in approval) &&
-    !isInventoryApproval(approval) &&
+    !isAnyInventoryApproval(approval) &&
     approval.operation === "rollback" &&
     isCreateDomainTool(approval.toolName)
   );
 }
 
-function isInventoryApproval(
+function isSingleInventoryApproval(
   approval: MinkActionApproval,
 ): approval is MinkInventoryActionApproval {
   return !("product" in approval) && approval.resource.type === "inventory";
+}
+
+function isBulkInventoryApproval(
+  approval: MinkActionApproval,
+): approval is MinkBulkInventoryActionApproval {
+  return (
+    !("product" in approval) && approval.resource.type === "inventory_bulk"
+  );
+}
+
+function isAnyInventoryApproval(
+  approval: MinkActionApproval,
+): approval is MinkInventoryActionApproval | MinkBulkInventoryActionApproval {
+  return (
+    isSingleInventoryApproval(approval) || isBulkInventoryApproval(approval)
+  );
+}
+
+function BulkInventoryDraftEditor({
+  value,
+  disabled,
+  onChange,
+}: {
+  value: string;
+  disabled: boolean;
+  onChange: (lines: MinkBulkInventoryDraftLine[]) => void;
+}) {
+  const lines = useMemo(() => {
+    return readEditableBulkLines(value);
+  }, [value]);
+
+  function updateLine(
+    index: number,
+    patch: Partial<MinkBulkInventoryDraftLine>,
+  ) {
+    onChange(
+      lines.map((line, i) => (i === index ? { ...line, ...patch } : line)),
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <div>
+          <div className="text-[10px] font-semibold text-[#5f5868]">
+            Inventory lines
+          </div>
+          <p className="text-[9px] text-[#82798d]">
+            {lines.length} / {MAX_MINK_BULK_INVENTORY_LINES} exact SKU and
+            location pairs
+          </p>
+        </div>
+        <button
+          type="button"
+          disabled={disabled || lines.length >= MAX_MINK_BULK_INVENTORY_LINES}
+          onClick={() =>
+            onChange([
+              ...lines,
+              {
+                sku: "",
+                location: "",
+                quantity_change: 1,
+                reason: "correction",
+                note: "",
+              },
+            ])
+          }
+          className="inline-flex items-center gap-1 rounded-md border border-[#d8cef8] px-2 py-1 text-[9px] font-semibold text-[#5b3fd0] disabled:opacity-45"
+        >
+          <Plus className="h-2.5 w-2.5" /> Add line
+        </button>
+      </div>
+      {lines.map((line, index) => (
+        <div
+          key={index}
+          className="space-y-2 rounded-lg border border-[#eeeaf1] bg-[#fcfbfd] p-2.5"
+        >
+          <div className="flex items-center justify-between gap-2 text-[9px] font-semibold text-[#5f5868]">
+            <span>Line {index + 1}</span>
+            <button
+              type="button"
+              aria-label={`Delete bulk inventory line ${index + 1}`}
+              disabled={disabled || lines.length <= 1}
+              onClick={() => onChange(lines.filter((_, i) => i !== index))}
+              className="text-red-600 disabled:opacity-35"
+            >
+              <Trash2 className="h-3 w-3" />
+            </button>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <BulkInput
+              label="Exact SKU"
+              value={line.sku}
+              maxLength={100}
+              disabled={disabled}
+              onChange={(next) => updateLine(index, { sku: next })}
+            />
+            <BulkInput
+              label="Exact active location"
+              value={line.location}
+              maxLength={100}
+              disabled={disabled}
+              onChange={(next) => updateLine(index, { location: next })}
+            />
+            <BulkInput
+              label="Quantity change"
+              value={String(line.quantity_change)}
+              disabled={disabled}
+              inputMode="numeric"
+              onChange={(next) =>
+                updateLine(index, {
+                  quantity_change: Number(next),
+                })
+              }
+            />
+            <label className="block">
+              <span className="mb-1 block text-[9px] font-semibold text-[#5f5868]">
+                Reason
+              </span>
+              <select
+                value={line.reason}
+                disabled={disabled}
+                onChange={(event) =>
+                  updateLine(index, {
+                    reason: event.target
+                      .value as MinkBulkInventoryDraftLine["reason"],
+                  })
+                }
+                className="h-8 w-full rounded-md border border-[#dfdce5] bg-white px-2 text-[10px] outline-none focus:border-[#6d4dff]"
+              >
+                {INVENTORY_ADJUSTMENT_REASONS.map((reason) => (
+                  <option key={reason} value={reason}>
+                    {reason}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <BulkInput
+            label={
+              line.reason === "other" ? "Audit note (required)" : "Audit note"
+            }
+            value={line.note}
+            maxLength={200}
+            disabled={disabled}
+            onChange={(next) => updateLine(index, { note: next })}
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function readEditableBulkLines(value: string): MinkBulkInventoryDraftLine[] {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.slice(0, MAX_MINK_BULK_INVENTORY_LINES).flatMap((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+      const row = item as Record<string, unknown>;
+      const reason = INVENTORY_ADJUSTMENT_REASONS.includes(row.reason as never)
+        ? (row.reason as MinkBulkInventoryDraftLine["reason"])
+        : "correction";
+      return [
+        {
+          sku: typeof row.sku === "string" ? row.sku : "",
+          location: typeof row.location === "string" ? row.location : "",
+          quantity_change:
+            typeof row.quantity_change === "number"
+              ? row.quantity_change
+              : Number(row.quantity_change ?? 0),
+          reason,
+          note: typeof row.note === "string" ? row.note : "",
+        },
+      ];
+    });
+  } catch {
+    return [];
+  }
+}
+
+function BulkInput({
+  label,
+  value,
+  disabled,
+  maxLength,
+  inputMode,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  disabled: boolean;
+  maxLength?: number;
+  inputMode?: "numeric";
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="block">
+      <span className="mb-1 block text-[9px] font-semibold text-[#5f5868]">
+        {label}
+      </span>
+      <input
+        value={value}
+        disabled={disabled}
+        maxLength={maxLength}
+        inputMode={inputMode}
+        onChange={(event) => onChange(event.target.value)}
+        className="h-8 w-full rounded-md border border-[#dfdce5] bg-white px-2 text-[10px] outline-none focus:border-[#6d4dff]"
+      />
+    </label>
+  );
+}
+
+function BulkInventoryActionPreview({
+  lines,
+}: {
+  lines: MinkBulkInventoryActionApproval["lines"];
+}) {
+  return (
+    <div className="space-y-1.5">
+      {lines.map((line) => (
+        <div
+          key={line.line}
+          className="rounded-md border border-[#eeeaf1] bg-[#fcfbfd] p-2 text-[9px]"
+        >
+          <div className="font-semibold text-[#44365f]">
+            {line.line}. {line.product}
+            {line.variant ? ` · ${line.variant}` : ""} ({line.sku})
+          </div>
+          <div className="mt-0.5 text-[#746c7d]">{line.location}</div>
+          <div className="mt-1 grid grid-cols-[1fr_auto_1fr] items-center gap-1.5">
+            <ActionValue
+              value={`${line.onHand} on hand · ${line.available} available`}
+            />
+            <ArrowRight className="h-3 w-3 text-[#8a8194]" />
+            <ActionValue
+              value={`${line.resultingOnHand} on hand · ${line.resultingAvailable} available (${line.quantityChange > 0 ? "+" : ""}${line.quantityChange})`}
+              proposed
+            />
+          </div>
+          <div className="mt-1 text-[#746c7d]">
+            Reason: {line.reason}
+            {line.note ? ` · ${line.note}` : ""}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
 }

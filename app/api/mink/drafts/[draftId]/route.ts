@@ -41,8 +41,14 @@ export async function POST(
   }
   let body: DraftMutation;
   try {
-    body = readMutation(await request.json());
+    body = readMutation(await readBoundedJson(request));
   } catch (error) {
+    if (error instanceof BodyTooLargeError) {
+      return NextResponse.json(
+        { error: "Draft request is too large." },
+        { status: 413 },
+      );
+    }
     return NextResponse.json(
       {
         error:
@@ -151,6 +157,7 @@ function readMutation(value: unknown): DraftMutation {
     throw new SyntaxError("expectedVersion must be a non-negative integer.");
   }
   if (row.action === "save") {
+    assertOnlyKeys(row, ["action", "expectedVersion", "content"]);
     return {
       action: "save",
       expectedVersion: Number(row.expectedVersion),
@@ -162,6 +169,7 @@ function readMutation(value: unknown): DraftMutation {
     Number.isInteger(row.targetVersion) &&
     Number(row.targetVersion) > 0
   ) {
+    assertOnlyKeys(row, ["action", "expectedVersion", "targetVersion"]);
     return {
       action: "rollback",
       expectedVersion: Number(row.expectedVersion),
@@ -169,4 +177,32 @@ function readMutation(value: unknown): DraftMutation {
     };
   }
   throw new SyntaxError("Choose save or a valid version to restore.");
+}
+
+class BodyTooLargeError extends Error {}
+
+async function readBoundedJson(request: Request): Promise<unknown> {
+  if (!request.body) throw new SyntaxError("Draft request is empty.");
+  const reader = request.body.getReader();
+  const decoder = new TextDecoder();
+  let total = 0;
+  let text = "";
+  for (;;) {
+    const chunk = await reader.read();
+    if (chunk.done) break;
+    total += chunk.value.byteLength;
+    if (total > MAX_BODY_BYTES) {
+      await reader.cancel().catch(() => undefined);
+      throw new BodyTooLargeError();
+    }
+    text += decoder.decode(chunk.value, { stream: true });
+  }
+  text += decoder.decode();
+  return JSON.parse(text);
+}
+
+function assertOnlyKeys(row: Record<string, unknown>, allowed: string[]) {
+  if (Object.keys(row).some((key) => !allowed.includes(key))) {
+    throw new SyntaxError("Draft request has unsupported fields.");
+  }
 }

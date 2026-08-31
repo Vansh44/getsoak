@@ -26,7 +26,59 @@ describe("Mink draft contracts", () => {
       customer_group_create: 1,
       customer_group_update: 1,
       inventory_adjustment: 1,
+      bulk_inventory_adjustment: 5,
     });
+  });
+
+  it("strictly normalizes and caps Phase 5B bulk inventory lines", () => {
+    const lines = [
+      {
+        sku: " TEA-500 ",
+        location: " Delhi ",
+        quantity_change: -2,
+        reason: "damaged",
+        note: " Counted twice. ",
+      },
+      {
+        sku: "COFFEE",
+        location: "Shop",
+        quantity_change: 10,
+        reason: "received",
+        note: "",
+      },
+    ];
+    const normalized = normalizeMinkDraftContent("bulk_inventory_adjustment", {
+      lines_json: JSON.stringify(lines),
+    });
+    expect(JSON.parse(normalized.lines_json)).toEqual([
+      {
+        ...lines[0],
+        sku: "TEA-500",
+        location: "Delhi",
+        note: "Counted twice.",
+      },
+      lines[1],
+    ]);
+    expect(() =>
+      normalizeMinkDraftContent("bulk_inventory_adjustment", {
+        lines_json: JSON.stringify([lines[0], lines[0]]),
+      }),
+    ).toThrow("duplicates the same SKU and location");
+    expect(() =>
+      normalizeMinkDraftContent("bulk_inventory_adjustment", {
+        lines_json: JSON.stringify(
+          Array.from({ length: 21 }, (_, index) => ({
+            ...lines[1],
+            sku: `SKU-${index}`,
+          })),
+        ),
+      }),
+    ).toThrow("1-20 lines");
+    expect(() =>
+      normalizeMinkDraftContent("bulk_inventory_adjustment", {
+        lines_json: JSON.stringify([{ ...lines[0], product_id: "forbidden" }]),
+      }),
+    ).toThrow("unsupported fields");
   });
 
   it("bounds single-SKU inventory proposals and requires accountable reasons", () => {
@@ -112,5 +164,11 @@ describe("Mink draft contracts", () => {
     expect(
       estimateMinkDraftIntent("Adjust stock for SKU TEA-500 by -2 in Delhi"),
     ).toMatchObject({ kind: "inventory_adjustment", expectedCredits: 1 });
+    expect(
+      estimateMinkDraftIntent("Bulk update inventory for multiple SKUs"),
+    ).toMatchObject({
+      kind: "bulk_inventory_adjustment",
+      expectedCredits: 5,
+    });
   });
 });

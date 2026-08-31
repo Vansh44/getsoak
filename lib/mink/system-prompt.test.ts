@@ -21,6 +21,8 @@ describe("Mink system prompt document", () => {
     expect(template).toContain(
       "one exact visible SKU, one exact accessible active location",
     );
+    expect(template).toContain("accept only 1-20 explicit SKU/location lines");
+    expect(template).toContain("atomic all-or-nothing batch");
     expect(template).toContain("There is no model tool to approve");
   });
 

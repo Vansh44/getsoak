@@ -22,7 +22,7 @@ describe("database migration controls", () => {
   it("loads the repository manifest and checksums the enrolled SQL", async () => {
     const loaded = await loadManifest();
     expect(loaded.baseline.id).toBe("baseline:cloudsql-2026-08-14");
-    expect(loaded.migrations).toHaveLength(46);
+    expect(loaded.migrations).toHaveLength(47);
     expect(loaded.migrations[0]).toMatchObject({
       id: "20260814_0001_logistics_shiprocket",
       transaction: true,
@@ -582,6 +582,19 @@ describe("database migration controls", () => {
     );
     expect(loaded.migrations[45].sql).toContain(
       "writes the inventory level and stock-movement ledger in one database transaction",
+    );
+    expect(loaded.migrations[46]).toMatchObject({
+      id: "20260831_0047_mink_phase_5b_bulk_inventory",
+      transaction: true,
+      requires: ["20260831_0046_mink_phase_5a_inventory_actions"],
+    });
+    expect(loaded.migrations[46].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[46].sql).toContain("bulk_adjust_inventory");
+    expect(loaded.migrations[46].sql).toContain(
+      "mink_action_approvals_bulk_inventory_target_check",
+    );
+    expect(loaded.migrations[46].sql).toContain(
+      "database rolls the whole batch back",
     );
     const repairChecks = [
       loaded.migrations[22].applyVerify,

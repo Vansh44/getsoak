@@ -52,4 +52,12 @@ describe("Mink Phase 4A product action contract", () => {
       "Single-SKU inventory adjustments",
     );
   });
+
+  it("keeps the Phase 5B bulk inventory gate independent", () => {
+    expect(isMinkActionTool("bulk_adjust_inventory")).toBe(true);
+    expect(isMinkDomainActionTool("bulk_adjust_inventory")).toBe(false);
+    expect(MINK_ACTION_TOOL_LABELS.bulk_adjust_inventory).toBe(
+      "Bulk inventory adjustments",
+    );
+  });
 });

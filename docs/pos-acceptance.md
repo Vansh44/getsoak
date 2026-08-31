@@ -3495,6 +3495,62 @@ moved. Mink may create a new inverse single-SKU proposal after reading current
 stock. Transfers, reservations, bulk inventory and multi-location writes remain
 outside Phase 5A.
 
+## 11j. Mink Phase 5B bulk inventory approvals
+
+Run these cases only in a synthetic store after migration
+`20260831_0047_mink_phase_5b_bulk_inventory`. The independent
+`bulk_adjust_inventory` operator gate remains off unless the store is in the
+controlled rollout; the Phase 5A `adjust_inventory` gate does not enable it.
+
+**PS-MINK-5B.1 ★ — Every line is exact before any proposal is charged**
+Ask Mink to adjust between one and 20 exact tracked SKU/location pairs, mixing
+products and variants. Include a second request with duplicate pairs, an
+untracked or ambiguous SKU, a parent SKU with variants, and inaccessible or
+inactive locations. **Expect:** the server resolves visible values only inside
+the trusted tenant, permission and location scope through a fixed bounded read
+plan. It reports every invalid line and creates no proposal or charge unless
+all lines are valid. A 21-line or unbounded “every product” request is refused
+and never split into hidden batches.
+
+**PS-MINK-5B.2 ★ — Review shows the complete physical-stock decision**
+Save a valid batch and select **Review exact changes**. **Expect:** the preview
+lists each SKU, location, current on-hand, reserved and available units, signed
+change, resulting stock, reason and note. It expires after five minutes.
+Inventory Manage, the saved draft/version and the separate bulk gate are
+rechecked; browser-supplied store, actor or resource IDs and unknown fields are
+rejected. Gemini has no execute tool and cannot click approval.
+
+**PS-MINK-5B.3 ★★ — One stale shelf means zero shelves change**
+After preview, change one included shelf through POS, an order reservation,
+manual inventory or another tab, then approve the old batch. Repeat after
+deactivating a location or disabling tracking. **Expect:** one failed checkpoint
+conflicts the entire batch. No inventory level or movement from any line commits,
+and the admin is asked for a new review. Reversing line order in concurrent
+batches does not deadlock because locks and mutations use deterministic order.
+
+**PS-MINK-5B.4 ★ — Levels, movements and the batch audit commit exactly once**
+Approve a valid batch that includes an SKU/location with no existing level row.
+**Expect:** all levels, exactly one movement per line and one batch audit commit
+in one transaction; bounded standard inventory events and low-stock checks run
+only after commit. Replaying the approval returns the original result without a
+second level change, movement, event, alert, audit outcome or five-credit charge.
+An injected database failure rolls back the entire write set.
+
+**PS-MINK-5B.5 — Bulk inventory is not transfer, reservation or rollback**
+Ask Mink to transfer stock between locations, edit reservations, undo the batch
+automatically, change an order status, publish records, send a campaign or alter
+prices. **Expect:** every unrelated authority is refused. A physical correction
+requires a fresh maximum-20-line proposal against current checkpoints; there is
+no automatic inverse batch.
+
+**PS-MINK-5B.6 ★ — The public boundary is bounded and tenant-safe**
+Attempt a cross-origin request, a streamed body larger than the byte limit,
+browser business-field injection, more than four bulk preview/execute requests
+per minute, and cross-store/admin draft or approval access. **Expect:** each
+fails at the earliest relevant boundary without revealing target existence or
+performing domain work. Product, SKU, location and note text is rendered as
+untrusted data, and database reads remain parameterized and tenant-scoped.
+
 ## 12. Known gaps
 
 Real and deliberate, so nobody files them as bugs:

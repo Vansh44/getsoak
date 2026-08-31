@@ -4793,7 +4793,7 @@ export const minkDrafts = pgTable(
     }).onDelete("cascade"),
     check(
       "mink_drafts_kind_check",
-      sql`kind = ANY (ARRAY['product_description'::text, 'product_seo'::text, 'blog'::text, 'coupon_email'::text, 'customer_message'::text, 'product_create'::text, 'coupon_create'::text, 'coupon_update'::text, 'customer_group_create'::text, 'customer_group_update'::text, 'inventory_adjustment'::text])`,
+      sql`kind = ANY (ARRAY['product_description'::text, 'product_seo'::text, 'blog'::text, 'coupon_email'::text, 'customer_message'::text, 'product_create'::text, 'coupon_create'::text, 'coupon_update'::text, 'customer_group_create'::text, 'customer_group_update'::text, 'inventory_adjustment'::text, 'bulk_inventory_adjustment'::text])`,
     ),
     check(
       "mink_drafts_status_check",
@@ -4806,6 +4806,10 @@ export const minkDrafts = pgTable(
     check(
       "mink_drafts_inventory_target_check",
       sql`kind <> 'inventory_adjustment' OR (destination_type = 'inventory' AND destination_id IS NOT NULL AND location_id IS NOT NULL)`,
+    ),
+    check(
+      "mink_drafts_bulk_inventory_target_check",
+      sql`kind <> 'bulk_inventory_adjustment' OR (destination_type = 'inventory_bulk' AND destination_id IS NULL AND location_id IS NULL AND variant_id IS NULL AND jsonb_typeof(content_json -> 'lines_json') = 'string')`,
     ),
     check(
       "mink_drafts_title_check",
@@ -4945,7 +4949,7 @@ export const minkActionToolAccess = pgTable(
     }).onDelete("cascade"),
     check(
       "mink_action_tool_access_name_check",
-      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text, 'create_product'::text, 'create_coupon'::text, 'update_coupon'::text, 'create_customer_group'::text, 'update_customer_group'::text, 'adjust_inventory'::text])`,
+      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text, 'create_product'::text, 'create_coupon'::text, 'update_coupon'::text, 'create_customer_group'::text, 'update_customer_group'::text, 'adjust_inventory'::text, 'bulk_adjust_inventory'::text])`,
     ),
     check(
       "mink_action_tool_access_enablement_check",
@@ -5047,6 +5051,9 @@ export const minkActionApprovals = pgTable(
         table.createdAt,
       )
       .where(sql`${table.toolName} = 'adjust_inventory'`),
+    index("mink_action_approvals_inventory_bulk_idx")
+      .on(table.storeId, table.adminId, table.status, table.createdAt.desc())
+      .where(sql`${table.toolName} = 'bulk_adjust_inventory'`),
     foreignKey({
       columns: [table.storeId],
       foreignColumns: [stores.id],
@@ -5069,11 +5076,11 @@ export const minkActionApprovals = pgTable(
     }).onDelete("cascade"),
     check(
       "mink_action_approvals_tool_check",
-      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text, 'create_product'::text, 'create_coupon'::text, 'update_coupon'::text, 'create_customer_group'::text, 'update_customer_group'::text, 'adjust_inventory'::text])`,
+      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text, 'create_product'::text, 'create_coupon'::text, 'update_coupon'::text, 'create_customer_group'::text, 'update_customer_group'::text, 'adjust_inventory'::text, 'bulk_adjust_inventory'::text])`,
     ),
     check(
       "mink_action_approvals_resource_type_check",
-      sql`resource_type = ANY (ARRAY['product'::text, 'coupon'::text, 'customer_group'::text, 'inventory'::text])`,
+      sql`resource_type = ANY (ARRAY['product'::text, 'coupon'::text, 'customer_group'::text, 'inventory'::text, 'inventory_bulk'::text])`,
     ),
     check(
       "mink_action_approvals_operation_check",
@@ -5099,6 +5106,10 @@ export const minkActionApprovals = pgTable(
     check(
       "mink_action_approvals_inventory_target_check",
       sql`tool_name <> 'adjust_inventory' OR (resource_type = 'inventory' AND resource_id IS NOT NULL AND product_id IS NOT NULL AND product_id = resource_id AND location_id IS NOT NULL AND operation = 'apply' AND source_approval_id IS NULL)`,
+    ),
+    check(
+      "mink_action_approvals_bulk_inventory_target_check",
+      sql`tool_name <> 'bulk_adjust_inventory' OR (resource_type = 'inventory_bulk' AND resource_id IS NULL AND product_id IS NULL AND location_id IS NULL AND variant_id IS NULL AND operation = 'apply' AND source_approval_id IS NULL AND jsonb_typeof(after_json -> 'lines') = 'array' AND jsonb_array_length(after_json -> 'lines') BETWEEN 1 AND 20)`,
     ),
   ],
 );
@@ -5163,6 +5174,9 @@ export const minkActionAudit = pgTable(
         table.createdAt,
       )
       .where(sql`${table.toolName} = 'adjust_inventory'`),
+    index("mink_action_audit_inventory_bulk_idx")
+      .on(table.storeId, table.createdAt.desc())
+      .where(sql`${table.toolName} = 'bulk_adjust_inventory'`),
     foreignKey({
       columns: [table.approvalId, table.storeId],
       foreignColumns: [minkActionApprovals.id, minkActionApprovals.storeId],
@@ -5170,11 +5184,11 @@ export const minkActionAudit = pgTable(
     }).onDelete("restrict"),
     check(
       "mink_action_audit_tool_check",
-      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text, 'create_product'::text, 'create_coupon'::text, 'update_coupon'::text, 'create_customer_group'::text, 'update_customer_group'::text, 'adjust_inventory'::text])`,
+      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text, 'create_product'::text, 'create_coupon'::text, 'update_coupon'::text, 'create_customer_group'::text, 'update_customer_group'::text, 'adjust_inventory'::text, 'bulk_adjust_inventory'::text])`,
     ),
     check(
       "mink_action_audit_resource_type_check",
-      sql`resource_type = ANY (ARRAY['product'::text, 'coupon'::text, 'customer_group'::text, 'inventory'::text])`,
+      sql`resource_type = ANY (ARRAY['product'::text, 'coupon'::text, 'customer_group'::text, 'inventory'::text, 'inventory_bulk'::text])`,
     ),
     check(
       "mink_action_audit_operation_check",
@@ -5192,6 +5206,10 @@ export const minkActionAudit = pgTable(
     check(
       "mink_action_audit_inventory_target_check",
       sql`tool_name <> 'adjust_inventory' OR (resource_type = 'inventory' AND resource_id IS NOT NULL AND product_id IS NOT NULL AND product_id = resource_id AND location_id IS NOT NULL AND operation = 'apply')`,
+    ),
+    check(
+      "mink_action_audit_bulk_inventory_target_check",
+      sql`tool_name <> 'bulk_adjust_inventory' OR (resource_type = 'inventory_bulk' AND resource_id IS NULL AND product_id IS NULL AND location_id IS NULL AND variant_id IS NULL AND operation = 'apply' AND jsonb_typeof(after_json -> 'lines') = 'array' AND jsonb_array_length(after_json -> 'lines') BETWEEN 1 AND 20)`,
     ),
   ],
 );

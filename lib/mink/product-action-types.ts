@@ -13,7 +13,10 @@ export const MINK_DOMAIN_ACTION_TOOLS = [
   "update_customer_group",
 ] as const;
 
-export const MINK_INVENTORY_ACTION_TOOLS = ["adjust_inventory"] as const;
+export const MINK_INVENTORY_ACTION_TOOLS = [
+  "adjust_inventory",
+  "bulk_adjust_inventory",
+] as const;
 
 export const MINK_ACTION_TOOLS = [
   ...MINK_PRODUCT_ACTION_TOOLS,
@@ -87,6 +90,7 @@ export const MINK_ACTION_TOOL_LABELS: Record<MinkActionTool, string> = {
   create_customer_group: "Customer-group creation",
   update_customer_group: "Customer-group updates",
   adjust_inventory: "Single-SKU inventory adjustments",
+  bulk_adjust_inventory: "Bulk inventory adjustments",
 };
 
 export function actionToolForDraftKind(
