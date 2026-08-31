@@ -1781,6 +1781,57 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260901_0052_mink_phase_5d_blog_publication",
+      "description": "Add separately gated exact blog publication and a conflict-safe bounded schedule worker with current Help Centre guidance",
+      "file": "sql/20260901_0052_mink_phase_5d_blog_publication.sql",
+      "checksum": "38ad7b2aa4d822bebcf3b0a77638b062216941d1dc8b01c39b15c7d0248258e7",
+      "transaction": true,
+      "requires": ["20260901_0051_mink_phase_5c_order_status"],
+      "verify": {},
+      "applyVerify": {
+        "tables": ["mink_blog_publications"],
+        "columns": [
+          "mink_blog_publications.approval_id",
+          "mink_blog_publications.blog_id",
+          "mink_blog_publications.scheduled_for",
+          "mink_blog_publications.blog_version",
+          "mink_blog_publications.published_at"
+        ],
+        "constraints": [
+          "blogs_id_store_key",
+          "mink_action_approvals_blog_publish_target_check",
+          "mink_action_audit_blog_publish_target_check",
+          "mink_blog_publications_blog_store_fkey",
+          "mink_blog_publications_timing_check"
+        ],
+        "rlsTables": ["mink_blog_publications"],
+        "queries": [
+          {
+            "name": "the Mink guide documents exact guarded blog publication and scheduling",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%<h2>Publish or schedule one blog</h2>%' and body like '%Blog publication and scheduling%' and body like '%from 5 minutes to 90 days ahead%' and body like '%does not activate Markdown links%' and body like '%produces a conflict instead of overwriting%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "tables": ["mink_blog_publications"],
+        "constraints": [
+          "mink_action_approvals_blog_publish_target_check",
+          "mink_action_audit_blog_publish_target_check",
+          "mink_blog_publications_blog_store_fkey",
+          "mink_blog_publications_timing_check"
+        ],
+        "rlsTables": ["mink_blog_publications"],
+        "queries": [
+          {
+            "name": "the Mink guide already documents guarded blog publication and scheduling",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%<h2>Publish or schedule one blog</h2>%' and body like '%Blog publication and scheduling%'",
+            "equals": "1"
+          }
+        ]
+      }
     }
   ]
 }

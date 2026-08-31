@@ -29,6 +29,8 @@ import { getLatestMinkBulkInventoryAction } from "./bulk-inventory-actions";
 import type { MinkBulkInventoryActionResult } from "./bulk-inventory-action-types";
 import { getLatestMinkOrderStatusAction } from "./order-status-actions";
 import type { MinkOrderStatusActionResult } from "./order-status-action-types";
+import { getLatestMinkBlogPublication } from "./blog-publication-actions";
+import type { MinkBlogPublicationResult } from "./blog-publication-action-types";
 import { getLatestMinkProductAction } from "./product-actions";
 import type { MinkProductActionResult } from "./product-action-types";
 import type { MinkActorContext, MinkArtifact } from "./types";
@@ -71,6 +73,7 @@ export interface MinkDraftState {
   lastInventoryAction: MinkInventoryActionResult | null;
   lastBulkInventoryAction: MinkBulkInventoryActionResult | null;
   lastOrderStatusAction: MinkOrderStatusActionResult | null;
+  lastBlogPublication: MinkBlogPublicationResult | null;
 }
 
 export async function createMinkDraftProposal(input: {
@@ -233,6 +236,10 @@ export async function getMinkDraft(
     lastOrderStatusAction:
       state.kind === "order_status_transition"
         ? await getLatestMinkOrderStatusAction(actor, draftId)
+        : null,
+    lastBlogPublication:
+      state.kind === "blog"
+        ? await getLatestMinkBlogPublication(actor, draftId)
         : null,
   };
 }
@@ -465,6 +472,7 @@ function toDraftState(
     lastInventoryAction: null,
     lastBulkInventoryAction: null,
     lastOrderStatusAction: null,
+    lastBlogPublication: null,
   };
 }
 

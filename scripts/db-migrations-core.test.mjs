@@ -22,7 +22,7 @@ describe("database migration controls", () => {
   it("loads the repository manifest and checksums the enrolled SQL", async () => {
     const loaded = await loadManifest();
     expect(loaded.baseline.id).toBe("baseline:cloudsql-2026-08-14");
-    expect(loaded.migrations).toHaveLength(51);
+    expect(loaded.migrations).toHaveLength(52);
     expect(loaded.migrations[0]).toMatchObject({
       id: "20260814_0001_logistics_shiprocket",
       transaction: true,
@@ -657,6 +657,27 @@ describe("database migration controls", () => {
     );
     expect(loaded.migrations[50].sql).toContain(
       "body LIKE '%do not offer automatic rollback%'",
+    );
+    expect(loaded.migrations[51]).toMatchObject({
+      id: "20260901_0052_mink_phase_5d_blog_publication",
+      transaction: true,
+      requires: ["20260901_0051_mink_phase_5c_order_status"],
+    });
+    expect(loaded.migrations[51].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[51].sql).toContain("publish_blog");
+    expect(loaded.migrations[51].sql).toContain(
+      "mink_blog_publications_blog_store_fkey",
+    );
+    expect(loaded.migrations[51].sql).toContain(
+      "outcome <> 'executed' AND result_id IS NULL",
+    );
+    expect(loaded.migrations[51].sql).toContain("FORCE ROW LEVEL SECURITY");
+    expect(loaded.migrations[51].sql).toContain("Publish or schedule one blog");
+    expect(loaded.migrations[51].sql).toContain(
+      "does not activate Markdown links",
+    );
+    expect(loaded.migrations[51].sql).toContain(
+      "$phase5d$)\n)\nUPDATE public.help_articles AS article",
     );
     const repairChecks = [
       loaded.migrations[22].applyVerify,

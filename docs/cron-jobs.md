@@ -35,6 +35,7 @@ each job is a landmine the moment it does:
 | `seo-refresh`             | No sitemap is ever submitted to Google, so nothing on the platform, the help centre or any launched store gets discovered.                                                                                                                             |
 | `billing`                 | **No merchant is ever charged.** No renewal invoice is issued, no cycle advances, no grace window opens and no unpaid plan is downgraded — the entire subscription business stops silently, looking exactly like nobody has renewed yet.               |
 | `help-embeddings`         | Existing published guides never receive semantic chunks after the initial migration, and a failed article-save refresh is never retried. Mink AI still falls back to lexical/category search, but paraphrase and multilingual recall silently degrade. |
+| `mink-publications`       | Approved scheduled Mink blogs remain private drafts forever. No data is lost, but the merchant's reviewed publication time is silently missed until the worker runs.                                                                                   |
 
 > Note: production currently runs `main`, which has **no notification system** —
 > `lib/notifications/` and the `notification_email_queue` table do not exist
@@ -57,6 +58,7 @@ each job is a landmine the moment it does:
 | `storemink-import-worker`           | `*/10 * * * *` | `https://storemink.com/api/cron/import-worker`           |
 | `storemink-billing`                 | `20 * * * *`   | `https://storemink.com/api/cron/billing`                 |
 | `storemink-help-embeddings`         | `50 * * * *`   | `https://storemink.com/api/cron/help-embeddings`         |
+| `storemink-mink-publications`       | `* * * * *`    | `https://storemink.com/api/cron/mink-publications`       |
 
 ⚠ **`billing` must stay HOURLY.** The cycle boundary and the 48-hour grace
 deadline are wall-clock instants, so the interval IS the resolution of the whole
@@ -64,12 +66,16 @@ system: on a daily schedule some merchants would get nearly a day of unearned
 service and others nearly a day less notice than the 48 hours they are promised.
 It runs at :20 to stay clear of the on-the-hour `domain-reconcile`.
 
-**All ten pre-existing jobs exist** (verified against `gcloud scheduler jobs list`,
+**The pre-existing jobs exist** (verified against `gcloud scheduler jobs list`,
 2026-08-21), but ⚠ **`storemink-help-embeddings` is new in the 2026-08-25
 working tree and does not exist in Cloud Scheduler yet. Create it only after the
 route and migrations `20260825_0017_help_article_embeddings` plus
 `20260826_0018_help_embedding_hardening` reach the target environment; until
 then it would 404 or query an incomplete table.** Also,
+**`storemink-mink-publications` is new in Phase 5D and must stay absent/paused
+until migration `20260901_0052_mink_phase_5d_blog_publication` and the matching
+route are deployed. Create it with the same CRON_SECRET bearer contract only
+after both application and database verification pass.** Also,
 **`storemink-search-metrics` and `storemink-analytics-rollup`
 are PAUSED**: their routes are on `staging` and NOT YET on `main`, and prod
 deploys from `main` — so both 404 against `https://storemink.com`

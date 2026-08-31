@@ -68,4 +68,12 @@ describe("Mink Phase 4A product action contract", () => {
       "Delivery order-status transitions",
     );
   });
+
+  it("keeps the Phase 5D blog-publication gate independent", () => {
+    expect(isMinkActionTool("publish_blog")).toBe(true);
+    expect(isMinkDomainActionTool("publish_blog")).toBe(false);
+    expect(MINK_ACTION_TOOL_LABELS.publish_blog).toBe(
+      "Blog publication and scheduling",
+    );
+  });
 });

@@ -1,6 +1,6 @@
 # Mink AI Dashboard Agent — Architecture and Delivery Plan
 
-> **Status:** Phases 0–4 and Phases 5A–5C are implemented in code. Phase 2
+> **Status:** Phases 0–4 and Phases 5A–5D are implemented in code. Phase 2
 > remains the invited read-only merchant beta. Phase 3 adds a separate,
 > fail-closed operator opt-in
 > for private versioned drafts and atomic weighted credits through migration
@@ -22,8 +22,11 @@
 > comparison. Migration `20260901_0050_mink_full_view_takeover` makes maximize
 > cover the complete browser viewport, including dashboard chrome. Migration
 > `20260901_0051_mink_phase_5c_order_status` adds the separately gated exact
-> one-step online-delivery order transition. No transfer, cancellation, refund,
-> payment/shipment/pickup/POS lifecycle, publication, campaign,
+> one-step online-delivery order transition. Migration
+> `20260901_0052_mink_phase_5d_blog_publication` adds one separately gated,
+> explicitly approved immediate or scheduled blog publication. No transfer,
+> cancellation, refund, payment/shipment/pickup/POS lifecycle, product/page/
+> storefront or bulk publication, campaign,
 > customer-contact, membership, bulk-price or arbitrary-code authority is
 > present.
 >
@@ -949,7 +952,7 @@ Deliver in separate gates:
 5. campaign audience preview, sample, schedule and final send confirmation;
 6. bulk price changes with revenue-impact summary.
 
-**Implementation:** ✅ Phases 5A–5C (items 1–3) are code-complete through 2026-09-01
+**Implementation:** ✅ Phases 5A–5D (items 1–4) are code-complete through 2026-09-01
 behind independent `adjust_inventory`, `bulk_adjust_inventory` and
 `transition_order_status` operator gates. In Phase 5A, Gemini receives only an
 exact SKU/location checkpoint reader
@@ -985,7 +988,21 @@ are refused. Carrier-linked orders require pickup/transit evidence before
 shipped and carrier-confirmed delivery before delivered; exception/RTO states
 fail closed. The order, approval and append-only audit commit atomically and
 replay emits no duplicate status event. There is no automatic status rollback.
-Items 4–6 remain unbuilt and separately gated.
+Phase 5D extends only the existing charged private blog proposal. Blogs Manage,
+drafting and an independent `publish_blog` gate are checked at preview and
+execution. The browser chooses immediate publication or a canonical UTC time
+5 minutes–90 days ahead; Gemini never receives the preview/execute endpoint.
+The five-minute approval binds the exact saved version, title, excerpt, body,
+SEO text and timing with a canonical hash. Execution creates one new sanitized
+blog and one service-only publication ledger row atomically; retries cannot
+create a second blog, audit or discovery notification. Raw HTML is escaped,
+Markdown links remain inert, and media/categories/tags/featured state are not
+written. Scheduled blogs start private and a CRON_SECRET-authenticated worker
+claims at most 20 due rows with `FOR UPDATE SKIP LOCKED`; it publishes only if
+Mink, drafting and the tool gate remain enabled and the exact blog version is
+unchanged. Otherwise it pauses or records a conflict instead of overwriting a
+manual edit. Product/page/storefront/bulk publication and automatic rollback
+remain unavailable. Items 5–6 remain unbuilt and separately gated.
 
 Exit criteria:
 
@@ -1281,34 +1298,37 @@ would move risk into production rather than remove work.
 
 ## 21. Immediate next sprint
 
-The next sprint should validate and safely roll out Phase 5C before designing
-Phase 5D publishing:
+The next sprint should validate and safely roll out Phase 5D before designing
+Phase 5E campaigns:
 
-1. Apply migration `20260901_0051_mink_phase_5c_order_status` after 0050 in
-   controlled staging, deploy matching application code, and leave
-   `transition_order_status` disabled for every merchant store.
-2. On one synthetic store, enable beta, drafting and only the order-status gate. Prove
+1. Apply migration `20260901_0052_mink_phase_5d_blog_publication` after 0051 in
+   controlled staging, deploy matching application code and scheduler route,
+   and leave `publish_blog` disabled for every merchant store.
+2. On one synthetic store, enable beta, drafting and only the blog-publication gate. Prove
    that global, invitation, drafting, permission and tool gates each stop both
-   preview and execution, including a gate disabled between those steps.
-3. Exercise every one-step status, skip/reverse/terminal requests, POS, pickup,
-   COD/unpaid online payments, pending cancellation and location-restricted
-   references. Invalid requests must fail before a charged proposal.
-4. Exercise manual fulfilment and carrier states from ready-to-ship through
-   pickup/transit/delivery plus NDR/RTO/lost/damaged/cancelled. Carrier state
-   must never be contradicted by a Mink status.
-5. Race payment, cancellation, shipment, location and status changes between
-   checkpoint/proposal/preview/approval. A stale checkpoint must commit zero
-   order/audit/event writes. Duplicate approval returns the original result
-   without a repeated status event or credit charge.
+   preview and execution, including a gate disabled between approval and the
+   scheduled instant.
+3. Exercise immediate publication, minimum/maximum time boundaries, daylight-
+   saving/non-India browser zones, expired approval and due-job concurrency.
+   Confirm the displayed local time maps to the exact reviewed UTC instant.
+4. Race draft edits before approval and blog edits/deletion/manual publication
+   after scheduling. A stale approval commits zero blog/publication writes; a
+   changed or manually published scheduled blog becomes conflicted and is never
+   overwritten, while deliberate blog deletion cascades its pending job.
+5. Retry preview, execute and overlapping worker heartbeats. Exactly one blog,
+   approval, audit, publication row and discovery notification may result.
+   Disable each gate and prove due work pauses rather than being lost.
 6. Verify the five-minute expiry, streamed request-size bound, strict input
    allowlist, actor/store rate limit, same-origin check and cross-tenant/admin
-   isolation. Treat product, SKU, location and note text as untrusted data.
-7. Run the read corpus plus `P5C-01`–`P5C-62` and inspect exact-reference/latest-
-   shipment query plans. The model manifest must expose order checkpoint and
-   private proposal tools but no browser-only execute capability.
-8. After four stable weeks and reconciled audits, design Phase 5D publishing.
-   Transfers, cancellations, refunds, campaigns, bulk prices and customer
-   contact remain unavailable.
+   isolation. Treat every drafted title/body/SEO value as untrusted data and
+   verify raw HTML, script URLs and Markdown links remain inert.
+7. Run the read corpus plus the complete `P5D` pack and inspect due-worker and
+   store-scoped lookup query plans. The model manifest may expose only the
+   private blog proposal, never publication preview/execute or cron capability.
+8. Create and verify the production Cloud Scheduler job only after the route is
+   deployed. After four stable weeks and reconciled audits, design Phase 5E
+   campaigns. Transfers, cancellations, refunds, campaigns, bulk prices and
+   customer contact remain unavailable.
 
 The intended outcome is not “Gemini 3.7 answered impressively.” It is:
 

@@ -1183,6 +1183,7 @@ export const blogs = pgTable(
       foreignColumns: [users.id],
       name: "blogs_submitted_by_fkey",
     }).onDelete("set null"),
+    unique("blogs_id_store_key").on(table.id, table.storeId),
     unique("blogs_store_slug_key").on(table.slug, table.storeId),
     pgPolicy("Update blogs", {
       as: "permissive",
@@ -4953,7 +4954,7 @@ export const minkActionToolAccess = pgTable(
     }).onDelete("cascade"),
     check(
       "mink_action_tool_access_name_check",
-      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text, 'create_product'::text, 'create_coupon'::text, 'update_coupon'::text, 'create_customer_group'::text, 'update_customer_group'::text, 'adjust_inventory'::text, 'bulk_adjust_inventory'::text, 'transition_order_status'::text])`,
+      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text, 'create_product'::text, 'create_coupon'::text, 'update_coupon'::text, 'create_customer_group'::text, 'update_customer_group'::text, 'adjust_inventory'::text, 'bulk_adjust_inventory'::text, 'transition_order_status'::text, 'publish_blog'::text])`,
     ),
     check(
       "mink_action_tool_access_enablement_check",
@@ -5061,6 +5062,9 @@ export const minkActionApprovals = pgTable(
     index("mink_action_approvals_order_status_idx")
       .on(table.storeId, table.resourceId, table.status, table.createdAt.desc())
       .where(sql`${table.toolName} = 'transition_order_status'`),
+    index("mink_action_approvals_blog_publish_idx")
+      .on(table.storeId, table.status, table.createdAt.desc())
+      .where(sql`${table.toolName} = 'publish_blog'`),
     foreignKey({
       columns: [table.storeId],
       foreignColumns: [stores.id],
@@ -5083,11 +5087,11 @@ export const minkActionApprovals = pgTable(
     }).onDelete("cascade"),
     check(
       "mink_action_approvals_tool_check",
-      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text, 'create_product'::text, 'create_coupon'::text, 'update_coupon'::text, 'create_customer_group'::text, 'update_customer_group'::text, 'adjust_inventory'::text, 'bulk_adjust_inventory'::text, 'transition_order_status'::text])`,
+      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text, 'create_product'::text, 'create_coupon'::text, 'update_coupon'::text, 'create_customer_group'::text, 'update_customer_group'::text, 'adjust_inventory'::text, 'bulk_adjust_inventory'::text, 'transition_order_status'::text, 'publish_blog'::text])`,
     ),
     check(
       "mink_action_approvals_resource_type_check",
-      sql`resource_type = ANY (ARRAY['product'::text, 'coupon'::text, 'customer_group'::text, 'inventory'::text, 'inventory_bulk'::text, 'order'::text])`,
+      sql`resource_type = ANY (ARRAY['product'::text, 'coupon'::text, 'customer_group'::text, 'inventory'::text, 'inventory_bulk'::text, 'order'::text, 'blog'::text])`,
     ),
     check(
       "mink_action_approvals_operation_check",
@@ -5121,6 +5125,10 @@ export const minkActionApprovals = pgTable(
     check(
       "mink_action_approvals_order_status_target_check",
       sql`tool_name <> 'transition_order_status' OR (resource_type = 'order' AND resource_id IS NOT NULL AND product_id IS NULL AND location_id IS NULL AND variant_id IS NULL AND operation = 'apply' AND source_approval_id IS NULL)`,
+    ),
+    check(
+      "mink_action_approvals_blog_publish_target_check",
+      sql`tool_name <> 'publish_blog' OR (resource_type = 'blog' AND resource_id IS NULL AND product_id IS NULL AND location_id IS NULL AND variant_id IS NULL AND operation = 'apply' AND source_approval_id IS NULL AND ((status = 'executed' AND result_id IS NOT NULL) OR (status <> 'executed' AND result_id IS NULL)))`,
     ),
   ],
 );
@@ -5191,6 +5199,9 @@ export const minkActionAudit = pgTable(
     index("mink_action_audit_order_status_idx")
       .on(table.storeId, table.resourceId, table.createdAt.desc())
       .where(sql`${table.toolName} = 'transition_order_status'`),
+    index("mink_action_audit_blog_publish_idx")
+      .on(table.storeId, table.resultId, table.createdAt.desc())
+      .where(sql`${table.toolName} = 'publish_blog'`),
     foreignKey({
       columns: [table.approvalId, table.storeId],
       foreignColumns: [minkActionApprovals.id, minkActionApprovals.storeId],
@@ -5198,11 +5209,11 @@ export const minkActionAudit = pgTable(
     }).onDelete("restrict"),
     check(
       "mink_action_audit_tool_check",
-      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text, 'create_product'::text, 'create_coupon'::text, 'update_coupon'::text, 'create_customer_group'::text, 'update_customer_group'::text, 'adjust_inventory'::text, 'bulk_adjust_inventory'::text, 'transition_order_status'::text])`,
+      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text, 'create_product'::text, 'create_coupon'::text, 'update_coupon'::text, 'create_customer_group'::text, 'update_customer_group'::text, 'adjust_inventory'::text, 'bulk_adjust_inventory'::text, 'transition_order_status'::text, 'publish_blog'::text])`,
     ),
     check(
       "mink_action_audit_resource_type_check",
-      sql`resource_type = ANY (ARRAY['product'::text, 'coupon'::text, 'customer_group'::text, 'inventory'::text, 'inventory_bulk'::text, 'order'::text])`,
+      sql`resource_type = ANY (ARRAY['product'::text, 'coupon'::text, 'customer_group'::text, 'inventory'::text, 'inventory_bulk'::text, 'order'::text, 'blog'::text])`,
     ),
     check(
       "mink_action_audit_operation_check",
@@ -5228,6 +5239,87 @@ export const minkActionAudit = pgTable(
     check(
       "mink_action_audit_order_status_target_check",
       sql`tool_name <> 'transition_order_status' OR (resource_type = 'order' AND resource_id IS NOT NULL AND product_id IS NULL AND location_id IS NULL AND variant_id IS NULL AND operation = 'apply')`,
+    ),
+    check(
+      "mink_action_audit_blog_publish_target_check",
+      sql`tool_name <> 'publish_blog' OR (resource_type = 'blog' AND resource_id IS NULL AND product_id IS NULL AND location_id IS NULL AND variant_id IS NULL AND operation = 'apply' AND ((outcome = 'executed' AND result_id IS NOT NULL) OR (outcome <> 'executed' AND result_id IS NULL)))`,
+    ),
+  ],
+);
+
+export const minkBlogPublications = pgTable(
+  "mink_blog_publications",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    adminId: text("admin_id").notNull(),
+    draftId: uuid("draft_id").notNull(),
+    approvalId: uuid("approval_id").notNull(),
+    blogId: uuid("blog_id").notNull(),
+    mode: text().notNull(),
+    status: text().notNull(),
+    scheduledFor: timestamp("scheduled_for", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    blogVersion: timestamp("blog_version", {
+      withTimezone: true,
+      mode: "string",
+    }).notNull(),
+    publishedAt: timestamp("published_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    detail: text(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    unique("mink_blog_publications_approval_key").on(table.approvalId),
+    unique("mink_blog_publications_blog_key").on(table.blogId),
+    index("mink_blog_publications_due_idx")
+      .on(table.scheduledFor, table.createdAt)
+      .where(sql`${table.status} = 'scheduled'`),
+    index("mink_blog_publications_store_idx").on(
+      table.storeId,
+      table.status,
+      table.createdAt.desc(),
+    ),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "mink_blog_publications_store_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.draftId, table.storeId],
+      foreignColumns: [minkDrafts.id, minkDrafts.storeId],
+      name: "mink_blog_publications_draft_store_fkey",
+    }).onDelete("restrict"),
+    foreignKey({
+      columns: [table.approvalId, table.storeId],
+      foreignColumns: [minkActionApprovals.id, minkActionApprovals.storeId],
+      name: "mink_blog_publications_approval_store_fkey",
+    }).onDelete("restrict"),
+    foreignKey({
+      columns: [table.blogId, table.storeId],
+      foreignColumns: [blogs.id, blogs.storeId],
+      name: "mink_blog_publications_blog_store_fkey",
+    }).onDelete("cascade"),
+    check(
+      "mink_blog_publications_mode_check",
+      sql`mode = ANY (ARRAY['publish_now'::text, 'schedule'::text])`,
+    ),
+    check(
+      "mink_blog_publications_status_check",
+      sql`status = ANY (ARRAY['scheduled'::text, 'published'::text, 'conflicted'::text, 'cancelled'::text])`,
+    ),
+    check(
+      "mink_blog_publications_timing_check",
+      sql`(mode = 'publish_now' AND status = 'published' AND scheduled_for IS NULL AND published_at IS NOT NULL) OR (mode = 'schedule' AND scheduled_for IS NOT NULL AND ((status = 'published' AND published_at IS NOT NULL) OR (status <> 'published' AND published_at IS NULL)))`,
     ),
   ],
 );
