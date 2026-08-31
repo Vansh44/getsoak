@@ -1592,6 +1592,78 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260831_0046_mink_phase_5a_inventory_actions",
+      "description": "Add human-approved, exact single-SKU single-location Mink inventory adjustments and Help Centre guidance",
+      "file": "sql/20260831_0046_mink_phase_5a_inventory_actions.sql",
+      "transaction": true,
+      "requires": ["20260831_0045_pos_mobile_register_help"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "Mink Phase 5A schema and independent inventory gate exist",
+            "sql": "select count(*)::text from information_schema.columns where table_schema = 'public' and ((table_name = 'mink_drafts' and column_name in ('location_id', 'variant_id')) or (table_name = 'mink_action_approvals' and column_name in ('location_id', 'variant_id')) or (table_name = 'mink_action_audit' and column_name in ('location_id', 'variant_id')))",
+            "equals": "6"
+          },
+          {
+            "name": "the Mink guide documents exact single-location inventory approval safety",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%<h2>Adjust one SKU at one location</h2>%' and body like '%Inventory Manage%' and body like '%writes the inventory level and stock-movement ledger in one database transaction%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "Mink Phase 5A inventory target columns already exist",
+            "sql": "select count(*)::text from information_schema.columns where table_schema = 'public' and ((table_name = 'mink_drafts' and column_name in ('location_id', 'variant_id')) or (table_name = 'mink_action_approvals' and column_name in ('location_id', 'variant_id')) or (table_name = 'mink_action_audit' and column_name in ('location_id', 'variant_id')))",
+            "equals": "6"
+          },
+          {
+            "name": "the Mink guide already documents single-SKU inventory approvals",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%<h2>Adjust one SKU at one location</h2>%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260831_0047_mink_phase_5b_bulk_inventory",
+      "description": "Add separately gated, bounded and atomic Mink bulk inventory adjustments with line-level Help Centre guidance",
+      "file": "sql/20260831_0047_mink_phase_5b_bulk_inventory.sql",
+      "transaction": true,
+      "requires": ["20260831_0046_mink_phase_5a_inventory_actions"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "Mink Phase 5B bulk inventory constraints and indexes exist",
+            "sql": "select count(*)::text from pg_constraint where conname in ('mink_drafts_bulk_inventory_target_check', 'mink_action_approvals_bulk_inventory_target_check', 'mink_action_audit_bulk_inventory_target_check')",
+            "equals": "3"
+          },
+          {
+            "name": "the Mink guide documents bounded atomic bulk inventory approval safety",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%<h2>Adjust multiple inventory lines</h2>%' and body like '%between 1 and 20 exact inventory-tracked SKU%' and body like '%Execution is atomic%' and body like '%database rolls the whole batch back%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "Mink Phase 5B bulk inventory constraints already exist",
+            "sql": "select count(*)::text from pg_constraint where conname in ('mink_drafts_bulk_inventory_target_check', 'mink_action_approvals_bulk_inventory_target_check', 'mink_action_audit_bulk_inventory_target_check')",
+            "equals": "3"
+          },
+          {
+            "name": "the Mink guide already documents bounded atomic bulk inventory approvals",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%<h2>Adjust multiple inventory lines</h2>%' and body like '%Execution is atomic%'",
+            "equals": "1"
+          }
+        ]
+      }
     }
   ]
 }

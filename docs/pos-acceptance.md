@@ -3446,6 +3446,111 @@ detail read lands: first cancel/collect it, then repeat by taking a deposit.
 the tender pad for the newly reduced balance. Status and money never come from
 different snapshots on the same panel.
 
+## 11i. Mink Phase 5A inventory approvals
+
+These cases cover the only inventory mutation Mink can currently propose. Run
+them in a synthetic store after migration
+`20260831_0046_mink_phase_5a_inventory_actions`; keep the independent
+`adjust_inventory` operator gate off outside the controlled test store.
+
+**PS-MINK-5A.1 ★ — One proposal means one physical shelf and one SKU**
+Ask Mink to add a signed whole-number quantity—or set an absolute target—for an
+exact tracked product or variant SKU at an exact active location. **Expect:** Gemini first reads the
+trusted SKU/location checkpoint and produces a private proposal. It accepts no
+store, product, variant or location ID from the prompt. Saving the proposal does
+not change stock. An absolute target is converted to a signed change only from
+that exact checkpoint. Parent SKUs with variants, untracked SKUs, missing locations,
+inactive locations, ambiguous names/SKUs and inaccessible assigned locations
+are refused without falling back to another shelf.
+
+**PS-MINK-5A.2 ★ — Approval is bound to current stock and reservations**
+Save a proposal and select **Review exact change**. **Expect:** the preview names
+the SKU and location and shows current on-hand, available, signed delta,
+resulting on-hand, reason and note. A removal that would make stock negative or
+lower than reserved quantity is refused. Zero, fractional and changes outside
+±1,000,000 are refused. Inventory View can read but only Inventory Manage can
+preview or execute.
+
+**PS-MINK-5A.3 ★ — A stale physical-stock decision never overwrites reality**
+After preview, adjust the same shelf through POS, an order/reservation, the
+dashboard or another tab; then approve the old preview. **Expect:** Mink records
+a conflict and makes no stock movement. The same applies if the saved proposal,
+tracking state, location activity/assignment or per-store tool gate changes.
+An approval older than ten minutes expires without a stock write.
+
+**PS-MINK-5A.4 ★ — Level and ledger commit together exactly once**
+Approve a valid proposal, including a case where the SKU has no existing
+`inventory_levels` row at that location. **Expect:** the level and exactly one
+`stock_movements` row commit in one transaction, aggregates/caches refresh and
+the standard inventory event/low-stock check runs after commit. Replaying the
+approval returns the completed result without another level change, ledger row,
+event, alert or AI-credit charge. Actor, store, product, optional variant,
+location, proposal version and before/after checkpoints are present in the
+append-only Mink audit.
+
+**PS-MINK-5A.5 — Physical stock corrections require a fresh decision**
+After execution ask Mink to undo it, then ask for a transfer or bulk adjustment.
+**Expect:** no automatic rollback is offered because physical stock may have
+moved. Mink may create a new inverse single-SKU proposal after reading current
+stock. Transfers, reservations, bulk inventory and multi-location writes remain
+outside Phase 5A.
+
+## 11j. Mink Phase 5B bulk inventory approvals
+
+Run these cases only in a synthetic store after migration
+`20260831_0047_mink_phase_5b_bulk_inventory`. The independent
+`bulk_adjust_inventory` operator gate remains off unless the store is in the
+controlled rollout; the Phase 5A `adjust_inventory` gate does not enable it.
+
+**PS-MINK-5B.1 ★ — Every line is exact before any proposal is charged**
+Ask Mink to adjust between one and 20 exact tracked SKU/location pairs, mixing
+products and variants. Include a second request with duplicate pairs, an
+untracked or ambiguous SKU, a parent SKU with variants, and inaccessible or
+inactive locations. **Expect:** the server resolves visible values only inside
+the trusted tenant, permission and location scope through a fixed bounded read
+plan. It reports every invalid line and creates no proposal or charge unless
+all lines are valid. A 21-line or unbounded “every product” request is refused
+and never split into hidden batches.
+
+**PS-MINK-5B.2 ★ — Review shows the complete physical-stock decision**
+Save a valid batch and select **Review exact changes**. **Expect:** the preview
+lists each SKU, location, current on-hand, reserved and available units, signed
+change, resulting stock, reason and note. It expires after five minutes.
+Inventory Manage, the saved draft/version and the separate bulk gate are
+rechecked; browser-supplied store, actor or resource IDs and unknown fields are
+rejected. Gemini has no execute tool and cannot click approval.
+
+**PS-MINK-5B.3 ★★ — One stale shelf means zero shelves change**
+After preview, change one included shelf through POS, an order reservation,
+manual inventory or another tab, then approve the old batch. Repeat after
+deactivating a location or disabling tracking. **Expect:** one failed checkpoint
+conflicts the entire batch. No inventory level or movement from any line commits,
+and the admin is asked for a new review. Reversing line order in concurrent
+batches does not deadlock because locks and mutations use deterministic order.
+
+**PS-MINK-5B.4 ★ — Levels, movements and the batch audit commit exactly once**
+Approve a valid batch that includes an SKU/location with no existing level row.
+**Expect:** all levels, exactly one movement per line and one batch audit commit
+in one transaction; bounded standard inventory events and low-stock checks run
+only after commit. Replaying the approval returns the original result without a
+second level change, movement, event, alert, audit outcome or five-credit charge.
+An injected database failure rolls back the entire write set.
+
+**PS-MINK-5B.5 — Bulk inventory is not transfer, reservation or rollback**
+Ask Mink to transfer stock between locations, edit reservations, undo the batch
+automatically, change an order status, publish records, send a campaign or alter
+prices. **Expect:** every unrelated authority is refused. A physical correction
+requires a fresh maximum-20-line proposal against current checkpoints; there is
+no automatic inverse batch.
+
+**PS-MINK-5B.6 ★ — The public boundary is bounded and tenant-safe**
+Attempt a cross-origin request, a streamed body larger than the byte limit,
+browser business-field injection, more than four bulk preview/execute requests
+per minute, and cross-store/admin draft or approval access. **Expect:** each
+fails at the earliest relevant boundary without revealing target existence or
+performing domain work. Product, SKU, location and note text is rendered as
+untrusted data, and database reads remain parameterized and tenant-scoped.
+
 ## 12. Known gaps
 
 Real and deliberate, so nobody files them as bugs:

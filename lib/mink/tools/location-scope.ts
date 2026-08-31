@@ -33,6 +33,7 @@ export async function resolveMinkLocation(
             .where(
               and(
                 eq(storeLocations.storeId, actor.storeId),
+                eq(storeLocations.active, true),
                 ...(actor.locationIds
                   ? [inArray(storeLocations.id, actor.locationIds)]
                   : []),

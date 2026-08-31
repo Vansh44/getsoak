@@ -23,6 +23,10 @@ import {
 import { MinkRequestError, MinkToolInputError } from "./errors";
 import { getLatestMinkDomainAction } from "./domain-actions";
 import type { MinkDomainActionResult } from "./domain-action-types";
+import { getLatestMinkInventoryAction } from "./inventory-actions";
+import type { MinkInventoryActionResult } from "./inventory-action-types";
+import { getLatestMinkBulkInventoryAction } from "./bulk-inventory-actions";
+import type { MinkBulkInventoryActionResult } from "./bulk-inventory-action-types";
 import { getLatestMinkProductAction } from "./product-actions";
 import type { MinkProductActionResult } from "./product-action-types";
 import type { MinkActorContext, MinkArtifact } from "./types";
@@ -41,6 +45,8 @@ const DRAFT_PERMISSION: Record<
   coupon_update: { section: "marketing", action: "manage" },
   customer_group_create: { section: "users", action: "manage" },
   customer_group_update: { section: "users", action: "manage" },
+  inventory_adjustment: { section: "inventory", action: "manage" },
+  bulk_inventory_adjustment: { section: "inventory", action: "manage" },
 };
 
 export interface MinkDraftState {
@@ -59,6 +65,8 @@ export interface MinkDraftState {
   versions: MinkDraftVersionSummary[];
   lastProductAction: MinkProductActionResult | null;
   lastDomainAction: MinkDomainActionResult | null;
+  lastInventoryAction: MinkInventoryActionResult | null;
+  lastBulkInventoryAction: MinkBulkInventoryActionResult | null;
 }
 
 export async function createMinkDraftProposal(input: {
@@ -67,6 +75,8 @@ export async function createMinkDraftProposal(input: {
   title: string;
   destinationType: string;
   destinationId?: string | null;
+  destinationLocationId?: string | null;
+  destinationVariantId?: string | null;
   destinationLabel: string;
   destinationPath: string;
   before?: MinkDraftContent;
@@ -109,6 +119,8 @@ export async function createMinkDraftProposal(input: {
       kind,
       destinationType,
       destinationId: input.destinationId ?? null,
+      locationId: input.destinationLocationId ?? null,
+      variantId: input.destinationVariantId ?? null,
       destinationLabel,
       destinationPath: input.destinationPath,
       title,
@@ -206,6 +218,14 @@ export async function getMinkDraft(
     lastDomainAction: domainActionToolForKind(state.kind)
       ? await getLatestMinkDomainAction(actor, draftId)
       : null,
+    lastInventoryAction:
+      state.kind === "inventory_adjustment"
+        ? await getLatestMinkInventoryAction(actor, draftId)
+        : null,
+    lastBulkInventoryAction:
+      state.kind === "bulk_inventory_adjustment"
+        ? await getLatestMinkBulkInventoryAction(actor, draftId)
+        : null,
   };
 }
 
@@ -414,7 +434,7 @@ function toDraftState(
     status: draft.status,
     destinationLabel: draft.destinationLabel,
     destinationPath: draft.destinationPath,
-    before: normalizeForRequest(draft.kind, draft.before),
+    before: normalizeOptionalContent(draft.kind, draft.before),
     content: normalizeForRequest(draft.kind, draft.content),
     currentVersion: draft.currentVersion,
     expectedCredits: draft.expectedCredits,
@@ -434,6 +454,8 @@ function toDraftState(
     ),
     lastProductAction: null,
     lastDomainAction: null,
+    lastInventoryAction: null,
+    lastBulkInventoryAction: null,
   };
 }
 
@@ -505,9 +527,12 @@ function normalizeForRequest(kind: MinkDraftKind, content: unknown) {
 
 function normalizeOptionalContent(
   kind: MinkDraftKind,
-  content: MinkDraftContent | undefined,
+  content: unknown,
 ): MinkDraftContent {
-  const raw = content ?? {};
+  const raw =
+    content && typeof content === "object" && !Array.isArray(content)
+      ? (content as Record<string, unknown>)
+      : {};
   const result: MinkDraftContent = {};
   for (const field of MINK_DRAFT_CONFIG[kind].fields) {
     const value = raw[field.key];
