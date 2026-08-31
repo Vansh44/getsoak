@@ -22,7 +22,7 @@ describe("database migration controls", () => {
   it("loads the repository manifest and checksums the enrolled SQL", async () => {
     const loaded = await loadManifest();
     expect(loaded.baseline.id).toBe("baseline:cloudsql-2026-08-14");
-    expect(loaded.migrations).toHaveLength(44);
+    expect(loaded.migrations).toHaveLength(45);
     expect(loaded.migrations[0]).toMatchObject({
       id: "20260814_0001_logistics_shiprocket",
       transaction: true,
@@ -560,6 +560,16 @@ describe("database migration controls", () => {
     expect(loaded.migrations[43].sql).toContain(
       "exact database checkpoint captured by the preview",
     );
+    expect(loaded.migrations[44]).toMatchObject({
+      id: "20260831_0045_pos_mobile_register_help",
+      transaction: true,
+      requires: ["20260830_0044_mink_action_reliability_help"],
+    });
+    expect(loaded.migrations[44].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[44].sql).toContain(
+      "Use the register on a phone or portrait tablet",
+    );
+    expect(loaded.migrations[44].sql).toContain("separate full-width views");
     const repairChecks = [
       loaded.migrations[22].applyVerify,
       loaded.migrations[22].adoptVerify,
