@@ -1744,6 +1744,43 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260901_0051_mink_phase_5c_order_status",
+      "description": "Add a separately gated, forward-only and human-approved Mink delivery order-status transition with drift-repairing Help Centre guidance",
+      "file": "sql/20260901_0051_mink_phase_5c_order_status.sql",
+      "checksum": "f4a3121a21c9ee71d828d2ebc71fb0c6c5c7a11a385e40ac92068f7342bdbb43",
+      "transaction": true,
+      "requires": ["20260901_0050_mink_full_view_takeover"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "Mink Phase 5C order-status constraints and indexes exist",
+            "sql": "select count(*)::text from pg_constraint where conname in ('mink_drafts_order_status_target_check', 'mink_action_approvals_order_status_target_check', 'mink_action_audit_order_status_target_check')",
+            "equals": "3"
+          },
+          {
+            "name": "the Mink guide documents guarded delivery order-status transitions",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%<h2>Advance one delivery order</h2>%' and body like '%pending → processing%' and body like '%Delivery order-status transitions%' and body like '%Pending or approved cancellation states and any refund activity block advancement%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "Mink Phase 5C order-status constraints already exist",
+            "sql": "select count(*)::text from pg_constraint where conname in ('mink_drafts_order_status_target_check', 'mink_action_approvals_order_status_target_check', 'mink_action_audit_order_status_target_check')",
+            "equals": "3"
+          },
+          {
+            "name": "the Mink guide already documents guarded delivery order-status transitions",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%<h2>Advance one delivery order</h2>%' and body like '%Delivery order-status transitions%'",
+            "equals": "1"
+          }
+        ]
+      }
     }
   ]
 }

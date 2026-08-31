@@ -60,4 +60,12 @@ describe("Mink Phase 4A product action contract", () => {
       "Bulk inventory adjustments",
     );
   });
+
+  it("keeps the Phase 5C order-status gate independent", () => {
+    expect(isMinkActionTool("transition_order_status")).toBe(true);
+    expect(isMinkDomainActionTool("transition_order_status")).toBe(false);
+    expect(MINK_ACTION_TOOL_LABELS.transition_order_status).toBe(
+      "Delivery order-status transitions",
+    );
+  });
 });

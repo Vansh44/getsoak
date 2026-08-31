@@ -27,6 +27,7 @@ describe("Mink draft contracts", () => {
       customer_group_update: 1,
       inventory_adjustment: 1,
       bulk_inventory_adjustment: 5,
+      order_status_transition: 1,
     });
   });
 
@@ -124,6 +125,33 @@ describe("Mink draft contracts", () => {
     });
   });
 
+  it("allowlists only Phase 5C forward order targets and an internal note", () => {
+    expect(
+      normalizeMinkDraftContent("order_status_transition", {
+        target_status: " shipped ",
+        note: " Handed to local courier. ",
+        payment_status: "paid",
+        customer_email: "must-be-ignored@example.com",
+      }),
+    ).toEqual({
+      target_status: "shipped",
+      note: "Handed to local courier.",
+    });
+    for (const target_status of [
+      "pending",
+      "cancelled",
+      "completed",
+      "refunded",
+    ]) {
+      expect(() =>
+        normalizeMinkDraftContent("order_status_transition", {
+          target_status,
+          note: "",
+        }),
+      ).toThrow("processing, shipped, delivered");
+    }
+  });
+
   it("rejects missing required fields and bounded overflows", () => {
     expect(() =>
       normalizeMinkDraftContent("customer_message", { body: "" }),
@@ -169,6 +197,12 @@ describe("Mink draft contracts", () => {
     ).toMatchObject({
       kind: "bulk_inventory_adjustment",
       expectedCredits: 5,
+    });
+    expect(
+      estimateMinkDraftIntent("Mark order ORD-1001 as shipped"),
+    ).toMatchObject({
+      kind: "order_status_transition",
+      expectedCredits: 1,
     });
   });
 });

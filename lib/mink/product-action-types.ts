@@ -18,16 +18,20 @@ export const MINK_INVENTORY_ACTION_TOOLS = [
   "bulk_adjust_inventory",
 ] as const;
 
+export const MINK_ORDER_ACTION_TOOLS = ["transition_order_status"] as const;
+
 export const MINK_ACTION_TOOLS = [
   ...MINK_PRODUCT_ACTION_TOOLS,
   ...MINK_DOMAIN_ACTION_TOOLS,
   ...MINK_INVENTORY_ACTION_TOOLS,
+  ...MINK_ORDER_ACTION_TOOLS,
 ] as const;
 
 export type MinkProductActionTool = (typeof MINK_PRODUCT_ACTION_TOOLS)[number];
 export type MinkDomainActionTool = (typeof MINK_DOMAIN_ACTION_TOOLS)[number];
 export type MinkInventoryActionTool =
   (typeof MINK_INVENTORY_ACTION_TOOLS)[number];
+export type MinkOrderActionTool = (typeof MINK_ORDER_ACTION_TOOLS)[number];
 export type MinkActionTool = (typeof MINK_ACTION_TOOLS)[number];
 export type MinkProductActionOperation = "apply" | "rollback";
 export type MinkProductActionStatus =
@@ -91,6 +95,7 @@ export const MINK_ACTION_TOOL_LABELS: Record<MinkActionTool, string> = {
   update_customer_group: "Customer-group updates",
   adjust_inventory: "Single-SKU inventory adjustments",
   bulk_adjust_inventory: "Bulk inventory adjustments",
+  transition_order_status: "Delivery order-status transitions",
 };
 
 export function actionToolForDraftKind(

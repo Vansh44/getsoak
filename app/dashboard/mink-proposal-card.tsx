@@ -47,6 +47,12 @@ import type {
   MinkBulkInventoryActionResult,
   MinkBulkInventoryValidationDetail,
 } from "@/lib/mink/bulk-inventory-action-types";
+import {
+  MINK_ORDER_STATUS_ACTION_FIELDS,
+  MINK_ORDER_STATUS_FIELD_LABELS,
+  type MinkOrderStatusActionApproval,
+  type MinkOrderStatusActionResult,
+} from "@/lib/mink/order-status-action-types";
 import type { MinkArtifact } from "@/lib/mink/types";
 
 type Proposal = Extract<MinkArtifact, { type: "proposal" }>;
@@ -54,12 +60,14 @@ type MinkActionApproval =
   | MinkProductActionApproval
   | MinkDomainActionApproval
   | MinkInventoryActionApproval
-  | MinkBulkInventoryActionApproval;
+  | MinkBulkInventoryActionApproval
+  | MinkOrderStatusActionApproval;
 type MinkActionResult =
   | MinkProductActionResult
   | MinkDomainActionResult
   | MinkInventoryActionResult
-  | MinkBulkInventoryActionResult;
+  | MinkBulkInventoryActionResult
+  | MinkOrderStatusActionResult;
 type DraftResponse = {
   id: string;
   kind: MinkDraftKind;
@@ -78,6 +86,7 @@ type DraftResponse = {
   lastDomainAction: MinkDomainActionResult | null;
   lastInventoryAction: MinkInventoryActionResult | null;
   lastBulkInventoryAction: MinkBulkInventoryActionResult | null;
+  lastOrderStatusAction: MinkOrderStatusActionResult | null;
 };
 
 export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
@@ -107,11 +116,13 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
   const supportsInventoryAction = draft.kind === "inventory_adjustment";
   const supportsBulkInventoryAction =
     draft.kind === "bulk_inventory_adjustment";
+  const supportsOrderStatusAction = draft.kind === "order_status_transition";
   const supportsLiveAction =
     supportsProductAction ||
     supportsDomainAction ||
     supportsInventoryAction ||
-    supportsBulkInventoryAction;
+    supportsBulkInventoryAction ||
+    supportsOrderStatusAction;
 
   useEffect(() => {
     const controller = new AbortController();
@@ -124,7 +135,8 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
           next.lastProductAction ??
             next.lastDomainAction ??
             next.lastInventoryAction ??
-            next.lastBulkInventoryAction,
+            next.lastBulkInventoryAction ??
+            next.lastOrderStatusAction,
         );
         setError(null);
       })
@@ -163,7 +175,8 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
         next.lastProductAction ??
           next.lastDomainAction ??
           next.lastInventoryAction ??
-          next.lastBulkInventoryAction,
+          next.lastBulkInventoryAction ??
+          next.lastOrderStatusAction,
       );
     } catch (saveError) {
       setError(
@@ -196,7 +209,8 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
         next.lastProductAction ??
           next.lastDomainAction ??
           next.lastInventoryAction ??
-          next.lastBulkInventoryAction,
+          next.lastBulkInventoryAction ??
+          next.lastOrderStatusAction,
       );
     } catch (rollbackError) {
       setError(
@@ -217,11 +231,13 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
         proposal.draftId,
         supportsBulkInventoryAction
           ? "bulk_inventory"
-          : supportsInventoryAction
-            ? "inventory"
-            : supportsDomainAction
-              ? "domain"
-              : "product",
+          : supportsOrderStatusAction
+            ? "order_status"
+            : supportsInventoryAction
+              ? "inventory"
+              : supportsDomainAction
+                ? "domain"
+                : "product",
         {
           action: "preview",
           expectedDraftVersion: draft.currentVersion,
@@ -250,11 +266,13 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
         proposal.draftId,
         supportsBulkInventoryAction
           ? "bulk_inventory"
-          : supportsInventoryAction
-            ? "inventory"
-            : supportsDomainAction
-              ? "domain"
-              : "product",
+          : supportsOrderStatusAction
+            ? "order_status"
+            : supportsInventoryAction
+              ? "inventory"
+              : supportsDomainAction
+                ? "domain"
+                : "product",
         {
           action: "execute",
           approvalId: approval.id,
@@ -276,7 +294,12 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
   }
 
   async function reviewLiveRollback() {
-    if (!actionResult || supportsInventoryAction || supportsBulkInventoryAction)
+    if (
+      !actionResult ||
+      supportsInventoryAction ||
+      supportsBulkInventoryAction ||
+      supportsOrderStatusAction
+    )
       return;
     setActionBusy("rollback");
     setError(null);
@@ -354,7 +377,20 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
                   </div>
                 </details>
               ) : null}
-              {field.multiline ? (
+              {draft.kind === "order_status_transition" &&
+              field.key === "target_status" ? (
+                <select
+                  value={content[field.key] ?? ""}
+                  onChange={(event) =>
+                    changeContent(field.key, event.target.value)
+                  }
+                  className="h-9 w-full rounded-lg border border-[#dfdce5] bg-white px-2.5 text-xs text-[#252228] outline-none focus:border-[#6d4dff] focus:ring-1 focus:ring-[#6d4dff]"
+                >
+                  <option value="processing">Processing</option>
+                  <option value="shipped">Shipped</option>
+                  <option value="delivered">Delivered</option>
+                </select>
+              ) : field.multiline ? (
                 <textarea
                   value={content[field.key] ?? ""}
                   maxLength={field.maxLength}
@@ -569,7 +605,7 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
                   </div>
                 </div>
                 {actionResult.approval.operation === "apply" &&
-                !isAnyInventoryApproval(actionResult.approval) ? (
+                !isAnyNonRollbackApproval(actionResult.approval) ? (
                   <button
                     type="button"
                     onClick={reviewLiveRollback}
@@ -598,6 +634,8 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
           Single-SKU inventory proposals affect one exact tracked item and
           location. Bulk proposals are separately gated, capped at 20 lines,
           reviewed line by line and applied atomically only after approval.
+          Order-status proposals are one exact delivery order and one forward
+          step; they never cancel, refund, alter payment or contact a customer.
         </p>
       </div>
     </section>
@@ -659,6 +697,7 @@ function fromProposal(proposal: Proposal): DraftResponse {
     lastDomainAction: null,
     lastInventoryAction: null,
     lastBulkInventoryAction: null,
+    lastOrderStatusAction: null,
   };
 }
 
@@ -682,7 +721,12 @@ async function requestDraft(
 
 async function requestLiveAction(
   draftId: string,
-  actionType: "product" | "domain" | "inventory" | "bulk_inventory",
+  actionType:
+    | "product"
+    | "domain"
+    | "inventory"
+    | "bulk_inventory"
+    | "order_status",
   body: Record<string, unknown>,
 ): Promise<{
   approval?: MinkActionApproval;
@@ -691,11 +735,13 @@ async function requestLiveAction(
   const endpoint =
     actionType === "bulk_inventory"
       ? "bulk-inventory-action"
-      : actionType === "inventory"
-        ? "inventory-action"
-        : actionType === "domain"
-          ? "action"
-          : "product-action";
+      : actionType === "order_status"
+        ? "order-status-action"
+        : actionType === "inventory"
+          ? "inventory-action"
+          : actionType === "domain"
+            ? "action"
+            : "product-action";
   const response = await fetch(`/api/mink/drafts/${draftId}/${endpoint}`, {
     method: "POST",
     cache: "no-store",
@@ -737,6 +783,12 @@ function actionPreviewFields(
     }));
   }
   if (isBulkInventoryApproval(approval)) return [];
+  if (isOrderStatusApproval(approval)) {
+    return MINK_ORDER_STATUS_ACTION_FIELDS.map((key) => ({
+      key,
+      label: MINK_ORDER_STATUS_FIELD_LABELS[key] ?? key.replaceAll("_", " "),
+    }));
+  }
   return domainActionFields(approval.toolName).map((key) => ({
     key,
     label: MINK_DOMAIN_FIELD_LABELS[key] ?? key.replaceAll("_", " "),
@@ -766,6 +818,9 @@ function actionHeading(kind: MinkDraftKind) {
   if (kind === "bulk_inventory_adjustment") {
     return "Adjust up to 20 SKU/location lines atomically";
   }
+  if (kind === "order_status_transition") {
+    return "Advance one delivery order by one status";
+  }
   return "Apply to the linked product";
 }
 
@@ -785,6 +840,9 @@ function actionScope(kind: MinkDraftKind) {
   if (kind === "bulk_inventory_adjustment") {
     return "Requires Inventory Manage and a separate bulk-action kill switch. Every exact line is revalidated; one invalid or stale line prevents the entire batch from changing stock.";
   }
+  if (kind === "order_status_transition") {
+    return "Requires Orders Manage and its independent operator kill switch. Only pending → processing → shipped → delivered is supported, one exact step at a time; payment, cancellation, pickup, POS and customer contact stay outside this action.";
+  }
   return "Requires Products Manage permission and a separate operator kill switch. Price, stock, status and publishing are outside this action.";
 }
 
@@ -797,6 +855,9 @@ function actionSuccessMessage(approval: MinkActionApproval) {
   }
   if (isBulkInventoryApproval(approval)) {
     return `Approved atomic inventory batch recorded for ${approval.lines.length} lines.`;
+  }
+  if (isOrderStatusApproval(approval)) {
+    return `Approved order status changed to ${approval.after.status}.`;
   }
   if (isCreateDomainTool(approval.toolName)) {
     return `Approved ${approval.resource.type.replace("_", " ")} created.`;
@@ -833,6 +894,21 @@ function isAnyInventoryApproval(
   return (
     isSingleInventoryApproval(approval) || isBulkInventoryApproval(approval)
   );
+}
+
+function isOrderStatusApproval(
+  approval: MinkActionApproval,
+): approval is MinkOrderStatusActionApproval {
+  return !("product" in approval) && approval.resource.type === "order";
+}
+
+function isAnyNonRollbackApproval(
+  approval: MinkActionApproval,
+): approval is
+  | MinkInventoryActionApproval
+  | MinkBulkInventoryActionApproval
+  | MinkOrderStatusActionApproval {
+  return isAnyInventoryApproval(approval) || isOrderStatusApproval(approval);
 }
 
 function BulkInventoryDraftEditor({

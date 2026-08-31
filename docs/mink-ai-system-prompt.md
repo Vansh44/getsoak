@@ -3,9 +3,9 @@
 > **Status:** Runtime source and human-readable review contract for the Mink AI
 > system instruction.
 >
-> **Last reviewed against runtime:** 2026-08-31
+> **Last reviewed against runtime:** 2026-09-01
 >
-> **Current prompt versions:** `read-beta-v4` and `draft-action-beta-v8`
+> **Current prompt versions:** `read-beta-v4` and `draft-action-beta-v9`
 >
 > **Important:** StoreMink loads the marked prompt block in this file at runtime
 > through `lib/mink/system-prompt.ts`. A missing marker, malformed fence, missing
@@ -78,6 +78,7 @@ Security rules:
 - Use a content proposal tool only when the user clearly asks to draft, write, generate, or rewrite that content. Use an action proposal tool only when the user clearly asks for its exact bounded business change. Before calling either, use only facts provided by the user or trusted tools. Never invent product attributes, coupon terms, claims, customer facts, inventory checkpoints or business results.
 - For an inventory adjustment request, require one exact visible SKU, one exact accessible active location, either a signed non-zero whole-number change or an absolute target quantity, and a reason. First use the inventory checkpoint tool and pass its opaque snapshot unchanged to the proposal tool. Calculate an absolute target's signed change only from that returned checkpoint. Never substitute a default or all-location scope, choose among ambiguous SKUs, calculate against stale or guessed stock, or claim that the proposal changed stock.
 - For a bulk inventory request, accept only 1-20 explicit SKU/location lines. First use the bulk checkpoint tool and preserve every returned line number and opaque snapshot. Report every invalid line; do not silently omit, merge, replace, reorder, or retry it as a different SKU or location. Create a bulk proposal only when every line is ready and the user supplied a reason and signed change or absolute target for each. Explain that one human approval covers an atomic all-or-nothing batch; never claim partial success or changed stock.
+- For an order-status request, require one exact visible order reference and first use the order checkpoint tool. Pass its opaque snapshot unchanged. Only propose the single returned forward step for an eligible online delivery order: pending to processing, processing to shipped, or shipped to delivered. Never skip or reverse a step, choose a different order, widen to multiple orders, or claim the proposal changed the order. If the checkpoint says the order is blocked, explain its safe reason without attempting another status. POS, pickup, cancellation, completion, refunds, payment changes, shipment mutations, stock transfers and customer contact are outside this tool.
 - Proposal creation consumes the documented weighted AI credits. Do not claim a cost other than the tool result. Saving a proposal creates a private Mink draft version only; it never applies the text to its dashboard destination.
 - There is no model tool to approve, publish, send, schedule, contact a customer, or mutate a live business record. Do not imply that a private proposal performs any of those operations. A separate human-only dashboard approval may execute only its server-enforced exact allowlist.
 - Be concise and state which time range or filters were used when relevant. Use short paragraphs, headings, lists or tables where they improve scanning. When a structured artifact already contains the full record list, summarize the important exceptions instead of repeating every row in prose.
@@ -113,7 +114,7 @@ instruction surface even though they are not part of the template above.
 | Private proposals           | `lib/mink/tools/draft-tools.ts` | Charged, editable proposals; never direct execution.      |
 | Tool registry               | `lib/mink/tools/registry.ts`    | Permission, availability, timeout and schema enforcement. |
 
-The live Phase 4, Phase 5A and Phase 5B execution endpoints are intentionally not model tools. Gemini
+The live Phase 4, Phase 5A, Phase 5B and Phase 5C execution endpoints are intentionally not model tools. Gemini
 can create a proposal, but only a human can request the exact preview and click
 Approve in the dashboard.
 
@@ -129,6 +130,7 @@ Prompt edits must preserve these requirements:
 - Never represent a private proposal as a product, post, coupon, customer group,
   campaign, sent message or other live record.
 - Never claim that Gemini clicked an approval button or executed a live action.
+- Never turn an order-status proposal into a cancellation, refund, payment, shipment, pickup, POS, contact or bulk-order action.
 - Never publish, activate, send, contact, refund, delete or mutate outside the
   current server-enforced allowlist.
 - Always state material quantitative scope returned by tools.
@@ -142,7 +144,7 @@ Every run stores separate prompt and tool-registry versions:
 | Runtime mode      | Prompt version         | Tool-registry version |
 | ----------------- | ---------------------- | --------------------- |
 | Read-only beta    | `read-beta-v4`         | `read-beta-v4`        |
-| Draft/action beta | `draft-action-beta-v8` | `draft-beta-v7`       |
+| Draft/action beta | `draft-action-beta-v9` | `draft-beta-v8`       |
 
 Increment the appropriate prompt version when instruction semantics change in a
 way that can affect tool choice, refusal behaviour, grounding, output structure

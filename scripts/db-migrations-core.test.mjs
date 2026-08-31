@@ -22,7 +22,7 @@ describe("database migration controls", () => {
   it("loads the repository manifest and checksums the enrolled SQL", async () => {
     const loaded = await loadManifest();
     expect(loaded.baseline.id).toBe("baseline:cloudsql-2026-08-14");
-    expect(loaded.migrations).toHaveLength(50);
+    expect(loaded.migrations).toHaveLength(51);
     expect(loaded.migrations[0]).toMatchObject({
       id: "20260814_0001_logistics_shiprocket",
       transaction: true,
@@ -628,6 +628,35 @@ describe("database migration controls", () => {
     expect(loaded.migrations[49].checksum).toMatch(/^[0-9a-f]{64}$/);
     expect(loaded.migrations[49].sql).toContain(
       "covering the dashboard topbar, left navigation and page content",
+    );
+    expect(loaded.migrations[50]).toMatchObject({
+      id: "20260901_0051_mink_phase_5c_order_status",
+      transaction: true,
+      requires: ["20260901_0050_mink_full_view_takeover"],
+    });
+    expect(loaded.migrations[50].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[50].sql).toContain("transition_order_status");
+    expect(loaded.migrations[50].sql).toContain(
+      "mink_action_approvals_order_status_target_check",
+    );
+    expect(loaded.migrations[50].sql).toContain(
+      "Pending or approved cancellation states and any refund activity block advancement",
+    );
+    expect(loaded.migrations[50].sql).toContain(
+      "otherwise append the complete section",
+    );
+    expect(loaded.migrations[50].sql).toContain(
+      "ON CONFLICT (slug) DO NOTHING",
+    );
+    expect(loaded.migrations[50].sql).toContain("status = 'published'");
+    expect(loaded.migrations[50].sql).toContain(
+      "DROP CONSTRAINT IF EXISTS mink_drafts_order_status_target_check",
+    );
+    expect(loaded.migrations[50].sql).toContain(
+      "CREATE INDEX IF NOT EXISTS mink_action_approvals_order_status_idx",
+    );
+    expect(loaded.migrations[50].sql).toContain(
+      "body LIKE '%do not offer automatic rollback%'",
     );
     const repairChecks = [
       loaded.migrations[22].applyVerify,

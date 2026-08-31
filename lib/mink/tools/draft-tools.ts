@@ -16,7 +16,7 @@ import {
   INVENTORY_ADJUSTMENT_REASONS,
   MAX_MINK_BULK_INVENTORY_LINES,
 } from "../draft-types";
-import { MinkToolInputError } from "../errors";
+import { MinkRequestError, MinkToolInputError } from "../errors";
 import type { MinkActorContext, MinkArtifact } from "../types";
 import {
   resolveMinkBulkInventoryTargets,
@@ -24,6 +24,16 @@ import {
 } from "../bulk-inventory-targets";
 import type { MinkTool } from "./registry";
 import { resolveMinkLocation } from "./location-scope";
+import {
+  evaluateMinkOrderTransition,
+  MINK_ORDER_STATUS_TARGETS,
+  nextMinkOrderStatus,
+} from "../order-status-policy";
+import {
+  minkOrderStatusSnapshot,
+  normalizeMinkOrderReference,
+  readMinkOrderStatusTarget,
+} from "../order-status-target";
 
 const draftingAvailable = (actor: MinkActorContext) =>
   actor.draftingEnabled === true;
@@ -953,6 +963,114 @@ export const proposeBulkInventoryAdjustmentTool: MinkTool = {
   },
 };
 
+export const getOrderForStatusTransitionTool: MinkTool = {
+  declaration: {
+    name: "get_order_for_status_transition",
+    description:
+      "Read one exact visible order reference before proposing a guarded forward status transition. Returns the only supported next status and an opaque order_snapshot. It never changes an order and never accepts an internal order ID.",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {
+        order_ref: {
+          type: "string",
+          minLength: 1,
+          maxLength: 80,
+          description:
+            "Exact visible StoreMink order reference from the user or a trusted order tool.",
+        },
+      },
+      required: ["order_ref"],
+      additionalProperties: false,
+    },
+  },
+  permission: { section: "orders", action: "view" },
+  available: draftingAvailable,
+  timeoutMs: 7_000,
+  async execute(actor, args) {
+    const reference = normalizeMinkOrderReference(args.order_ref);
+    const order = await readOrderStatusTargetForTool(actor, reference);
+    const nextStatus = nextMinkOrderStatus(order.status);
+    const decision = nextStatus
+      ? evaluateMinkOrderTransition(order, nextStatus)
+      : evaluateMinkOrderTransition(order, "unsupported");
+    return {
+      order_ref: order.reference,
+      current_status: order.status,
+      next_status: decision.allowed ? decision.targetStatus : null,
+      eligible: decision.allowed,
+      blocked_reason: decision.allowed ? null : decision.message,
+      payment_status: order.paymentStatus,
+      payment_method: order.paymentMethod,
+      sales_channel: order.salesChannel,
+      fulfilment_type: order.fulfilmentType,
+      location: order.locationName ?? "Unassigned",
+      latest_shipment_status: order.shipmentStatus,
+      order_snapshot: await minkOrderStatusSnapshot(actor, order),
+      dataAsOf: new Date().toISOString(),
+    };
+  },
+};
+
+export const proposeOrderStatusTransitionTool: MinkTool = {
+  declaration: {
+    name: "propose_order_status_transition",
+    description:
+      "Create a charged private proposal for one exact eligible delivery order to move exactly one forward step: pending to processing, processing to shipped, or shipped to delivered. First call get_order_for_status_transition and pass order_snapshot unchanged. This does not change the order, payment, shipment, cancellation, inventory or customer communications; a human must save, review and approve separately.",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {
+        order_ref: { type: "string", minLength: 1, maxLength: 80 },
+        order_snapshot: { type: "string", minLength: 64, maxLength: 64 },
+        target_status: {
+          type: "string",
+          enum: [...MINK_ORDER_STATUS_TARGETS],
+        },
+        note: {
+          type: "string",
+          maxLength: 200,
+          description:
+            "Optional internal audit note. Never include credentials, payment data or customer secrets.",
+        },
+      },
+      required: ["order_ref", "order_snapshot", "target_status"],
+      additionalProperties: false,
+    },
+  },
+  permission: { section: "orders", action: "manage" },
+  available: draftingAvailable,
+  timeoutMs: 8_000,
+  artifact: proposalArtifact,
+  async execute(actor, args) {
+    const reference = normalizeMinkOrderReference(args.order_ref);
+    const order = await readOrderStatusTargetForTool(actor, reference);
+    const snapshot = readString(args.order_snapshot, "order_snapshot", 64);
+    if (snapshot !== (await minkOrderStatusSnapshot(actor, order))) {
+      throw new MinkToolInputError(
+        "The order checkpoint changed or was not checked. Read the exact order again before proposing a status transition.",
+      );
+    }
+    const targetStatus = readString(args.target_status, "target_status", 20);
+    const decision = evaluateMinkOrderTransition(order, targetStatus);
+    if (!decision.allowed) throw new MinkToolInputError(decision.message);
+    return proposalOutput(
+      await createMinkDraftProposal({
+        actor,
+        kind: "order_status_transition",
+        title: `Advance ${order.reference} to ${decision.targetStatus}`,
+        destinationType: "order",
+        destinationId: order.id,
+        destinationLabel: order.reference,
+        destinationPath: `/dashboard/orders?q=${encodeURIComponent(order.reference)}`,
+        before: { target_status: order.status, note: "" },
+        content: {
+          target_status: decision.targetStatus,
+          note: readOptionalString(args.note, "note", 200),
+        },
+      }),
+    );
+  },
+};
+
 export const minkDraftTools = [
   proposeCurrentProductDescriptionTool,
   proposeCurrentProductSeoTool,
@@ -970,7 +1088,25 @@ export const minkDraftTools = [
   proposeInventoryAdjustmentTool,
   getInventoryItemsForBulkAdjustmentTool,
   proposeBulkInventoryAdjustmentTool,
+  getOrderForStatusTransitionTool,
+  proposeOrderStatusTransitionTool,
 ];
+
+async function readOrderStatusTargetForTool(
+  actor: MinkActorContext,
+  reference: string,
+) {
+  try {
+    return await withActor(actor, (db) =>
+      readMinkOrderStatusTarget(db, actor, { orderRef: reference }),
+    );
+  } catch (error) {
+    if (error instanceof MinkRequestError) {
+      throw new MinkToolInputError(error.message);
+    }
+    throw error;
+  }
+}
 
 type BulkProposalInput = {
   sku: string;

@@ -24,6 +24,12 @@ describe("Mink system prompt document", () => {
     expect(template).toContain("accept only 1-20 explicit SKU/location lines");
     expect(template).toContain("atomic all-or-nothing batch");
     expect(template).toContain(
+      "Only propose the single returned forward step for an eligible online delivery order",
+    );
+    expect(template).toContain(
+      "POS, pickup, cancellation, completion, refunds, payment changes",
+    );
+    expect(template).toContain(
       "distinguish product publication counts from sellable-SKU inventory counts",
     );
     expect(template).toContain(
