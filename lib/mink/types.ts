@@ -24,6 +24,16 @@ export type MinkFilter = {
 
 export type MinkArtifact =
   | {
+      type: "clarification";
+      title: string;
+      question: string;
+      choices: Array<{
+        label: string;
+        description?: string;
+        prompt: string;
+      }>;
+    }
+  | {
       type: "metrics";
       title: string;
       currency?: string;
@@ -62,11 +72,23 @@ export type MinkArtifact =
         threshold: number | null;
         dashboardPath?: string;
       }>;
+      locations?: Array<{
+        id: string;
+        name: string;
+        type: string;
+        inventoryItems: number;
+        trackedItems: number;
+        lowStock: number;
+        outOfStock: number;
+        dashboardPath?: string;
+        prompt: string;
+      }>;
       filters: MinkFilter[];
       dataAsOf?: string;
       dashboardPath?: string;
       inventoryDashboardPath?: string;
       truncated?: boolean;
+      locationsTruncated?: boolean;
     }
   | {
       type: "records";

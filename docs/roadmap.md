@@ -50,7 +50,9 @@ sequence AND the spec for everything still to build.
 | —      | Mink guarded customer-group metadata create/update (Phase 4D)     | M    | ✅ done |
 | —      | Mink exact single-SKU/location inventory approval (Phase 5A)      | M    | ✅ done |
 | —      | Mink bounded atomic bulk inventory approval (Phase 5B)            | M    | ✅ done |
+| —      | Mink guarded delivery order-status transition (Phase 5C)          | M    | ✅ done |
 | —      | Mink location-aware SKU catalogue health + structured answer UI   | M    | ✅ done |
+| —      | Mink ambiguous-stock clarification + per-location comparison      | M    | ✅ done |
 | —      | Locations fulfilment navigation and aligned routing workspace     | S    | ✅ done |
 | **P1** | **Release verification and high-risk action hardening**           | XL   | ◐ part  |
 | **0**  | **Platform → merchant billing rebuild**                           | XL   | ◐ part  |

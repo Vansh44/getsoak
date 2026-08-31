@@ -1,5 +1,5 @@
 {
-  "version": "read-alpha-v2",
+  "version": "read-alpha-v3",
   "description": "Phase 1B live-model cases. Run against a controlled internal store with representative products, variants, inventory, locations, and recognized sales.",
   "cases": [
     {
@@ -31,11 +31,12 @@
       "allowedTools": ["get_catalog_summary"]
     },
     {
-      "id": "catalog-health",
+      "id": "catalog-health-ambiguous",
       "category": "catalog",
-      "prompt": "How many products are published, unpublished, draft and archived, and how many sellable SKUs are low or out of stock across all locations? List the returned products and variants with their status tags and state the inventory scope.",
+      "prompt": "How many products are published, unpublished, draft and archived, and how many sellable SKUs are low or out of stock?",
       "expectedTools": ["get_catalog_summary"],
       "allowedTools": ["get_catalog_summary"],
+      "responseIncludesAny": ["location", "combined", "compare"],
       "manualReview": true
     },
     {

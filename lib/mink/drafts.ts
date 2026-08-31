@@ -27,6 +27,10 @@ import { getLatestMinkInventoryAction } from "./inventory-actions";
 import type { MinkInventoryActionResult } from "./inventory-action-types";
 import { getLatestMinkBulkInventoryAction } from "./bulk-inventory-actions";
 import type { MinkBulkInventoryActionResult } from "./bulk-inventory-action-types";
+import { getLatestMinkOrderStatusAction } from "./order-status-actions";
+import type { MinkOrderStatusActionResult } from "./order-status-action-types";
+import { getLatestMinkBlogPublication } from "./blog-publication-actions";
+import type { MinkBlogPublicationResult } from "./blog-publication-action-types";
 import { getLatestMinkProductAction } from "./product-actions";
 import type { MinkProductActionResult } from "./product-action-types";
 import type { MinkActorContext, MinkArtifact } from "./types";
@@ -47,6 +51,7 @@ const DRAFT_PERMISSION: Record<
   customer_group_update: { section: "users", action: "manage" },
   inventory_adjustment: { section: "inventory", action: "manage" },
   bulk_inventory_adjustment: { section: "inventory", action: "manage" },
+  order_status_transition: { section: "orders", action: "manage" },
 };
 
 export interface MinkDraftState {
@@ -67,6 +72,8 @@ export interface MinkDraftState {
   lastDomainAction: MinkDomainActionResult | null;
   lastInventoryAction: MinkInventoryActionResult | null;
   lastBulkInventoryAction: MinkBulkInventoryActionResult | null;
+  lastOrderStatusAction: MinkOrderStatusActionResult | null;
+  lastBlogPublication: MinkBlogPublicationResult | null;
 }
 
 export async function createMinkDraftProposal(input: {
@@ -225,6 +232,14 @@ export async function getMinkDraft(
     lastBulkInventoryAction:
       state.kind === "bulk_inventory_adjustment"
         ? await getLatestMinkBulkInventoryAction(actor, draftId)
+        : null,
+    lastOrderStatusAction:
+      state.kind === "order_status_transition"
+        ? await getLatestMinkOrderStatusAction(actor, draftId)
+        : null,
+    lastBlogPublication:
+      state.kind === "blog"
+        ? await getLatestMinkBlogPublication(actor, draftId)
         : null,
   };
 }
@@ -456,6 +471,8 @@ function toDraftState(
     lastDomainAction: null,
     lastInventoryAction: null,
     lastBulkInventoryAction: null,
+    lastOrderStatusAction: null,
+    lastBlogPublication: null,
   };
 }
 

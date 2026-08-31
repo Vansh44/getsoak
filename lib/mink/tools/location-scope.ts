@@ -11,6 +11,13 @@ export interface MinkResolvedLocation {
   selectedId: string | null;
   label: string;
   includeUnassigned: boolean;
+  availableLocations: MinkAccessibleLocation[];
+}
+
+export interface MinkAccessibleLocation {
+  id: string;
+  name: string;
+  type: string;
 }
 
 /** Intersect a model-supplied location NAME with the trusted actor scope. */
@@ -59,6 +66,7 @@ export async function resolveMinkLocation(
       selectedId: matches[0].id,
       label: matches[0].name,
       includeUnassigned: false,
+      availableLocations: options,
     };
   }
 
@@ -68,6 +76,7 @@ export async function resolveMinkLocation(
       selectedId: null,
       label: "All store locations",
       includeUnassigned: true,
+      availableLocations: options,
     };
   }
   return {
@@ -78,6 +87,7 @@ export async function resolveMinkLocation(
         ? "No assigned active locations"
         : `${options.length} assigned ${options.length === 1 ? "location" : "locations"}`,
     includeUnassigned: true,
+    availableLocations: options,
   };
 }
 

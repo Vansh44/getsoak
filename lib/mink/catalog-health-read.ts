@@ -33,6 +33,28 @@ export interface MinkCatalogHealthResult {
   truncated: boolean;
 }
 
+export interface MinkCatalogLocationHealth {
+  id: string;
+  name: string;
+  type: string;
+  inventoryItems: number;
+  trackedItems: number;
+  lowStock: number;
+  outOfStock: number;
+  dashboardPath: string;
+}
+
+export interface MinkCatalogLocationComparisonResult {
+  total: number;
+  published: number;
+  unpublished: number;
+  draft: number;
+  archived: number;
+  inventoryItems: number;
+  trackedItems: number;
+  locations: MinkCatalogLocationHealth[];
+}
+
 /**
  * Read one bounded catalogue-health snapshot using the same sellable-SKU model
  * as the Inventory workspace: simple products without variants plus every
@@ -195,6 +217,181 @@ export async function readMinkCatalogHealth(input: {
     outOfStock: nullableNumber(row?.out_of_stock),
     items,
     truncated: rawItems.length > input.limit,
+  };
+}
+
+/**
+ * Compare the same tracked-SKU status rules across an already authorized set
+ * of active locations. Missing inventory_levels rows count as zero on that
+ * shelf, matching the Inventory workspace. The query rechecks store and active
+ * location predicates even though the ids came from trusted actor scope.
+ */
+export async function readMinkCatalogHealthByLocation(input: {
+  storeId: string;
+  identity: UserIdentity;
+  locationIds: string[];
+  defaultThreshold: number;
+}): Promise<MinkCatalogLocationComparisonResult> {
+  const locationFilter = input.locationIds.length
+    ? sql`and l.id in (${sql.join(
+        input.locationIds.map((id) => sql`${id}`),
+        sql`, `,
+      )})`
+    : sql`and false`;
+  const levelFilter = input.locationIds.length
+    ? sql`and il.location_id in (${sql.join(
+        input.locationIds.map((id) => sql`${id}`),
+        sql`, `,
+      )})`
+    : sql`and false`;
+
+  const result = await withUser(input.identity, (db) =>
+    db.execute(sql`
+      with product_counts as (
+        select
+          count(*)::int as total,
+          count(*) filter (where p.status = 'published')::int as published,
+          count(*) filter (where p.status <> 'published')::int as unpublished,
+          count(*) filter (where p.status = 'draft')::int as draft,
+          count(*) filter (where p.status = 'archived')::int as archived
+        from products p
+        where p.store_id = ${input.storeId}
+      ),
+      sku_rows as (
+        select
+          p.id as product_id,
+          null::uuid as variant_id,
+          p.track_inventory,
+          coalesce(p.low_stock_threshold, ${input.defaultThreshold})::int as threshold
+        from products p
+        where p.store_id = ${input.storeId}
+          and not exists (
+            select 1
+            from product_variants child
+            where child.product_id = p.id
+          )
+
+        union all
+
+        select
+          p.id as product_id,
+          v.id as variant_id,
+          v.track_inventory,
+          coalesce(v.low_stock_threshold, ${input.defaultThreshold})::int as threshold
+        from product_variants v
+        inner join products p
+          on p.id = v.product_id and p.store_id = ${input.storeId}
+        where v.store_id = ${input.storeId}
+      ),
+      sku_counts as (
+        select
+          count(*)::int as inventory_items,
+          count(*) filter (where track_inventory)::int as tracked_items
+        from sku_rows
+      ),
+      location_levels as (
+        select
+          il.location_id,
+          sku.product_id,
+          sku.variant_id,
+          sku.threshold,
+          coalesce(sum(il.on_hand), 0)::int as stock
+        from inventory_levels il
+        inner join sku_rows sku
+          on sku.track_inventory
+          and sku.product_id = il.product_id
+          and sku.variant_id is not distinct from il.variant_id
+        where il.store_id = ${input.storeId}
+          ${levelFilter}
+        group by
+          il.location_id,
+          sku.product_id,
+          sku.variant_id,
+          sku.threshold
+      ),
+      location_counts as (
+        select
+          l.id,
+          l.name,
+          l.type,
+          counts.inventory_items,
+          counts.tracked_items,
+          count(levels.product_id) filter (
+            where levels.stock > 0 and levels.stock <= levels.threshold
+          )::int as low_stock,
+          (
+            counts.tracked_items
+            - count(levels.product_id)
+            + count(levels.product_id) filter (where levels.stock <= 0)
+          )::int as out_of_stock,
+          l.sort_order
+        from store_locations l
+        cross join sku_counts counts
+        left join location_levels levels on levels.location_id = l.id
+        where l.store_id = ${input.storeId}
+          and l.active = true
+          ${locationFilter}
+        group by
+          l.id,
+          l.name,
+          l.type,
+          l.sort_order,
+          counts.inventory_items,
+          counts.tracked_items
+      )
+      select
+        products.total,
+        products.published,
+        products.unpublished,
+        products.draft,
+        products.archived,
+        counts.inventory_items,
+        counts.tracked_items,
+        coalesce((
+          select jsonb_agg(
+            jsonb_build_object(
+              'id', location_counts.id,
+              'name', location_counts.name,
+              'type', location_counts.type,
+              'inventory_items', location_counts.inventory_items,
+              'tracked_items', location_counts.tracked_items,
+              'low_stock', location_counts.low_stock,
+              'out_of_stock', location_counts.out_of_stock
+            )
+            order by location_counts.sort_order, location_counts.name
+          )
+          from location_counts
+        ), '[]'::jsonb) as locations
+      from product_counts products
+      cross join sku_counts counts
+    `),
+  );
+
+  const row = result.rows[0] as Record<string, unknown> | undefined;
+  const locations = Array.isArray(row?.locations)
+    ? (row.locations as Array<Record<string, unknown>>)
+    : [];
+  return {
+    total: numberValue(row?.total),
+    published: numberValue(row?.published),
+    unpublished: numberValue(row?.unpublished),
+    draft: numberValue(row?.draft),
+    archived: numberValue(row?.archived),
+    inventoryItems: numberValue(row?.inventory_items),
+    trackedItems: numberValue(row?.tracked_items),
+    locations: locations.map((location) => {
+      const id = String(location.id ?? "");
+      return {
+        id,
+        name: String(location.name ?? "Location"),
+        type: String(location.type ?? "location"),
+        inventoryItems: numberValue(location.inventory_items),
+        trackedItems: numberValue(location.tracked_items),
+        lowStock: numberValue(location.low_stock),
+        outOfStock: numberValue(location.out_of_stock),
+        dashboardPath: `/dashboard/inventory?location=${encodeURIComponent(id)}`,
+      };
+    }),
   };
 }
 

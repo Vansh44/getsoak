@@ -1690,6 +1690,148 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260831_0049_mink_inventory_scope_clarification",
+      "description": "Document explicit Mink inventory-scope clarification and bounded per-location catalogue-health comparison",
+      "file": "sql/20260831_0049_mink_inventory_scope_clarification.sql",
+      "checksum": "1656d6a8a7fb08c380dcd6da1ccd8532853e3fa13ea5c49471c140f74451c4de",
+      "transaction": true,
+      "requires": ["20260831_0048_mink_catalog_health_ui"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "the Mink guide documents scope choices and per-location stock semantics",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%does not silently assume an all-location total%' and body like '%<strong>Compare locations</strong>%' and body like '%missing inventory-level row counts as zero at that shelf%' and body like '%first 20 accessible locations%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "the Mink guide already documents scope choices and per-location stock semantics",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%does not silently assume an all-location total%' and body like '%<strong>Compare locations</strong>%' and body like '%missing inventory-level row counts as zero at that shelf%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260901_0050_mink_full_view_takeover",
+      "description": "Make the dashboard Mink maximized surface a full-viewport takeover and document the restore behavior",
+      "file": "sql/20260901_0050_mink_full_view_takeover.sql",
+      "checksum": "2c2e713d4dace686e79a1f7c1984af93cdd24c72584a9ec01313e4eafd583304",
+      "transaction": true,
+      "requires": ["20260831_0049_mink_inventory_scope_clarification"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "the Mink dashboard guide documents the full-view takeover",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%Select <strong>Expand</strong> to open Mink AI across the full browser window%' and body like '%covering the dashboard topbar, left navigation and page content%' and body like '%Select <strong>Collapse</strong> to return to the drawer%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "the Mink dashboard guide already documents the full-view takeover",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%covering the dashboard topbar, left navigation and page content%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260901_0051_mink_phase_5c_order_status",
+      "description": "Add a separately gated, forward-only and human-approved Mink delivery order-status transition with drift-repairing Help Centre guidance",
+      "file": "sql/20260901_0051_mink_phase_5c_order_status.sql",
+      "checksum": "f4a3121a21c9ee71d828d2ebc71fb0c6c5c7a11a385e40ac92068f7342bdbb43",
+      "transaction": true,
+      "requires": ["20260901_0050_mink_full_view_takeover"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "Mink Phase 5C order-status constraints and indexes exist",
+            "sql": "select count(*)::text from pg_constraint where conname in ('mink_drafts_order_status_target_check', 'mink_action_approvals_order_status_target_check', 'mink_action_audit_order_status_target_check')",
+            "equals": "3"
+          },
+          {
+            "name": "the Mink guide documents guarded delivery order-status transitions",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%<h2>Advance one delivery order</h2>%' and body like '%pending → processing%' and body like '%Delivery order-status transitions%' and body like '%Pending or approved cancellation states and any refund activity block advancement%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "Mink Phase 5C order-status constraints already exist",
+            "sql": "select count(*)::text from pg_constraint where conname in ('mink_drafts_order_status_target_check', 'mink_action_approvals_order_status_target_check', 'mink_action_audit_order_status_target_check')",
+            "equals": "3"
+          },
+          {
+            "name": "the Mink guide already documents guarded delivery order-status transitions",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%<h2>Advance one delivery order</h2>%' and body like '%Delivery order-status transitions%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260901_0052_mink_phase_5d_blog_publication",
+      "description": "Add separately gated exact blog publication and a conflict-safe bounded schedule worker with current Help Centre guidance",
+      "file": "sql/20260901_0052_mink_phase_5d_blog_publication.sql",
+      "checksum": "38ad7b2aa4d822bebcf3b0a77638b062216941d1dc8b01c39b15c7d0248258e7",
+      "transaction": true,
+      "requires": ["20260901_0051_mink_phase_5c_order_status"],
+      "verify": {},
+      "applyVerify": {
+        "tables": ["mink_blog_publications"],
+        "columns": [
+          "mink_blog_publications.approval_id",
+          "mink_blog_publications.blog_id",
+          "mink_blog_publications.scheduled_for",
+          "mink_blog_publications.blog_version",
+          "mink_blog_publications.published_at"
+        ],
+        "constraints": [
+          "blogs_id_store_key",
+          "mink_action_approvals_blog_publish_target_check",
+          "mink_action_audit_blog_publish_target_check",
+          "mink_blog_publications_blog_store_fkey",
+          "mink_blog_publications_timing_check"
+        ],
+        "rlsTables": ["mink_blog_publications"],
+        "queries": [
+          {
+            "name": "the Mink guide documents exact guarded blog publication and scheduling",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%<h2>Publish or schedule one blog</h2>%' and body like '%Blog publication and scheduling%' and body like '%from 5 minutes to 90 days ahead%' and body like '%does not activate Markdown links%' and body like '%produces a conflict instead of overwriting%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "tables": ["mink_blog_publications"],
+        "constraints": [
+          "mink_action_approvals_blog_publish_target_check",
+          "mink_action_audit_blog_publish_target_check",
+          "mink_blog_publications_blog_store_fkey",
+          "mink_blog_publications_timing_check"
+        ],
+        "rlsTables": ["mink_blog_publications"],
+        "queries": [
+          {
+            "name": "the Mink guide already documents guarded blog publication and scheduling",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%<h2>Publish or schedule one blog</h2>%' and body like '%Blog publication and scheduling%'",
+            "equals": "1"
+          }
+        ]
+      }
     }
   ]
 }

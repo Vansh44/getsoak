@@ -1,9 +1,61 @@
-import { describe, expect, it } from "vitest";
+import { createElement } from "react";
+import { render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clampMinkPanelWidth,
+  DashboardChat,
   minkComposerHeight,
   shouldSubmitMinkComposer,
 } from "./dashboard-chat";
+import { useChat } from "./chat-context";
+
+vi.mock("./chat-context", () => ({
+  useChat: vi.fn(),
+}));
+
+const baseChatState = {
+  isChatOpen: true,
+  isExpanded: true,
+  closeChat: vi.fn(),
+  toggleExpand: vi.fn(),
+  messages: [],
+  conversations: [],
+  activeConversationId: null,
+  activeConversationTitle: null,
+  input: "",
+  setInput: vi.fn(),
+  isReplying: false,
+  isHistoryLoading: false,
+  deletingConversationId: null,
+  statusText: null,
+  error: null,
+  feedbackSubmittingRunId: null,
+  send: vi.fn(),
+  cancel: vi.fn(),
+  retry: vi.fn(),
+  reset: vi.fn(),
+  loadConversation: vi.fn(),
+  deleteConversation: vi.fn(),
+  submitFeedback: vi.fn(),
+};
+
+beforeEach(() => {
+  vi.mocked(useChat).mockReturnValue(
+    baseChatState as unknown as ReturnType<typeof useChat>,
+  );
+});
+
+describe("Mink full view", () => {
+  it("covers the entire viewport above the dashboard chrome", () => {
+    render(createElement(DashboardChat, { variant: "overlay" }));
+
+    expect(screen.getByTestId("mink-chat-surface")).toHaveClass(
+      "fixed",
+      "inset-0",
+      "z-[90]",
+    );
+  });
+});
 
 describe("clampMinkPanelWidth", () => {
   it("keeps desktop resizing within the usable dashboard range", () => {

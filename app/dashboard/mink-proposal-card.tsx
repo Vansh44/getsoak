@@ -2,6 +2,7 @@
 
 import {
   ArrowRight,
+  CalendarClock,
   Check,
   ExternalLink,
   Eye,
@@ -14,6 +15,12 @@ import {
   Trash2,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import {
+  MINK_BLOG_PUBLICATION_FIELDS,
+  MINK_BLOG_PUBLICATION_FIELD_LABELS,
+  type MinkBlogPublicationApproval,
+  type MinkBlogPublicationResult,
+} from "@/lib/mink/blog-publication-action-types";
 import {
   MINK_DRAFT_CONFIG,
   INVENTORY_ADJUSTMENT_REASONS,
@@ -47,6 +54,12 @@ import type {
   MinkBulkInventoryActionResult,
   MinkBulkInventoryValidationDetail,
 } from "@/lib/mink/bulk-inventory-action-types";
+import {
+  MINK_ORDER_STATUS_ACTION_FIELDS,
+  MINK_ORDER_STATUS_FIELD_LABELS,
+  type MinkOrderStatusActionApproval,
+  type MinkOrderStatusActionResult,
+} from "@/lib/mink/order-status-action-types";
 import type { MinkArtifact } from "@/lib/mink/types";
 
 type Proposal = Extract<MinkArtifact, { type: "proposal" }>;
@@ -54,12 +67,16 @@ type MinkActionApproval =
   | MinkProductActionApproval
   | MinkDomainActionApproval
   | MinkInventoryActionApproval
-  | MinkBulkInventoryActionApproval;
+  | MinkBulkInventoryActionApproval
+  | MinkOrderStatusActionApproval
+  | MinkBlogPublicationApproval;
 type MinkActionResult =
   | MinkProductActionResult
   | MinkDomainActionResult
   | MinkInventoryActionResult
-  | MinkBulkInventoryActionResult;
+  | MinkBulkInventoryActionResult
+  | MinkOrderStatusActionResult
+  | MinkBlogPublicationResult;
 type DraftResponse = {
   id: string;
   kind: MinkDraftKind;
@@ -78,6 +95,8 @@ type DraftResponse = {
   lastDomainAction: MinkDomainActionResult | null;
   lastInventoryAction: MinkInventoryActionResult | null;
   lastBulkInventoryAction: MinkBulkInventoryActionResult | null;
+  lastOrderStatusAction: MinkOrderStatusActionResult | null;
+  lastBlogPublication: MinkBlogPublicationResult | null;
 };
 
 export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
@@ -93,6 +112,12 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
   const [actionResult, setActionResult] = useState<MinkActionResult | null>(
     null,
   );
+  const [publicationMode, setPublicationMode] = useState<
+    "publish_now" | "schedule"
+  >("publish_now");
+  const [scheduledFor, setScheduledFor] = useState(() =>
+    defaultScheduledLocalTime(),
+  );
   const [error, setError] = useState<string | null>(null);
   const fields = MINK_DRAFT_CONFIG[draft.kind].fields;
   const dirty = useMemo(
@@ -107,11 +132,15 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
   const supportsInventoryAction = draft.kind === "inventory_adjustment";
   const supportsBulkInventoryAction =
     draft.kind === "bulk_inventory_adjustment";
+  const supportsOrderStatusAction = draft.kind === "order_status_transition";
+  const supportsBlogPublication = draft.kind === "blog";
   const supportsLiveAction =
     supportsProductAction ||
     supportsDomainAction ||
     supportsInventoryAction ||
-    supportsBulkInventoryAction;
+    supportsBulkInventoryAction ||
+    supportsOrderStatusAction ||
+    supportsBlogPublication;
 
   useEffect(() => {
     const controller = new AbortController();
@@ -124,7 +153,9 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
           next.lastProductAction ??
             next.lastDomainAction ??
             next.lastInventoryAction ??
-            next.lastBulkInventoryAction,
+            next.lastBulkInventoryAction ??
+            next.lastOrderStatusAction ??
+            next.lastBlogPublication,
         );
         setError(null);
       })
@@ -163,7 +194,9 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
         next.lastProductAction ??
           next.lastDomainAction ??
           next.lastInventoryAction ??
-          next.lastBulkInventoryAction,
+          next.lastBulkInventoryAction ??
+          next.lastOrderStatusAction ??
+          next.lastBlogPublication,
       );
     } catch (saveError) {
       setError(
@@ -196,7 +229,9 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
         next.lastProductAction ??
           next.lastDomainAction ??
           next.lastInventoryAction ??
-          next.lastBulkInventoryAction,
+          next.lastBulkInventoryAction ??
+          next.lastOrderStatusAction ??
+          next.lastBlogPublication,
       );
     } catch (rollbackError) {
       setError(
@@ -213,19 +248,23 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
     setActionBusy("preview");
     setError(null);
     try {
+      const publicationTiming = supportsBlogPublication
+        ? blogPublicationTiming(publicationMode, scheduledFor)
+        : {};
       const next = await requestLiveAction(
         proposal.draftId,
-        supportsBulkInventoryAction
-          ? "bulk_inventory"
-          : supportsInventoryAction
-            ? "inventory"
-            : supportsDomainAction
-              ? "domain"
-              : "product",
+        liveActionType({
+          supportsBlogPublication,
+          supportsBulkInventoryAction,
+          supportsOrderStatusAction,
+          supportsInventoryAction,
+          supportsDomainAction,
+        }),
         {
           action: "preview",
           expectedDraftVersion: draft.currentVersion,
           idempotencyKey: crypto.randomUUID(),
+          ...publicationTiming,
         },
       );
       setApproval(next.approval ?? null);
@@ -248,13 +287,13 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
     try {
       const next = await requestLiveAction(
         proposal.draftId,
-        supportsBulkInventoryAction
-          ? "bulk_inventory"
-          : supportsInventoryAction
-            ? "inventory"
-            : supportsDomainAction
-              ? "domain"
-              : "product",
+        liveActionType({
+          supportsBlogPublication,
+          supportsBulkInventoryAction,
+          supportsOrderStatusAction,
+          supportsInventoryAction,
+          supportsDomainAction,
+        }),
         {
           action: "execute",
           approvalId: approval.id,
@@ -276,7 +315,13 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
   }
 
   async function reviewLiveRollback() {
-    if (!actionResult || supportsInventoryAction || supportsBulkInventoryAction)
+    if (
+      !actionResult ||
+      supportsInventoryAction ||
+      supportsBulkInventoryAction ||
+      supportsOrderStatusAction ||
+      supportsBlogPublication
+    )
       return;
     setActionBusy("rollback");
     setError(null);
@@ -354,7 +399,20 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
                   </div>
                 </details>
               ) : null}
-              {field.multiline ? (
+              {draft.kind === "order_status_transition" &&
+              field.key === "target_status" ? (
+                <select
+                  value={content[field.key] ?? ""}
+                  onChange={(event) =>
+                    changeContent(field.key, event.target.value)
+                  }
+                  className="h-9 w-full rounded-lg border border-[#dfdce5] bg-white px-2.5 text-xs text-[#252228] outline-none focus:border-[#6d4dff] focus:ring-1 focus:ring-[#6d4dff]"
+                >
+                  <option value="processing">Processing</option>
+                  <option value="shipped">Shipped</option>
+                  <option value="delivered">Delivered</option>
+                </select>
+              ) : field.multiline ? (
                 <textarea
                   value={content[field.key] ?? ""}
                   maxLength={field.maxLength}
@@ -481,6 +539,61 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
               ) : null}
             </div>
 
+            {supportsBlogPublication && !approval && !actionResult ? (
+              <div className="rounded-lg border border-[#eeeaf8] bg-white p-2.5">
+                <div className="flex items-center gap-1 text-[9px] font-semibold text-[#5f5868]">
+                  <CalendarClock className="h-3 w-3" /> Publication timing
+                </div>
+                <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                  <label className="flex cursor-pointer items-center gap-2 rounded-md border border-[#e4dfef] px-2.5 py-2 text-[10px] text-[#44365f]">
+                    <input
+                      type="radio"
+                      name={`mink-publication-${draft.id}`}
+                      value="publish_now"
+                      checked={publicationMode === "publish_now"}
+                      disabled={actionBusy !== null}
+                      onChange={() => changePublicationMode("publish_now")}
+                    />
+                    Publish after approval
+                  </label>
+                  <label className="flex cursor-pointer items-center gap-2 rounded-md border border-[#e4dfef] px-2.5 py-2 text-[10px] text-[#44365f]">
+                    <input
+                      type="radio"
+                      name={`mink-publication-${draft.id}`}
+                      value="schedule"
+                      checked={publicationMode === "schedule"}
+                      disabled={actionBusy !== null}
+                      onChange={() => changePublicationMode("schedule")}
+                    />
+                    Schedule for later
+                  </label>
+                </div>
+                {publicationMode === "schedule" ? (
+                  <label className="mt-2 block">
+                    <span className="mb-1 block text-[9px] font-semibold text-[#5f5868]">
+                      Your browser local time
+                    </span>
+                    <input
+                      type="datetime-local"
+                      value={scheduledFor}
+                      min={minimumScheduledLocalTime()}
+                      disabled={actionBusy !== null}
+                      onChange={(event) => {
+                        setScheduledFor(event.target.value);
+                        setApproval(null);
+                        setActionResult(null);
+                      }}
+                      className="h-9 w-full rounded-lg border border-[#dfdce5] bg-white px-2.5 text-xs text-[#252228] outline-none focus:border-[#6d4dff] focus:ring-1 focus:ring-[#6d4dff]"
+                    />
+                    <span className="mt-1 block text-[9px] leading-4 text-[#82798d]">
+                      Choose at least 5 minutes and no more than 90 days ahead.
+                      The server stores this instant in UTC.
+                    </span>
+                  </label>
+                ) : null}
+              </div>
+            ) : null}
+
             {dirty ? (
               <p className="text-[9px] font-medium text-amber-700">
                 Save this draft version before reviewing a live change.
@@ -538,8 +651,7 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
                     ) : (
                       <ShieldCheck className="h-3 w-3" />
                     )}
-                    Approve and{" "}
-                    {approval.operation === "apply" ? "apply" : "roll back"}
+                    {actionApprovalButtonLabel(approval)}
                   </button>
                 </div>
               </div>
@@ -569,7 +681,7 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
                   </div>
                 </div>
                 {actionResult.approval.operation === "apply" &&
-                !isAnyInventoryApproval(actionResult.approval) ? (
+                !isAnyNonRollbackApproval(actionResult.approval) ? (
                   <button
                     type="button"
                     onClick={reviewLiveRollback}
@@ -598,6 +710,12 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
           Single-SKU inventory proposals affect one exact tracked item and
           location. Bulk proposals are separately gated, capped at 20 lines,
           reviewed line by line and applied atomically only after approval.
+          Order-status proposals are one exact delivery order and one forward
+          step; they never cancel, refund, alter payment or contact a customer.
+          Blog proposals can publish immediately or create one scheduled job
+          only after an exact, expiring preview is approved. Scheduled jobs
+          pause when Mink drafting or the publication kill switch is disabled,
+          and conflict instead of overwriting a changed blog.
         </p>
       </div>
     </section>
@@ -605,6 +723,20 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
 
   function changeContent(field: string, value: string) {
     setContent((current) => ({ ...current, [field]: value }));
+    setApproval(null);
+    setActionResult(null);
+  }
+
+  function changePublicationMode(mode: "publish_now" | "schedule") {
+    setPublicationMode(mode);
+    const scheduledAt = Date.parse(scheduledFor);
+    if (
+      mode === "schedule" &&
+      (!Number.isFinite(scheduledAt) ||
+        scheduledAt < Date.now() + 5 * 60 * 1_000)
+    ) {
+      setScheduledFor(defaultScheduledLocalTime());
+    }
     setApproval(null);
     setActionResult(null);
   }
@@ -659,6 +791,8 @@ function fromProposal(proposal: Proposal): DraftResponse {
     lastDomainAction: null,
     lastInventoryAction: null,
     lastBulkInventoryAction: null,
+    lastOrderStatusAction: null,
+    lastBlogPublication: null,
   };
 }
 
@@ -682,20 +816,30 @@ async function requestDraft(
 
 async function requestLiveAction(
   draftId: string,
-  actionType: "product" | "domain" | "inventory" | "bulk_inventory",
+  actionType:
+    | "product"
+    | "domain"
+    | "inventory"
+    | "bulk_inventory"
+    | "order_status"
+    | "blog",
   body: Record<string, unknown>,
 ): Promise<{
   approval?: MinkActionApproval;
   result?: MinkActionResult;
 }> {
   const endpoint =
-    actionType === "bulk_inventory"
-      ? "bulk-inventory-action"
-      : actionType === "inventory"
-        ? "inventory-action"
-        : actionType === "domain"
-          ? "action"
-          : "product-action";
+    actionType === "blog"
+      ? "blog-publication"
+      : actionType === "bulk_inventory"
+        ? "bulk-inventory-action"
+        : actionType === "order_status"
+          ? "order-status-action"
+          : actionType === "inventory"
+            ? "inventory-action"
+            : actionType === "domain"
+              ? "action"
+              : "product-action";
   const response = await fetch(`/api/mink/drafts/${draftId}/${endpoint}`, {
     method: "POST",
     cache: "no-store",
@@ -730,6 +874,13 @@ function actionPreviewFields(
   draftFields: Array<{ key: string; label: string }>,
 ) {
   if ("product" in approval) return draftFields;
+  if (isBlogPublicationApproval(approval)) {
+    return MINK_BLOG_PUBLICATION_FIELDS.map((key) => ({
+      key,
+      label:
+        MINK_BLOG_PUBLICATION_FIELD_LABELS[key] ?? key.replaceAll("_", " "),
+    }));
+  }
   if (isSingleInventoryApproval(approval)) {
     return MINK_INVENTORY_ACTION_FIELDS.map((key) => ({
       key,
@@ -737,6 +888,12 @@ function actionPreviewFields(
     }));
   }
   if (isBulkInventoryApproval(approval)) return [];
+  if (isOrderStatusApproval(approval)) {
+    return MINK_ORDER_STATUS_ACTION_FIELDS.map((key) => ({
+      key,
+      label: MINK_ORDER_STATUS_FIELD_LABELS[key] ?? key.replaceAll("_", " "),
+    }));
+  }
   return domainActionFields(approval.toolName).map((key) => ({
     key,
     label: MINK_DOMAIN_FIELD_LABELS[key] ?? key.replaceAll("_", " "),
@@ -766,6 +923,10 @@ function actionHeading(kind: MinkDraftKind) {
   if (kind === "bulk_inventory_adjustment") {
     return "Adjust up to 20 SKU/location lines atomically";
   }
+  if (kind === "order_status_transition") {
+    return "Advance one delivery order by one status";
+  }
+  if (kind === "blog") return "Publish or schedule this saved blog";
   return "Apply to the linked product";
 }
 
@@ -785,6 +946,12 @@ function actionScope(kind: MinkDraftKind) {
   if (kind === "bulk_inventory_adjustment") {
     return "Requires Inventory Manage and a separate bulk-action kill switch. Every exact line is revalidated; one invalid or stale line prevents the entire batch from changing stock.";
   }
+  if (kind === "order_status_transition") {
+    return "Requires Orders Manage and its independent operator kill switch. Only pending → processing → shipped → delivered is supported, one exact step at a time; payment, cancellation, pickup, POS and customer contact stay outside this action.";
+  }
+  if (kind === "blog") {
+    return "Requires Blogs Manage and an independent publication kill switch. Only this exact saved title, excerpt, body and SEO text can become one new blog; raw HTML, automatic links and model-side execution are blocked.";
+  }
   return "Requires Products Manage permission and a separate operator kill switch. Price, stock, status and publishing are outside this action.";
 }
 
@@ -797,6 +964,14 @@ function actionSuccessMessage(approval: MinkActionApproval) {
   }
   if (isBulkInventoryApproval(approval)) {
     return `Approved atomic inventory batch recorded for ${approval.lines.length} lines.`;
+  }
+  if (isOrderStatusApproval(approval)) {
+    return `Approved order status changed to ${approval.after.status}.`;
+  }
+  if (isBlogPublicationApproval(approval)) {
+    return approval.after.publication_status === "Scheduled"
+      ? "Approved blog publication scheduled."
+      : "Approved blog published.";
   }
   if (isCreateDomainTool(approval.toolName)) {
     return `Approved ${approval.resource.type.replace("_", " ")} created.`;
@@ -833,6 +1008,93 @@ function isAnyInventoryApproval(
   return (
     isSingleInventoryApproval(approval) || isBulkInventoryApproval(approval)
   );
+}
+
+function isOrderStatusApproval(
+  approval: MinkActionApproval,
+): approval is MinkOrderStatusActionApproval {
+  return !("product" in approval) && approval.resource.type === "order";
+}
+
+function isBlogPublicationApproval(
+  approval: MinkActionApproval,
+): approval is MinkBlogPublicationApproval {
+  return !("product" in approval) && approval.resource.type === "blog";
+}
+
+function isAnyNonRollbackApproval(
+  approval: MinkActionApproval,
+): approval is
+  | MinkInventoryActionApproval
+  | MinkBulkInventoryActionApproval
+  | MinkOrderStatusActionApproval
+  | MinkBlogPublicationApproval {
+  return (
+    isAnyInventoryApproval(approval) ||
+    isOrderStatusApproval(approval) ||
+    isBlogPublicationApproval(approval)
+  );
+}
+
+function actionApprovalButtonLabel(approval: MinkActionApproval) {
+  if (approval.operation === "rollback") return "Approve and roll back";
+  if (isBlogPublicationApproval(approval)) {
+    return approval.after.publication_status === "Scheduled"
+      ? "Approve and schedule"
+      : "Approve and publish";
+  }
+  return "Approve and apply";
+}
+
+type LiveActionType =
+  | "product"
+  | "domain"
+  | "inventory"
+  | "bulk_inventory"
+  | "order_status"
+  | "blog";
+
+function liveActionType(input: {
+  supportsBlogPublication: boolean;
+  supportsBulkInventoryAction: boolean;
+  supportsOrderStatusAction: boolean;
+  supportsInventoryAction: boolean;
+  supportsDomainAction: boolean;
+}): LiveActionType {
+  if (input.supportsBlogPublication) return "blog";
+  if (input.supportsBulkInventoryAction) return "bulk_inventory";
+  if (input.supportsOrderStatusAction) return "order_status";
+  if (input.supportsInventoryAction) return "inventory";
+  if (input.supportsDomainAction) return "domain";
+  return "product";
+}
+
+function blogPublicationTiming(
+  mode: "publish_now" | "schedule",
+  scheduledLocal: string,
+) {
+  if (mode === "publish_now") return { mode };
+  if (!scheduledLocal) {
+    throw new Error("Choose a future date and time before reviewing.");
+  }
+  const scheduled = new Date(scheduledLocal);
+  if (Number.isNaN(scheduled.getTime())) {
+    throw new Error("Choose a valid future publication time.");
+  }
+  return { mode, scheduledFor: scheduled.toISOString() };
+}
+
+function defaultScheduledLocalTime() {
+  return toLocalDateTimeInput(new Date(Date.now() + 15 * 60 * 1_000));
+}
+
+function minimumScheduledLocalTime() {
+  return toLocalDateTimeInput(new Date(Date.now() + 5 * 60 * 1_000));
+}
+
+function toLocalDateTimeInput(date: Date) {
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
 }
 
 function BulkInventoryDraftEditor({
