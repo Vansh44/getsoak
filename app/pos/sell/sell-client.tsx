@@ -20,6 +20,7 @@ import {
   Package,
   Database,
   LayoutGrid,
+  ShoppingCart,
 } from "lucide-react";
 import {
   confirmPosGatewayPayment,
@@ -117,6 +118,12 @@ export function SellClient({
   const [query, setQuery] = useState("");
   const [searching, setSearching] = useState(false);
   const [cart, setCart] = useState<CartLine[]>([]);
+  // A phone cannot show a useful product grid beside a 360px cart. Below the
+  // desktop split breakpoint the register therefore becomes two explicit
+  // panes. Adding products leaves the catalogue in place for fast multi-item
+  // ringing; the cart count and total make the next step visible without
+  // squeezing either pane into an unusable strip.
+  const [mobilePane, setMobilePane] = useState<"products" | "cart">("products");
   const [discount, setDiscount] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [tendering, setTendering] = useState(false);
@@ -430,6 +437,7 @@ export function SellClient({
   const { subtotal, lineDiscountTotal, tax } = totals;
   const cappedDiscount = totals.orderDiscount;
   const estTotal = totals.total;
+  const cartQuantity = cart.reduce((sum, line) => sum + line.quantity, 0);
 
   // ONE description of the cart, used both to ask a manager to approve and to
   // ring the sale. They must be byte-identical: the approval token is bound to
@@ -470,6 +478,7 @@ export function SellClient({
     setReceiptEmail("");
     setParkLabel("");
     setError(null);
+    setMobilePane("products");
     void refreshParked();
   };
 
@@ -564,6 +573,7 @@ export function SellClient({
     setReceiptEmail("");
     setTendering(false);
     setSaleId(res.orderId ?? null);
+    setMobilePane("products");
     if (exchangeActive) {
       setExchangeActive(null);
       router.replace("/pos/sell", { scroll: false });
@@ -586,7 +596,56 @@ export function SellClient({
           till confusing to look at. Navigation, location, operator and Lock all
           live in the rail now (app/pos/pos-nav.tsx), where they are the same on
           every screen; what is left is the state of THIS screen. */}
-      <header className="flex h-11 shrink-0 items-center justify-end gap-3 border-b border-[var(--pos-border)] px-3 text-sm">
+      <header className="flex h-12 shrink-0 items-center justify-end gap-2 border-b border-[var(--pos-border)] px-2 text-sm lg:h-11 lg:gap-3 lg:px-3">
+        {/* Phones and portrait tablets get one full-width working pane at a
+            time. Keeping this switch in the register header makes both panes
+            reachable even when the cart or catalogue itself is scrolled. */}
+        <div
+          className="flex min-w-0 flex-1 rounded-xl bg-[var(--pos-surface-2)] p-1 lg:hidden"
+          role="group"
+          aria-label="Register view"
+        >
+          <button
+            type="button"
+            aria-pressed={mobilePane === "products"}
+            onClick={() => setMobilePane("products")}
+            className={`min-w-0 flex-1 rounded-lg px-3 py-1.5 font-medium transition-colors ${
+              mobilePane === "products"
+                ? "bg-[var(--pos-surface)] text-[var(--pos-ink)] shadow-sm"
+                : "text-[var(--pos-ink-2)]"
+            }`}
+          >
+            Products
+          </button>
+          <button
+            type="button"
+            aria-pressed={mobilePane === "cart"}
+            aria-label={`Cart, ${
+              cartQuantity === 0
+                ? "empty"
+                : `${cartQuantity} ${cartQuantity === 1 ? "item" : "items"}`
+            }`}
+            disabled={layoutOpen}
+            onClick={() => setMobilePane("cart")}
+            className={`flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 font-medium transition-colors disabled:opacity-40 ${
+              mobilePane === "cart"
+                ? "bg-[var(--pos-surface)] text-[var(--pos-ink)] shadow-sm"
+                : "text-[var(--pos-ink-2)]"
+            }`}
+          >
+            <ShoppingCart className="h-4 w-4" strokeWidth={2} />
+            Cart
+            {cartQuantity > 0 && (
+              <span
+                aria-hidden="true"
+                className="rounded-full bg-[var(--pos-accent)] px-1.5 text-[11px] font-bold leading-5 text-[var(--pos-on-accent)]"
+              >
+                {cartQuantity}
+              </span>
+            )}
+          </button>
+        </div>
+
         {/* Cache state, deliberately quiet. A cashier only needs it when
             something looks wrong — hence the click-to-refresh. */}
         <button
@@ -598,7 +657,7 @@ export function SellClient({
               ? `${catalog.count} products cached on this device. Click to refresh.`
               : "Loading the catalog…"
           }
-          className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[var(--pos-ink-3)] transition-colors hover:bg-[var(--pos-surface-2)] hover:text-[var(--pos-ink-2)] disabled:opacity-60"
+          className="hidden items-center gap-1.5 rounded-lg px-2 py-1 text-[var(--pos-ink-3)] transition-colors hover:bg-[var(--pos-surface-2)] hover:text-[var(--pos-ink-2)] disabled:opacity-60 lg:inline-flex"
         >
           {catalog.syncing ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -611,18 +670,22 @@ export function SellClient({
             are reachable only by search or scan. Hidden until configured,
             since "20 of 20" is noise. */}
         {coverage.configured && (
-          <span className="hidden text-[var(--pos-ink-3)] sm:inline">
+          <span className="hidden text-[var(--pos-ink-3)] lg:inline">
             {coverage.shown} of {coverage.total} products
           </span>
         )}
         {canEditLayout && (
           <button
             type="button"
-            onClick={() => setLayoutOpen(true)}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--pos-surface-2)] px-3 py-1.5 font-medium transition-colors hover:bg-[var(--pos-surface-3)]"
+            onClick={() => {
+              setMobilePane("products");
+              setLayoutOpen(true);
+            }}
+            aria-label="Edit product layout"
+            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[var(--pos-surface-2)] font-medium transition-colors hover:bg-[var(--pos-surface-3)] lg:h-auto lg:w-auto lg:gap-1.5 lg:rounded-lg lg:px-3 lg:py-1.5"
           >
             <LayoutGrid className="h-4 w-4" strokeWidth={2} />
-            Edit layout
+            <span className="hidden lg:inline">Edit layout</span>
           </button>
         )}
       </header>
@@ -643,7 +706,11 @@ export function SellClient({
 
       <div className="flex min-h-0 flex-1">
         {/* Catalog */}
-        <div className="flex min-w-0 flex-1 flex-col p-3">
+        <div
+          className={`${
+            mobilePane === "products" ? "flex" : "hidden"
+          } min-w-0 flex-1 flex-col p-3 lg:flex`}
+        >
           {layoutOpen ? (
             <LayoutEditMode
               catalog={catalog.ready ? catalog.all() : serverItems}
@@ -781,17 +848,45 @@ export function SellClient({
                   </p>
                 )}
               </div>
+
+              {cartQuantity > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setMobilePane("cart")}
+                  className="mt-3 flex w-full shrink-0 items-center justify-between rounded-xl bg-[var(--pos-accent)] px-4 py-3 font-semibold text-[var(--pos-on-accent)] lg:hidden"
+                  aria-label={`View cart, ${cartQuantity} ${
+                    cartQuantity === 1 ? "item" : "items"
+                  }, total ₹${estTotal.toLocaleString("en-IN")}`}
+                >
+                  <span className="flex items-center gap-2">
+                    <ShoppingCart className="h-5 w-5" strokeWidth={2} />
+                    View cart · {cartQuantity}
+                  </span>
+                  <span>₹{estTotal.toLocaleString("en-IN")}</span>
+                </button>
+              )}
             </>
           )}
         </div>
 
         {/* Cart */}
-        <aside className="flex w-[360px] shrink-0 flex-col border-l border-[var(--pos-border)] bg-[var(--pos-surface)]">
+        <aside
+          className={`${
+            mobilePane === "cart" ? "flex" : "hidden"
+          } min-w-0 flex-1 flex-col bg-[var(--pos-surface)] lg:flex lg:w-[360px] lg:flex-none lg:border-l lg:border-[var(--pos-border)]`}
+        >
           <div className="min-h-0 flex-1 overflow-y-auto p-3">
             {cart.length === 0 ? (
-              <p className="py-16 text-center text-sm text-[var(--pos-ink-3)]">
-                Scan or tap a product to start a sale.
-              </p>
+              <div className="py-16 text-center text-sm text-[var(--pos-ink-3)]">
+                <p>Scan or tap a product to start a sale.</p>
+                <button
+                  type="button"
+                  onClick={() => setMobilePane("products")}
+                  className="mt-4 rounded-xl bg-[var(--pos-surface-2)] px-4 py-2.5 font-medium text-[var(--pos-ink)] lg:hidden"
+                >
+                  Browse products
+                </button>
+              </div>
             ) : (
               cart.map((l) => (
                 <div
@@ -904,7 +999,7 @@ export function SellClient({
             )}
           </div>
 
-          <div className="shrink-0 border-t border-[var(--pos-border)] p-3">
+          <div className="shrink-0 border-t border-[var(--pos-border)] p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
             <div className="mb-2 flex items-center justify-between text-sm">
               <span className="text-[var(--pos-ink-2)]">Subtotal</span>
               <span>₹{subtotal.toLocaleString("en-IN")}</span>

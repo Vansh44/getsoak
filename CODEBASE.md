@@ -1418,7 +1418,8 @@ wholesip/
 │                              # 0043 extends the proposal/action boundary through Phase 4B–4D and
 │                              # documents draft-product, disabled-coupon and group-metadata limits;
 │                              # 0044 documents restored proposal cards, independent drafting
-│                              # rollout and exact action/rollback checkpoint behavior.
+│                              # rollout and exact action/rollback checkpoint behavior; 0045 documents
+│                              # the responsive Products/Cart register flow on phones and portrait tablets.
 ├── scripts/
 │   ├── dev-server.mjs         # ★ resource-aware Next dev runner: 2 GB heap on ≤12 GB
 │   │                          # machines, 3 GB on ≤20 GB, uncapped above; rotates
@@ -3184,7 +3185,9 @@ the trusted `store_id`, and direct customer PII is minimized/masked.
       and troubleshooting. `ScanLine` is part of the fixed public/admin Help
       icon catalogue. The rows use the existing Help query/search/sitemap path
       and remain operator-editable; POS documentation is not duplicated in a
-      static route.
+      static route. Forward-only migration
+      `20260831_0045_pos_mobile_register_help` adds the phone and portrait-tablet
+      Products/Cart workflow to the register customization guide.
     - **Merchant Help coverage baseline (2026-08-26):** migrations
       `20260826_0019_getting_started_account_help` through
       `20260826_0024_marketing_communications_help` upsert 81 guide records
@@ -3679,6 +3682,18 @@ the trusted `store_id`, and direct customer PII is minimized/masked.
         `@zxing/browser` (lazy WASM) covers browsers without it. Merchants scan
         SUPPLIER barcodes — `products.barcode`/`product_variants.barcode`,
         entered in the product editor. StoreMink never prints its own.
+      - **★ THE PHONE REGISTER USES TWO FULL-WIDTH PANES, NOT A SQUEEZED
+        DESKTOP SPLIT.** Below 1024px, `sell-client.tsx` shows an explicit
+        **Products / Cart** switch. The catalogue keeps the full viewport while
+        items are added; a persistent **View cart** action carries the live unit
+        count and total. The cart then takes the full viewport for line edits,
+        discounts and payment, with Products always available to return. Adding
+        an item deliberately does not force a pane change, so ringing several
+        products remains one tap each. At `lg` and wider the established
+        side-by-side catalogue + 360px cart returns. Layout editing stays on the
+        Products pane and temporarily disables Cart so unsaved arrangement work
+        cannot disappear behind it. Completing or holding a sale resets the
+        phone to Products for the next customer.
       - **★ STICKY FOCUS IS FOR KEYBOARD DEVICES ONLY** — on a tablet it was
         the register's most-complained-about behaviour. Keeping the search box
         focused is what makes a scan land with zero clicks, so the register

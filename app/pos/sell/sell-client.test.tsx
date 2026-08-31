@@ -114,4 +114,45 @@ describe("Sell cart", () => {
 
     expect(container.querySelectorAll('img[src="/bread.jpg"]')).toHaveLength(2);
   });
+
+  it("keeps phone products and cart in separate switchable panes", async () => {
+    let container!: HTMLElement;
+    await act(async () => {
+      ({ container } = render(
+        <SellClient config={CONFIG} initialItems={[ITEM]} />,
+      ));
+    });
+
+    const productsPane = screen.getByRole("button", { name: "Products" });
+    const cartPane = screen.getByRole("button", { name: "Cart, empty" });
+    expect(productsPane).toHaveAttribute("aria-pressed", "true");
+    expect(cartPane).toHaveAttribute("aria-pressed", "false");
+
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("button", { name: /multigrain bread/i }),
+      );
+    });
+
+    expect(
+      screen.getByRole("button", { name: "Cart, 1 item" }),
+    ).toHaveTextContent("Cart1");
+    const viewCart = screen.getByRole("button", {
+      name: "View cart, 1 item, total ₹52",
+    });
+    expect(viewCart).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(viewCart);
+    });
+
+    expect(screen.getByRole("button", { name: "Products" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    expect(
+      screen.getByRole("button", { name: "Cart, 1 item" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(container.querySelector("aside")?.className).toContain("flex");
+  });
 });

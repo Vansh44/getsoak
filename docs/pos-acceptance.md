@@ -879,6 +879,20 @@ had withheld — the strictest setting behaving as the most permissive.
 Then ring the same ₹100 sale with **no** discount.
 **Expect:** it goes through. A 0 cap must not become "refuse everything".
 
+**PS-7.25 ★★ — The phone register is not a squeezed desktop till**
+Open `/pos/sell` at 459px wide (the reported failure), then at a portrait-tablet
+width below 1024px. Add several products.
+**Expect:** Products uses the full working width with two or more readable
+product columns; the fixed 360px cart is not sitting beside it. Adding an item
+keeps Products open and updates both the cart badge and the persistent **View
+cart · N** action with the live total. Select View cart: Cart now uses the full
+width and exposes the complete line, quantity, discount, totals, Charge, Hold
+sale and Held controls. Select Products to add another item without losing the
+cart. As a manager, the compact grid icon opens layout editing on Products and
+Cart stays disabled until editing closes. At 1024px and wider, the product grid
+and 360px cart return side by side. Hold or complete a sale on mobile and start
+the next one: Products is selected again.
+
 ---
 
 ## 7b. Checkout payment defaults & collection payment policy
@@ -3442,6 +3456,7 @@ Real and deliberate, so nobody files them as bugs:
 | ~~**Checkout queried customers while the cashier typed**~~              | **FIXED** (PS-C.25–C.29, C.44–C.47). Charge now accepts one 10-digit mobile locally; only OK performs an exact lookup, creates a phone-only customer when absent, and advances directly to payment                                                                                                                                                                                                             |
 | ~~**A stale checkout could still create a Walk-in sale**~~              | **FIXED** (PS-C.48). Customer capture is enforced by `placePosSale` before all pricing, stock and money work; historical anonymous receipts remain readable but no new register sale can omit its customer                                                                                                                                                                                                     |
 | ~~**Cart lines lost the product photo**~~                               | **FIXED** (PS-C.49). The catalog image rides onto the cart line with a compact package fallback, including a held cart restored against the current catalog                                                                                                                                                                                                                                                    |
+| ~~**The phone showed a 360px cart beside a sliver of catalogue**~~      | **FIXED** (PS-7.25). Below 1024px, Products and Cart are separate full-width panes with a persistent cart count and total; wider tills retain the simultaneous split                                                                                                                                                                                                                                           |
 | ~~**POS Sales omitted collected pickups and hid transaction detail**~~  | **FIXED** (PS-C.50). Completed pickups at this location join the same Sales list without changing channel or duplicating the order; reprint detail includes customer, source/completion, every line, totals and tenders                                                                                                                                                                                        |
 | ~~**Counter returns ignored policy and let refund tender drift**~~      | **FIXED** (PS-11.11–11.18). Master/BORIS/location/product/window/reason/fee rules are server-enforced; refunds follow and proportionally split across original tenders; an enabled exchange links a normal customer-locked replacement POS sale                                                                                                                                                                |
 | ~~**Pickup and return identity was trusted without OTP**~~              | **FIXED** (PS-8.4a–8.4d, PS-11.2a–11.2d). The final server mutations require a short-lived proof for the saved order mobile, bound to order, purpose, shop, location and operator; failure leaves stock and money untouched                                                                                                                                                                                    |

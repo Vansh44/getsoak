@@ -597,6 +597,13 @@ gateway flow after OTP. POS Sales now includes completed website pickups at the
 current shop and its receipt view shows customer, source, completion, line,
 total and tender detail.
 
+**Mobile register layout, shipped 2026-08-31.** Sell no longer forces the
+desktop's fixed 360px cart beside the catalogue on a phone or portrait tablet.
+Below 1024px, Products and Cart are full-width switchable panes; the product
+view keeps a persistent cart count and total, adding several products never
+forces an interruption, and holding or completing returns the next sale to
+Products. Wider tills retain the simultaneous grid and cart.
+
 The counter return is now the settings-driven after-sales path requested with
 POS-000023. The store master switch, website-in-store switch, location
 capability, final-sale/window rules, required reason, merchant-fault fee waiver

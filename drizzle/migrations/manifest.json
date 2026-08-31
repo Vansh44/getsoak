@@ -1566,6 +1566,32 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260831_0045_pos_mobile_register_help",
+      "description": "Document the full-width Products and Cart register flow on phones and portrait tablets",
+      "file": "sql/20260831_0045_pos_mobile_register_help.sql",
+      "transaction": true,
+      "requires": ["20260830_0044_mink_action_reliability_help"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "the POS register guide documents the responsive Products and Cart workflow",
+            "sql": "select count(*)::text from public.help_articles where slug = 'customize-register-and-scan-products' and status = 'published' and body like '%Use the register on a phone or portrait tablet%' and body like '%separate full-width views%' and body like '%the product grid and cart remain side by side%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "the POS register guide already documents the responsive Products and Cart workflow",
+            "sql": "select count(*)::text from public.help_articles where slug = 'customize-register-and-scan-products' and status = 'published' and body like '%Use the register on a phone or portrait tablet%' and body like '%separate full-width views%'",
+            "equals": "1"
+          }
+        ]
+      }
     }
   ]
 }
