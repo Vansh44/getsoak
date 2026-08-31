@@ -23,6 +23,12 @@ describe("Mink system prompt document", () => {
     );
     expect(template).toContain("accept only 1-20 explicit SKU/location lines");
     expect(template).toContain("atomic all-or-nothing batch");
+    expect(template).toContain(
+      "distinguish product publication counts from sellable-SKU inventory counts",
+    );
+    expect(template).toContain(
+      "structured artifact already contains the full record list",
+    );
     expect(template).toContain("There is no model tool to approve");
   });
 

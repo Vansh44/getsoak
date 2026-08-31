@@ -14,8 +14,11 @@
 > explicitly approved tracked-SKU adjustment at one exact active location.
 > Migration `20260831_0047_mink_phase_5b_bulk_inventory` adds a separate,
 > five-credit, maximum-20-line bulk adjustment with line-level validation and
-> atomic all-or-nothing execution. No transfer, order-status, publication, campaign,
-> customer-contact, membership, bulk-price or arbitrary-code authority is present.
+> atomic all-or-nothing execution. Migration
+> `20260831_0048_mink_catalog_health_ui` documents the aligned location-aware
+> sellable-SKU catalogue health card and safe structured answer renderer. No
+> transfer, order-status, publication, campaign, customer-contact, membership,
+> bulk-price or arbitrary-code authority is present.
 >
 > **Plan date:** 2026-08-30
 >
@@ -39,8 +42,10 @@ guarded-action slice now include:
 - five explicitly store-scoped read tools: `get_store_profile`,
   `get_catalog_summary`, `search_products`, `get_sales_summary` and
   `list_low_stock`; sales reuse the dashboard's recognized-order, refund,
-  timezone and location contract, while stock intersects exact location names
-  with trusted admin assignments and uses per-SKU thresholds;
+  timezone and location contract. Catalogue health separates product publication
+  counts from simple-product/variant SKU stock, intersects exact location names
+  with trusted admin assignments, applies Inventory's threshold rules and
+  returns a bounded status-tagged list;
 - a bounded multi-step orchestration loop with step, tool and parallel-read
   limits;
 - an authenticated, same-origin, rate-limited SSE endpoint at
@@ -53,8 +58,9 @@ guarded-action slice now include:
   successful transcript after refresh, supports confirmed deletion, and
   atomically removes the oldest thread when an eleventh is created;
 - a resizable side panel with a browser-local width preference, the same purple
-  robot identity as Help Centre Mink, an auto-growing multiline composer, and
-  safe emphasis/inline-code rendering without raw HTML;
+  robot identity as Help Centre Mink, an auto-growing multiline composer, and a
+  safe ChatGPT-style React renderer for headings, lists, tables, code, emphasis
+  and allowlisted StoreMink links without raw HTML;
 - a separate published Help Centre guide for the dashboard alpha's supported
   questions, permission behavior, privacy and limits;
 - prompt-injection instructions that treat all tool values as untrusted data;

@@ -1,11 +1,13 @@
 import "server-only";
 
-import { and, asc, eq, ilike, or, sql } from "drizzle-orm";
+import { and, asc, eq, ilike, or } from "drizzle-orm";
 import { getSalesAnalytics } from "@/app/dashboard/analytics/data";
+import { can } from "@/app/dashboard/lib/permissions";
 import { products, stores } from "@/drizzle/schema";
 import { parseAnalyticsRange } from "@/lib/analytics/range";
 import { withUser } from "@/lib/db/client";
 import { readLowStockItems } from "@/lib/inventory/low-stock-read";
+import { readMinkCatalogHealth } from "../catalog-health-read";
 import { MinkToolInputError } from "../errors";
 import type { MinkActorContext, MinkArtifact } from "../types";
 import { resolveMinkLocation } from "./location-scope";
@@ -52,34 +54,58 @@ const getCatalogSummary: MinkTool = {
   declaration: {
     name: "get_catalog_summary",
     description:
-      "Return compact counts for the current store's products: total, published, draft, archived, out of stock, and low stock. Use this for catalog-health questions.",
-    parametersJsonSchema: EMPTY_OBJECT_SCHEMA,
+      "Return product-level publication counts and a bounded product/variant list tagged published, unpublished, draft, archived, in stock, low stock, out of stock, or untracked. Inventory counts use the same sellable-SKU and threshold rules as the dashboard. If location_name is supplied they describe only that accessible shelf; otherwise they describe the actor's trusted all/assigned-location scope. Stock is omitted without Inventory View permission.",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {
+        location_name: {
+          type: "string",
+          description:
+            "Optional accessible dashboard location name. Use it whenever the user asks about a named shop or warehouse. Never use or invent a location ID.",
+          minLength: 1,
+          maxLength: 100,
+        },
+        limit: {
+          type: "integer",
+          description: "Maximum product/variant rows, from 1 to 20.",
+          minimum: 1,
+          maximum: 20,
+          default: 20,
+        },
+      },
+      additionalProperties: false,
+    },
   },
   permission: { section: "products", action: "view" },
-  timeoutMs: 5_000,
+  timeoutMs: 7_000,
   artifact: catalogSummaryArtifact,
-  async execute(actor) {
-    const rows = await withActor(actor, (db) =>
-      db
-        .select({
-          total: sql<number>`count(*)::int`,
-          published: sql<number>`count(*) filter (where ${products.status} = 'published')::int`,
-          draft: sql<number>`count(*) filter (where ${products.status} = 'draft')::int`,
-          archived: sql<number>`count(*) filter (where ${products.status} = 'archived')::int`,
-          outOfStock: sql<number>`count(*) filter (where ${products.trackInventory} and ${products.stock} <= 0)::int`,
-          lowStock: sql<number>`count(*) filter (where ${products.trackInventory} and ${products.stock} > 0 and ${products.lowStockThreshold} is not null and ${products.stock} <= ${products.lowStockThreshold})::int`,
-        })
-        .from(products)
-        .where(eq(products.storeId, actor.storeId)),
+  async execute(actor, args) {
+    const inventoryAccess = can(
+      actor.permissions,
+      "inventory",
+      "view",
+      actor.isSuperadmin,
     );
-    const row = rows[0];
+    const location = inventoryAccess
+      ? await resolveMinkLocation(actor, args.location_name)
+      : null;
+    const summary = await readMinkCatalogHealth({
+      storeId: actor.storeId,
+      identity: { uid: actor.adminId, email: actor.email },
+      locationIds: location ? location.locationIds : [],
+      defaultThreshold: actor.defaultLowStockThreshold,
+      includeInventory: inventoryAccess,
+      limit: readLimit(args.limit, 20),
+    });
     return {
-      total: Number(row?.total ?? 0),
-      published: Number(row?.published ?? 0),
-      draft: Number(row?.draft ?? 0),
-      archived: Number(row?.archived ?? 0),
-      outOfStock: Number(row?.outOfStock ?? 0),
-      lowStock: Number(row?.lowStock ?? 0),
+      ...summary,
+      inventoryAccess,
+      locationScope: location?.label ?? "Inventory hidden by permission",
+      dataAsOf: new Date().toISOString(),
+      inventoryDashboardPath: location?.selectedId
+        ? `/dashboard/inventory?location=${encodeURIComponent(location.selectedId)}`
+        : "/dashboard/inventory",
+      dashboardPath: "/dashboard/products",
     };
   },
 };
@@ -390,23 +416,58 @@ const listLowStock: MinkTool = {
 };
 
 function catalogSummaryArtifact(output: Record<string, unknown>): MinkArtifact {
-  const entries = [
-    ["Products", output.total],
-    ["Published", output.published],
-    ["Draft", output.draft],
-    ["Low stock", output.lowStock],
-    ["Out of stock", output.outOfStock],
-  ] as const;
+  const items = Array.isArray(output.items)
+    ? (output.items as Array<Record<string, unknown>>)
+    : [];
   return {
-    type: "metrics",
-    title: "Catalogue health",
-    metrics: entries.map(([label, value]) => ({
-      label,
-      value: Number(value ?? 0),
-      format: "number" as const,
+    type: "catalog",
+    title: "Catalogue & inventory",
+    counts: {
+      total: Number(output.total ?? 0),
+      published: Number(output.published ?? 0),
+      unpublished: Number(output.unpublished ?? 0),
+      draft: Number(output.draft ?? 0),
+      archived: Number(output.archived ?? 0),
+      inventoryItems:
+        output.inventoryItems == null
+          ? null
+          : Number(output.inventoryItems ?? 0),
+      lowStock: output.lowStock == null ? null : Number(output.lowStock ?? 0),
+      outOfStock:
+        output.outOfStock == null ? null : Number(output.outOfStock ?? 0),
+    },
+    items: items.map((item) => ({
+      id: String(item.id ?? item.variantId ?? item.productId ?? ""),
+      title: String(item.productName ?? "Product"),
+      variant:
+        typeof item.variantName === "string" ? item.variantName : undefined,
+      sku: String(item.sku ?? "No SKU"),
+      publicationStatus: String(item.publicationStatus ?? "draft"),
+      publicationTags: Array.isArray(item.publicationTags)
+        ? item.publicationTags.map(String).slice(0, 2)
+        : [],
+      inventoryStatus:
+        typeof item.inventoryStatus === "string" ? item.inventoryStatus : null,
+      stock: item.stock == null ? null : Number(item.stock),
+      threshold: item.threshold == null ? null : Number(item.threshold),
+      dashboardPath:
+        typeof item.dashboardPath === "string" ? item.dashboardPath : undefined,
     })),
-    filters: [{ label: "Scope", value: "Current store" }],
-    dashboardPath: "/dashboard/products",
+    filters: [
+      { label: "Publication", value: "Current store" },
+      { label: "Inventory", value: String(output.locationScope ?? "Hidden") },
+    ],
+    dataAsOf: typeof output.dataAsOf === "string" ? output.dataAsOf : undefined,
+    dashboardPath:
+      typeof output.dashboardPath === "string"
+        ? output.dashboardPath
+        : undefined,
+    inventoryDashboardPath:
+      output.inventoryAccess === true &&
+      typeof output.inventoryDashboardPath === "string"
+        ? output.inventoryDashboardPath
+        : undefined,
+    truncated: output.truncated === true,
   };
 }
 
@@ -535,8 +596,8 @@ function readSearchQuery(value: unknown): string {
   return query;
 }
 
-function readLimit(value: unknown): number {
-  if (value === undefined) return 10;
+function readLimit(value: unknown, fallback = 10): number {
+  if (value === undefined) return fallback;
   if (!Number.isInteger(value) || Number(value) < 1 || Number(value) > 20) {
     throw new MinkToolInputError("limit must be an integer from 1 to 20.");
   }

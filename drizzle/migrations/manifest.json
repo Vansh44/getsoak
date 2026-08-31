@@ -1664,6 +1664,32 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260831_0048_mink_catalog_health_ui",
+      "description": "Document location-aware SKU catalogue health and safe structured Mink answer formatting",
+      "file": "sql/20260831_0048_mink_catalog_health_ui.sql",
+      "transaction": true,
+      "requires": ["20260831_0047_mink_phase_5b_bulk_inventory"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "the Mink guide documents location-aware sellable-SKU health and safe answer formatting",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%<h2>Read catalogue and stock health</h2>%' and body like '%Low-stock and out-of-stock counts are sellable-SKU counts%' and body like '%all-location total can be low even when one individual shop is out of stock%' and body like '%Model text is never treated as raw HTML%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "the Mink guide already documents location-aware catalogue health",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%<h2>Read catalogue and stock health</h2>%' and body like '%sellable-SKU counts%'",
+            "equals": "1"
+          }
+        ]
+      }
     }
   ]
 }
