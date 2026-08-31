@@ -31,11 +31,23 @@ import type {
   MinkProductActionApproval,
   MinkProductActionResult,
 } from "@/lib/mink/product-action-types";
+import {
+  MINK_INVENTORY_ACTION_FIELDS,
+  MINK_INVENTORY_FIELD_LABELS,
+  type MinkInventoryActionApproval,
+  type MinkInventoryActionResult,
+} from "@/lib/mink/inventory-action-types";
 import type { MinkArtifact } from "@/lib/mink/types";
 
 type Proposal = Extract<MinkArtifact, { type: "proposal" }>;
-type MinkActionApproval = MinkProductActionApproval | MinkDomainActionApproval;
-type MinkActionResult = MinkProductActionResult | MinkDomainActionResult;
+type MinkActionApproval =
+  | MinkProductActionApproval
+  | MinkDomainActionApproval
+  | MinkInventoryActionApproval;
+type MinkActionResult =
+  | MinkProductActionResult
+  | MinkDomainActionResult
+  | MinkInventoryActionResult;
 type DraftResponse = {
   id: string;
   kind: MinkDraftKind;
@@ -52,6 +64,7 @@ type DraftResponse = {
   versions: MinkDraftVersionSummary[];
   lastProductAction: MinkProductActionResult | null;
   lastDomainAction: MinkDomainActionResult | null;
+  lastInventoryAction: MinkInventoryActionResult | null;
 };
 
 export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
@@ -78,7 +91,9 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
     draft.kind === "product_description" || draft.kind === "product_seo";
   const supportsDomainAction =
     domainActionToolForDraftKind(draft.kind) !== null;
-  const supportsLiveAction = supportsProductAction || supportsDomainAction;
+  const supportsInventoryAction = draft.kind === "inventory_adjustment";
+  const supportsLiveAction =
+    supportsProductAction || supportsDomainAction || supportsInventoryAction;
 
   useEffect(() => {
     const controller = new AbortController();
@@ -87,7 +102,11 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
         setDraft(next);
         setContent(next.content);
         setApproval(null);
-        setActionResult(next.lastProductAction ?? next.lastDomainAction);
+        setActionResult(
+          next.lastProductAction ??
+            next.lastDomainAction ??
+            next.lastInventoryAction,
+        );
         setError(null);
       })
       .catch((loadError) => {
@@ -121,7 +140,11 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
       setDraft(next);
       setContent(next.content);
       setApproval(null);
-      setActionResult(next.lastProductAction ?? next.lastDomainAction);
+      setActionResult(
+        next.lastProductAction ??
+          next.lastDomainAction ??
+          next.lastInventoryAction,
+      );
     } catch (saveError) {
       setError(
         saveError instanceof Error
@@ -149,7 +172,11 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
       setDraft(next);
       setContent(next.content);
       setApproval(null);
-      setActionResult(next.lastProductAction ?? next.lastDomainAction);
+      setActionResult(
+        next.lastProductAction ??
+          next.lastDomainAction ??
+          next.lastInventoryAction,
+      );
     } catch (rollbackError) {
       setError(
         rollbackError instanceof Error
@@ -167,7 +194,11 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
     try {
       const next = await requestLiveAction(
         proposal.draftId,
-        supportsDomainAction,
+        supportsInventoryAction
+          ? "inventory"
+          : supportsDomainAction
+            ? "domain"
+            : "product",
         {
           action: "preview",
           expectedDraftVersion: draft.currentVersion,
@@ -194,7 +225,11 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
     try {
       const next = await requestLiveAction(
         proposal.draftId,
-        supportsDomainAction,
+        supportsInventoryAction
+          ? "inventory"
+          : supportsDomainAction
+            ? "domain"
+            : "product",
         {
           action: "execute",
           approvalId: approval.id,
@@ -216,13 +251,13 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
   }
 
   async function reviewLiveRollback() {
-    if (!actionResult) return;
+    if (!actionResult || supportsInventoryAction) return;
     setActionBusy("rollback");
     setError(null);
     try {
       const next = await requestLiveAction(
         proposal.draftId,
-        supportsDomainAction,
+        supportsDomainAction ? "domain" : "product",
         {
           action: "preview_rollback",
           sourceApprovalId: actionResult.approval.id,
@@ -490,7 +525,8 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
                     )}
                   </div>
                 </div>
-                {actionResult.approval.operation === "apply" ? (
+                {actionResult.approval.operation === "apply" &&
+                actionResult.approval.toolName !== "adjust_inventory" ? (
                   <button
                     type="button"
                     onClick={reviewLiveRollback}
@@ -516,6 +552,9 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
           action changes only the exact fields shown after you approve its
           preview. Product creation stays draft-only, coupon actions stay
           disabled and hidden, and customer-group membership is never changed.
+          Inventory proposals affect only one exact tracked SKU at one exact
+          active location after a separate approval; they never bulk-adjust
+          stock.
         </p>
       </div>
     </section>
@@ -575,6 +614,7 @@ function fromProposal(proposal: Proposal): DraftResponse {
     versions: [],
     lastProductAction: null,
     lastDomainAction: null,
+    lastInventoryAction: null,
   };
 }
 
@@ -598,13 +638,18 @@ async function requestDraft(
 
 async function requestLiveAction(
   draftId: string,
-  domainAction: boolean,
+  actionType: "product" | "domain" | "inventory",
   body: Record<string, unknown>,
 ): Promise<{
   approval?: MinkActionApproval;
   result?: MinkActionResult;
 }> {
-  const endpoint = domainAction ? "action" : "product-action";
+  const endpoint =
+    actionType === "inventory"
+      ? "inventory-action"
+      : actionType === "domain"
+        ? "action"
+        : "product-action";
   const response = await fetch(`/api/mink/drafts/${draftId}/${endpoint}`, {
     method: "POST",
     cache: "no-store",
@@ -627,6 +672,12 @@ function actionPreviewFields(
   draftFields: Array<{ key: string; label: string }>,
 ) {
   if ("product" in approval) return draftFields;
+  if (isInventoryApproval(approval)) {
+    return MINK_INVENTORY_ACTION_FIELDS.map((key) => ({
+      key,
+      label: MINK_INVENTORY_FIELD_LABELS[key] ?? key.replaceAll("_", " "),
+    }));
+  }
   return domainActionFields(approval.toolName).map((key) => ({
     key,
     label: MINK_DOMAIN_FIELD_LABELS[key] ?? key.replaceAll("_", " "),
@@ -652,6 +703,7 @@ function actionHeading(kind: MinkDraftKind) {
   if (kind === "coupon_update") return "Update disabled coupon terms";
   if (kind === "customer_group_create") return "Create customer-group metadata";
   if (kind === "customer_group_update") return "Update customer-group metadata";
+  if (kind === "inventory_adjustment") return "Adjust one SKU at one location";
   return "Apply to the linked product";
 }
 
@@ -665,6 +717,9 @@ function actionScope(kind: MinkDraftKind) {
   if (kind === "customer_group_create" || kind === "customer_group_update") {
     return "Requires Users Manage and its operator kill switch. Only name, description and colour can change; membership is outside this action.";
   }
+  if (kind === "inventory_adjustment") {
+    return "Requires Inventory Manage and its independent operator kill switch. SKU, active location, signed quantity, resulting stock, reason and note are rechecked at approval; bulk changes are outside this action.";
+  }
   return "Requires Products Manage permission and a separate operator kill switch. Price, stock, status and publishing are outside this action.";
 }
 
@@ -672,6 +727,9 @@ function actionSuccessMessage(approval: MinkActionApproval) {
   if (approval.operation === "rollback")
     return "Approved safe rollback completed.";
   if ("product" in approval) return "Approved text applied to the product.";
+  if (isInventoryApproval(approval)) {
+    return "Approved inventory adjustment recorded for the exact SKU and location.";
+  }
   if (isCreateDomainTool(approval.toolName)) {
     return `Approved ${approval.resource.type.replace("_", " ")} created.`;
   }
@@ -681,7 +739,14 @@ function actionSuccessMessage(approval: MinkActionApproval) {
 function actionRemovedResource(approval: MinkActionApproval) {
   return (
     !("product" in approval) &&
+    !isInventoryApproval(approval) &&
     approval.operation === "rollback" &&
     isCreateDomainTool(approval.toolName)
   );
+}
+
+function isInventoryApproval(
+  approval: MinkActionApproval,
+): approval is MinkInventoryActionApproval {
+  return !("product" in approval) && approval.resource.type === "inventory";
 }

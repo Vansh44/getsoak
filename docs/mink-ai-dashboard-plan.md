@@ -1,6 +1,6 @@
 # Mink AI Dashboard Agent — Architecture and Delivery Plan
 
-> **Status:** Phases 0–4 are implemented in code. Phase 2 remains the invited
+> **Status:** Phases 0–4 and Phase 5A are implemented in code. Phase 2 remains the invited
 > read-only merchant beta. Phase 3 adds a separate, fail-closed operator opt-in
 > for private versioned drafts and atomic weighted credits through migration
 > `20260830_0040_mink_phase_3`. Phase 4A adds separately gated, explicitly
@@ -8,7 +8,10 @@
 > `20260830_0042_mink_phase_4a_product_actions`. Migration
 > `20260830_0043_mink_phase_4b_4d_actions` adds 4B unpublished draft-product
 > creation, 4C disabled/hidden coupon create/update, and 4D customer-group
-> metadata create/update. No inventory, order-status, publication, campaign,
+> metadata create/update. Migration
+> `20260831_0046_mink_phase_5a_inventory_actions` adds one independently gated,
+> explicitly approved tracked-SKU adjustment at one exact active location. No
+> bulk inventory, transfer, order-status, publication, campaign,
 > customer-contact, membership, bulk-price or arbitrary-code authority is present.
 >
 > **Plan date:** 2026-08-30
@@ -16,7 +19,7 @@
 > **Platform constraint:** Mink AI must run on Google Cloud Vertex AI / Gemini
 > Enterprise Agent Platform. OpenAI models are out of scope.
 
-### Implementation checkpoint — 2026-08-30
+### Implementation checkpoint — 2026-08-31
 
 The current Phase 0/1/2 read slice, Phase 3 drafting slice and complete Phase 4
 guarded-action slice now include:
@@ -919,6 +922,18 @@ Deliver in separate gates:
 5. campaign audience preview, sample, schedule and final send confirmation;
 6. bulk price changes with revenue-impact summary.
 
+**Implementation:** ✅ Phase 5A (item 1) is code-complete on 2026-08-31 behind
+the independent `adjust_inventory` operator gate. Gemini receives only an exact
+SKU/location checkpoint reader and private proposal tool; the authenticated
+browser endpoint is the sole executor. It rechecks tenant, Inventory Manage,
+active assigned location, tracking state, saved version, ten-minute approval,
+current `on_hand`/`reserved`/timestamp checkpoint and a ±1,000,000 bound. It
+refuses stock below zero or reserved quantity and atomically writes one
+`inventory_levels` row plus one `stock_movements` ledger row. Execution retries
+are idempotent and all terminal outcomes are audited. There is intentionally no
+automatic inventory rollback: a correction needs a new review against current
+physical stock. Items 2–6 remain unbuilt and separately gated.
+
 Exit criteria:
 
 - inventory actions preserve current location and stock invariants;
@@ -1213,32 +1228,35 @@ would move risk into production rather than remove work.
 
 ## 21. Immediate next sprint
 
-The next sprint should validate and safely roll out the complete Phase 4 before
-starting any Phase 5 domain:
+The next sprint should validate and safely roll out Phase 5A before starting
+Phase 5B bulk inventory:
 
-1. Apply migration `20260830_0043_mink_phase_4b_4d_actions` after 0042 in the
-   controlled staging database, then deploy the matching application code.
-2. Keep all seven action tools disabled initially. On one synthetic/demo store,
-   enable beta, drafting and one tool at a time to prove every kill switch is
-   independent and shuts down when either parent gate closes.
-3. Verify permission and tenant matrices for Products, Marketing and Users:
-   Manage can preview/execute; View cannot; another admin cannot use the first
-   admin's proposal/approval; another store learns nothing about the record.
-4. Exercise create/apply/rollback for a draft product, new disabled coupon and
-   empty customer group, plus update/rollback for disabled coupon terms and
-   group metadata. Diff every excluded column and relationship before/after.
-5. Prove unsafe rollback refusals by adding a variant/order line, using or
-   linking a coupon, and adding a group member/coupon link. No case may delete
-   an in-use record.
-6. Run concurrent-tab, expiry, idempotency, uniqueness, plan-downgrade and
-   kill-switch-between-preview-and-execute tests. Reconcile every terminal
-   approval to one immutable `mink_action_audit` outcome.
+1. Apply migration `20260831_0046_mink_phase_5a_inventory_actions` after 0045
+   in controlled staging, deploy the matching application code, and leave
+   `adjust_inventory` disabled for every merchant store.
+2. On one synthetic store, enable beta, drafting and only `adjust_inventory`.
+   Prove that the global, invitation, drafting and tool gates each independently
+   stop preview and execution, including a gate disabled between those steps.
+3. Verify Inventory View versus Manage, assigned versus inaccessible/inactive
+   locations, product versus variant SKUs, untracked SKUs and cross-store/admin
+   proposal and approval isolation.
+4. Exercise positive and negative adjustments, zero/malformed/over-limit input,
+   below-zero and below-reserved refusal, a previously absent inventory-level
+   row, and one exact movement-ledger record per successful approval.
+5. Race preview/execute against POS, order reservation, manual adjustment and a
+   second browser tab. Every stale checkpoint must conflict without changing
+   stock; duplicate execution must return the first result without a second
+   level change, movement, event or alert.
+6. Reconcile executed, expired and conflicted approvals to immutable audit
+   outcomes. Confirm no automatic rollback appears and correction requires a
+   new proposal against current stock.
 7. Run the 50 read cases plus all proposal/action regressions. The model tool
    manifest must contain proposal tools only; no live execute mutation is
    callable by Gemini.
-8. After four stable weeks and the Phase 4 exit criteria, begin Phase 5 as a
-   separate design/review. Inventory, orders, publishing, campaigns and bulk
-   price changes remain unavailable until those higher-risk gates exist.
+8. After four stable weeks and the Phase 5A exit criteria, design Phase 5B as a
+   separate bulk-inventory gate with capped rows, line-by-line preview and
+   partial-error reporting. Transfers, order status, publishing, campaigns and
+   bulk prices remain unavailable.
 
 The intended outcome is not “Gemini 3.7 answered impressively.” It is:
 

@@ -9,6 +9,7 @@ export const MINK_DRAFT_KINDS = [
   "coupon_update",
   "customer_group_create",
   "customer_group_update",
+  "inventory_adjustment",
 ] as const;
 
 export type MinkDraftKind = (typeof MINK_DRAFT_KINDS)[number];
@@ -223,6 +224,33 @@ export const MINK_DRAFT_CONFIG: Record<
   coupon_update: couponActionConfig("Disabled coupon update"),
   customer_group_create: customerGroupActionConfig("New customer group"),
   customer_group_update: customerGroupActionConfig("Customer-group update"),
+  inventory_adjustment: {
+    label: "Inventory adjustment",
+    expectedCredits: 1,
+    fields: [
+      {
+        key: "quantity_change",
+        label: "Quantity change (+ add, - remove)",
+        required: true,
+        multiline: false,
+        maxLength: 8,
+      },
+      {
+        key: "reason",
+        label: "Reason",
+        required: true,
+        multiline: false,
+        maxLength: 20,
+      },
+      {
+        key: "note",
+        label: "Audit note",
+        required: false,
+        multiline: true,
+        maxLength: 200,
+      },
+    ],
+  },
 };
 
 function couponActionConfig(label: string) {
@@ -350,8 +378,36 @@ export function normalizeMinkDraftContent(
     }
     result[field.key] = text;
   }
+  if (kind === "inventory_adjustment") {
+    const quantityChange = Number(result.quantity_change);
+    if (
+      !Number.isInteger(quantityChange) ||
+      quantityChange === 0 ||
+      Math.abs(quantityChange) > 1_000_000
+    ) {
+      throw new Error(
+        "Quantity change must be a non-zero whole number between -1,000,000 and 1,000,000.",
+      );
+    }
+    if (!INVENTORY_ADJUSTMENT_REASONS.includes(result.reason as never)) {
+      throw new Error(
+        `Reason must be one of: ${INVENTORY_ADJUSTMENT_REASONS.join(", ")}.`,
+      );
+    }
+    if (result.reason === "other" && !result.note) {
+      throw new Error("An audit note is required when the reason is other.");
+    }
+  }
   return result;
 }
+
+export const INVENTORY_ADJUSTMENT_REASONS = [
+  "correction",
+  "received",
+  "damaged",
+  "found",
+  "other",
+] as const;
 
 export function minkDraftFields(
   kind: MinkDraftKind,
@@ -375,46 +431,52 @@ export function estimateMinkDraftIntent(message: string): {
   const value = message.trim().toLocaleLowerCase("en-IN");
   if (
     !value ||
-    !/\b(draft|write|rewrite|create|add|update|edit|generate)\b/.test(value)
+    !/\b(draft|write|rewrite|create|add|update|edit|generate|adjust|set|restock|remove)\b/.test(
+      value,
+    )
   ) {
     return null;
   }
   const kind: MinkDraftKind | null =
-    /\b(coupon|campaign|promo).*\b(email|mail)|\bemail.*\b(coupon|campaign|promo)/.test(
+    /\b(adjust|set|restock|remove|add|update)\b.*\b(stock|inventory|units?)\b|\b(stock|inventory)\b.*\b(adjust|set|restock|remove|add|update)\b/.test(
       value,
     )
-      ? "coupon_email"
-      : /\b(create|add|new)\b.*\b(customer )?group\b|\b(customer )?group\b.*\b(create|add|new)\b/.test(
+      ? "inventory_adjustment"
+      : /\b(coupon|campaign|promo).*\b(email|mail)|\bemail.*\b(coupon|campaign|promo)/.test(
             value,
           )
-        ? "customer_group_create"
-        : /\b(update|edit|rewrite)\b.*\b(customer )?group\b|\b(customer )?group\b.*\b(update|edit|rewrite)\b/.test(
+        ? "coupon_email"
+        : /\b(create|add|new)\b.*\b(customer )?group\b|\b(customer )?group\b.*\b(create|add|new)\b/.test(
               value,
             )
-          ? "customer_group_update"
-          : /\b(create|add|new)\b.*\b(coupon|promo code)\b|\b(coupon|promo code)\b.*\b(create|add|new)\b/.test(
+          ? "customer_group_create"
+          : /\b(update|edit|rewrite)\b.*\b(customer )?group\b|\b(customer )?group\b.*\b(update|edit|rewrite)\b/.test(
                 value,
               )
-            ? "coupon_create"
-            : /\b(update|edit)\b.*\b(coupon|promo code)\b|\b(coupon|promo code)\b.*\b(update|edit)\b/.test(
+            ? "customer_group_update"
+            : /\b(create|add|new)\b.*\b(coupon|promo code)\b|\b(coupon|promo code)\b.*\b(create|add|new)\b/.test(
                   value,
                 )
-              ? "coupon_update"
-              : /\b(create|add|new)\b.*\bproduct\b|\bproduct\b.*\b(create|add|new)\b/.test(
+              ? "coupon_create"
+              : /\b(update|edit)\b.*\b(coupon|promo code)\b|\b(coupon|promo code)\b.*\b(update|edit)\b/.test(
                     value,
-                  ) && !/\b(description|copy|seo|meta)\b/.test(value)
-                ? "product_create"
-                : /\b(customer|shopper).*\b(message|reply)|\bmessage.*\b(customer|shopper)/.test(
+                  )
+                ? "coupon_update"
+                : /\b(create|add|new)\b.*\bproduct\b|\bproduct\b.*\b(create|add|new)\b/.test(
                       value,
-                    )
-                  ? "customer_message"
-                  : /\b(blog|article|post)\b/.test(value)
-                    ? "blog"
-                    : /\b(seo|meta title|meta description)\b/.test(value)
-                      ? "product_seo"
-                      : /\b(product|description|copy)\b/.test(value)
-                        ? "product_description"
-                        : null;
+                    ) && !/\b(description|copy|seo|meta)\b/.test(value)
+                  ? "product_create"
+                  : /\b(customer|shopper).*\b(message|reply)|\bmessage.*\b(customer|shopper)/.test(
+                        value,
+                      )
+                    ? "customer_message"
+                    : /\b(blog|article|post)\b/.test(value)
+                      ? "blog"
+                      : /\b(seo|meta title|meta description)\b/.test(value)
+                        ? "product_seo"
+                        : /\b(product|description|copy)\b/.test(value)
+                          ? "product_description"
+                          : null;
   if (!kind) return null;
   const config = MINK_DRAFT_CONFIG[kind];
   return { kind, label: config.label, expectedCredits: config.expectedCredits };

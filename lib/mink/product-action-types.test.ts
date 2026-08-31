@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  MINK_ACTION_TOOL_LABELS,
   actionFieldsForTool,
   actionToolForDraftKind,
   draftContentForAction,
+  isMinkActionTool,
+  isMinkDomainActionTool,
 } from "./product-action-types";
 
 describe("Mink Phase 4A product action contract", () => {
@@ -40,5 +43,13 @@ describe("Mink Phase 4A product action contract", () => {
         images: "[]",
       }),
     ).toEqual({ seo_title: "Tea", seo_description: "Fresh tea." });
+  });
+
+  it("keeps the Phase 5A inventory gate independent from Phase 4 domain tools", () => {
+    expect(isMinkActionTool("adjust_inventory")).toBe(true);
+    expect(isMinkDomainActionTool("adjust_inventory")).toBe(false);
+    expect(MINK_ACTION_TOOL_LABELS.adjust_inventory).toBe(
+      "Single-SKU inventory adjustments",
+    );
   });
 });

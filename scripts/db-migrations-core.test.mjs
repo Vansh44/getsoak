@@ -22,7 +22,7 @@ describe("database migration controls", () => {
   it("loads the repository manifest and checksums the enrolled SQL", async () => {
     const loaded = await loadManifest();
     expect(loaded.baseline.id).toBe("baseline:cloudsql-2026-08-14");
-    expect(loaded.migrations).toHaveLength(45);
+    expect(loaded.migrations).toHaveLength(46);
     expect(loaded.migrations[0]).toMatchObject({
       id: "20260814_0001_logistics_shiprocket",
       transaction: true,
@@ -570,6 +570,19 @@ describe("database migration controls", () => {
       "Use the register on a phone or portrait tablet",
     );
     expect(loaded.migrations[44].sql).toContain("separate full-width views");
+    expect(loaded.migrations[45]).toMatchObject({
+      id: "20260831_0046_mink_phase_5a_inventory_actions",
+      transaction: true,
+      requires: ["20260831_0045_pos_mobile_register_help"],
+    });
+    expect(loaded.migrations[45].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[45].sql).toContain("adjust_inventory");
+    expect(loaded.migrations[45].sql).toContain(
+      "mink_action_approvals_inventory_target_check",
+    );
+    expect(loaded.migrations[45].sql).toContain(
+      "writes the inventory level and stock-movement ledger in one database transaction",
+    );
     const repairChecks = [
       loaded.migrations[22].applyVerify,
       loaded.migrations[22].adoptVerify,

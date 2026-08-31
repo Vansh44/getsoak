@@ -1,14 +1,22 @@
 import "server-only";
 
-import { and, count, eq } from "drizzle-orm";
-import { coupons, products, userGroups } from "@/drizzle/schema";
+import { and, count, eq, sql } from "drizzle-orm";
+import {
+  coupons,
+  inventoryLevels,
+  products,
+  productVariants,
+  userGroups,
+} from "@/drizzle/schema";
 import { withUser } from "@/lib/db/client";
 import { slugify } from "@/lib/slug";
 import { limitsFor } from "@/lib/plans";
 import { createMinkDraftProposal } from "../drafts";
+import { INVENTORY_ADJUSTMENT_REASONS } from "../draft-types";
 import { MinkToolInputError } from "../errors";
 import type { MinkActorContext, MinkArtifact } from "../types";
 import type { MinkTool } from "./registry";
+import { resolveMinkLocation } from "./location-scope";
 
 const draftingAvailable = (actor: MinkActorContext) =>
   actor.draftingEnabled === true;
@@ -566,6 +574,152 @@ export const proposeCustomerGroupUpdateTool: MinkTool = {
   },
 };
 
+export const getInventoryItemForAdjustmentTool: MinkTool = {
+  declaration: {
+    name: "get_inventory_item_for_adjustment",
+    description:
+      "Read one exact tracked SKU at one exact accessible active location before proposing an inventory adjustment. Use an exact SKU returned by a trusted StoreMink tool and a visible location name; never use IDs. Returns an opaque inventory_snapshot that must be passed unchanged.",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {
+        product_sku: { type: "string", minLength: 1, maxLength: 100 },
+        location_name: { type: "string", minLength: 1, maxLength: 100 },
+      },
+      required: ["product_sku", "location_name"],
+      additionalProperties: false,
+    },
+  },
+  permission: { section: "inventory", action: "view" },
+  available: draftingAvailable,
+  timeoutMs: 7_000,
+  async execute(actor, args) {
+    const target = await readInventoryAdjustmentTarget(
+      actor,
+      readString(args.product_sku, "product_sku", 100),
+      args.location_name,
+    );
+    return {
+      product: target.productName,
+      variant: target.variantName,
+      sku: target.sku,
+      location: target.locationName,
+      on_hand: target.onHand,
+      reserved: target.reserved,
+      available: target.onHand - target.reserved,
+      inventory_snapshot: await inventorySnapshot(actor, target),
+      dataAsOf: new Date().toISOString(),
+    };
+  },
+};
+
+export const proposeInventoryAdjustmentTool: MinkTool = {
+  declaration: {
+    name: "propose_inventory_adjustment",
+    description:
+      "Create a charged private proposal to add/remove a bounded whole-number quantity or set an absolute on-hand target for one exact tracked SKU at one exact location. First call get_inventory_item_for_adjustment and pass its inventory_snapshot unchanged. Supply exactly one of quantity_change or target_quantity. This never changes stock; a human must save, review and approve the exact adjustment separately.",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {
+        product_sku: { type: "string", minLength: 1, maxLength: 100 },
+        location_name: { type: "string", minLength: 1, maxLength: 100 },
+        inventory_snapshot: { type: "string", minLength: 64, maxLength: 64 },
+        quantity_change: {
+          type: "integer",
+          minimum: -1_000_000,
+          maximum: 1_000_000,
+          description:
+            "Signed non-zero quantity: positive adds, negative removes.",
+        },
+        target_quantity: {
+          type: "integer",
+          minimum: 0,
+          maximum: 2_147_483_647,
+          description:
+            "Optional absolute resulting on-hand quantity. Supply exactly one of target_quantity or quantity_change.",
+        },
+        reason: {
+          type: "string",
+          enum: [...INVENTORY_ADJUSTMENT_REASONS],
+        },
+        note: { type: "string", maxLength: 200 },
+      },
+      required: [
+        "product_sku",
+        "location_name",
+        "inventory_snapshot",
+        "reason",
+      ],
+      additionalProperties: false,
+    },
+  },
+  permission: { section: "inventory", action: "manage" },
+  available: draftingAvailable,
+  timeoutMs: 8_000,
+  artifact: proposalArtifact,
+  async execute(actor, args) {
+    const sku = readString(args.product_sku, "product_sku", 100);
+    const target = await readInventoryAdjustmentTarget(
+      actor,
+      sku,
+      args.location_name,
+    );
+    const snapshot = readString(
+      args.inventory_snapshot,
+      "inventory_snapshot",
+      64,
+    );
+    if (snapshot !== (await inventorySnapshot(actor, target))) {
+      throw new MinkToolInputError(
+        "The SKU, location or stock checkpoint changed or was not checked. Read the inventory item again before proposing an adjustment.",
+      );
+    }
+    const quantityChange = resolveInventoryQuantityChange(
+      args.quantity_change,
+      args.target_quantity,
+      target.onHand,
+    );
+    const reason = readString(args.reason, "reason", 20);
+    if (!INVENTORY_ADJUSTMENT_REASONS.includes(reason as never)) {
+      throw new MinkToolInputError(
+        `reason must be one of: ${INVENTORY_ADJUSTMENT_REASONS.join(", ")}.`,
+      );
+    }
+    const note = readOptionalString(args.note, "note", 200);
+    if (reason === "other" && !note) {
+      throw new MinkToolInputError("note is required when reason is other.");
+    }
+    const resulting = target.onHand + quantityChange;
+    if (resulting < 0) {
+      throw new MinkToolInputError(
+        `This would reduce ${target.sku} below zero at ${target.locationName}. Propose a smaller removal.`,
+      );
+    }
+    if (resulting < target.reserved) {
+      throw new MinkToolInputError(
+        `This would reduce ${target.sku} below its ${target.reserved} reserved units at ${target.locationName}. Resolve reservations in the manual inventory workflow first.`,
+      );
+    }
+    return proposalOutput(
+      await createMinkDraftProposal({
+        actor,
+        kind: "inventory_adjustment",
+        title: `Adjust ${target.sku} at ${target.locationName}`,
+        destinationType: "inventory",
+        destinationId: target.productId,
+        destinationLocationId: target.locationId,
+        destinationVariantId: target.variantId,
+        destinationLabel: `${target.productName}${target.variantName ? ` · ${target.variantName}` : ""} (${target.sku}) at ${target.locationName}`,
+        destinationPath: `/dashboard/inventory?location=${encodeURIComponent(target.locationId)}`,
+        content: {
+          quantity_change: String(quantityChange),
+          reason,
+          note,
+        },
+      }),
+    );
+  },
+};
+
 export const minkDraftTools = [
   proposeCurrentProductDescriptionTool,
   proposeCurrentProductSeoTool,
@@ -579,7 +733,170 @@ export const minkDraftTools = [
   getCustomerGroupForDraftTool,
   proposeCustomerGroupCreateTool,
   proposeCustomerGroupUpdateTool,
+  getInventoryItemForAdjustmentTool,
+  proposeInventoryAdjustmentTool,
 ];
+
+async function readInventoryAdjustmentTarget(
+  actor: MinkActorContext,
+  sku: string,
+  locationValue: unknown,
+) {
+  const location = await resolveMinkLocation(actor, locationValue);
+  if (!location.selectedId) {
+    throw new MinkToolInputError(
+      "An exact accessible location_name is required for an inventory adjustment.",
+    );
+  }
+  const locationId = location.selectedId;
+  return withActor(actor, async (db) => {
+    const variantRows = await db
+      .select({
+        productId: products.id,
+        productName: products.name,
+        productTracked: products.trackInventory,
+        variantId: productVariants.id,
+        variantName: productVariants.name,
+        sku: productVariants.sku,
+        variantTracked: productVariants.trackInventory,
+      })
+      .from(productVariants)
+      .innerJoin(products, eq(products.id, productVariants.productId))
+      .where(
+        and(
+          eq(productVariants.storeId, actor.storeId),
+          eq(products.storeId, actor.storeId),
+          eq(productVariants.sku, sku),
+        ),
+      )
+      .limit(1);
+    const productRows = await db
+      .select({
+        productId: products.id,
+        productName: products.name,
+        sku: products.sku,
+        productTracked: products.trackInventory,
+        hasVariants: sql<boolean>`exists (
+          select 1 from public.product_variants pv
+          where pv.product_id = ${products.id} and pv.store_id = ${actor.storeId}::uuid
+        )`,
+      })
+      .from(products)
+      .where(and(eq(products.storeId, actor.storeId), eq(products.sku, sku)))
+      .limit(1);
+    if (variantRows[0] && productRows[0]) {
+      throw new MinkToolInputError(
+        "That SKU is ambiguous between a product and a variant. Fix the duplicate SKU before using Mink inventory actions.",
+      );
+    }
+    const variant = variantRows[0];
+    const product = productRows[0];
+    if (!variant && !product) {
+      throw new MinkToolInputError(
+        "That exact SKU was not found in the current store. Search products first and use the returned SKU.",
+      );
+    }
+    if (product?.hasVariants) {
+      throw new MinkToolInputError(
+        "That product has variants. Choose one exact variant SKU for the inventory adjustment.",
+      );
+    }
+    if (
+      (variant && (!variant.productTracked || !variant.variantTracked)) ||
+      (product && !product.productTracked)
+    ) {
+      throw new MinkToolInputError(
+        "That SKU is not inventory-tracked, so Mink cannot adjust its stock.",
+      );
+    }
+    const productId = variant?.productId ?? product!.productId;
+    const variantId = variant?.variantId ?? null;
+    const levels = await db
+      .select({
+        onHand: inventoryLevels.onHand,
+        reserved: inventoryLevels.reserved,
+        updatedAt: inventoryLevels.updatedAt,
+      })
+      .from(inventoryLevels)
+      .where(
+        and(
+          eq(inventoryLevels.storeId, actor.storeId),
+          eq(inventoryLevels.locationId, locationId),
+          eq(inventoryLevels.productId, productId),
+          variantId
+            ? eq(inventoryLevels.variantId, variantId)
+            : sql`${inventoryLevels.variantId} is null`,
+        ),
+      )
+      .limit(1);
+    return {
+      productId,
+      variantId,
+      productName: variant?.productName ?? product!.productName,
+      variantName: variant?.variantName ?? null,
+      sku: variant?.sku ?? product!.sku!,
+      locationId,
+      locationName: location.label,
+      onHand: levels[0]?.onHand ?? 0,
+      reserved: levels[0]?.reserved ?? 0,
+      updatedAt: levels[0]?.updatedAt ?? null,
+    };
+  });
+}
+
+function inventorySnapshot(
+  actor: MinkActorContext,
+  target: Awaited<ReturnType<typeof readInventoryAdjustmentTarget>>,
+) {
+  return sha256([
+    actor.storeId,
+    actor.adminId,
+    target.productId,
+    target.variantId,
+    target.locationId,
+    target.sku,
+    target.onHand,
+    target.reserved,
+    target.updatedAt,
+  ]);
+}
+
+function resolveInventoryQuantityChange(
+  quantityChangeValue: unknown,
+  targetQuantityValue: unknown,
+  currentOnHand: number,
+) {
+  const hasChange = quantityChangeValue !== undefined;
+  const hasTarget = targetQuantityValue !== undefined;
+  if (hasChange === hasTarget) {
+    throw new MinkToolInputError(
+      "Supply exactly one of quantity_change or target_quantity.",
+    );
+  }
+  const quantity = hasTarget
+    ? Number(targetQuantityValue) - currentOnHand
+    : Number(quantityChangeValue);
+  if (
+    hasTarget &&
+    (!Number.isInteger(Number(targetQuantityValue)) ||
+      Number(targetQuantityValue) < 0 ||
+      Number(targetQuantityValue) > 2_147_483_647)
+  ) {
+    throw new MinkToolInputError(
+      "target_quantity must be a non-negative whole number in the supported range.",
+    );
+  }
+  if (
+    !Number.isInteger(quantity) ||
+    quantity === 0 ||
+    Math.abs(quantity) > 1_000_000
+  ) {
+    throw new MinkToolInputError(
+      "The resulting quantity change must be a non-zero whole number between -1,000,000 and 1,000,000.",
+    );
+  }
+  return quantity;
+}
 
 async function readCoupon(actor: MinkActorContext, code: string) {
   const rows = await withActor(actor, (db) =>

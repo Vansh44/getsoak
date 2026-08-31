@@ -25,7 +25,38 @@ describe("Mink draft contracts", () => {
       coupon_update: 1,
       customer_group_create: 1,
       customer_group_update: 1,
+      inventory_adjustment: 1,
     });
+  });
+
+  it("bounds single-SKU inventory proposals and requires accountable reasons", () => {
+    expect(
+      normalizeMinkDraftContent("inventory_adjustment", {
+        quantity_change: " -12 ",
+        reason: "damaged",
+        note: "Counted by the warehouse manager.",
+        product_id: "must be ignored",
+      }),
+    ).toEqual({
+      quantity_change: "-12",
+      reason: "damaged",
+      note: "Counted by the warehouse manager.",
+    });
+    for (const quantity_change of ["0", "1.5", "1000001", "-1000001"]) {
+      expect(() =>
+        normalizeMinkDraftContent("inventory_adjustment", {
+          quantity_change,
+          reason: "correction",
+        }),
+      ).toThrow("non-zero whole number");
+    }
+    expect(() =>
+      normalizeMinkDraftContent("inventory_adjustment", {
+        quantity_change: "2",
+        reason: "other",
+        note: "",
+      }),
+    ).toThrow("audit note is required");
   });
 
   it("normalizes only the fields allowed by each draft kind", () => {
@@ -78,5 +109,8 @@ describe("Mink draft contracts", () => {
       kind: "customer_group_create",
       expectedCredits: 1,
     });
+    expect(
+      estimateMinkDraftIntent("Adjust stock for SKU TEA-500 by -2 in Delhi"),
+    ).toMatchObject({ kind: "inventory_adjustment", expectedCredits: 1 });
   });
 });

@@ -156,6 +156,45 @@ describe("Mink read-tool declarations", () => {
     });
     expect(freeCustomerTools).not.toContain("propose_customer_group_create");
     expect(freeCustomerTools).toContain("propose_customer_group_update");
+
+    const inventoryTools = names({
+      draftingEnabled: true,
+      permissions: { inventory: ["view", "manage"] },
+    });
+    expect(inventoryTools).toEqual([
+      "list_low_stock",
+      "get_inventory_item_for_adjustment",
+      "propose_inventory_adjustment",
+    ]);
+    const proposal = minkReadToolRegistry
+      .declarationsFor({
+        ...ACTOR,
+        isSuperadmin: false,
+        draftingEnabled: true,
+        permissions: { inventory: ["view", "manage"] },
+      })
+      .find((tool) => tool.name === "propose_inventory_adjustment");
+    expect(proposal?.parametersJsonSchema).toMatchObject({
+      required: expect.arrayContaining([
+        "product_sku",
+        "location_name",
+        "inventory_snapshot",
+        "reason",
+      ]),
+      additionalProperties: false,
+    });
+    expect(proposal?.parametersJsonSchema.properties).not.toHaveProperty(
+      "product_id",
+    );
+    expect(proposal?.parametersJsonSchema.properties).not.toHaveProperty(
+      "location_id",
+    );
+    expect(proposal?.parametersJsonSchema.properties).toHaveProperty(
+      "quantity_change",
+    );
+    expect(proposal?.parametersJsonSchema.properties).toHaveProperty(
+      "target_quantity",
+    );
   });
 
   it("rejects direct calls to every hidden business tool before data access", async () => {

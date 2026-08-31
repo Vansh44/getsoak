@@ -18,6 +18,10 @@ describe("Mink system prompt document", () => {
     );
     expect(template).toContain("{{available_tool_names}}");
     expect(template).toContain("{{brand_voice_or_default}}");
+    expect(template).toContain(
+      "one exact visible SKU, one exact accessible active location",
+    );
+    expect(template).toContain("There is no model tool to approve");
   });
 
   it("renders only trusted actor fields and permission-filtered tool names", () => {

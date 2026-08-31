@@ -3446,6 +3446,55 @@ detail read lands: first cancel/collect it, then repeat by taking a deposit.
 the tender pad for the newly reduced balance. Status and money never come from
 different snapshots on the same panel.
 
+## 11i. Mink Phase 5A inventory approvals
+
+These cases cover the only inventory mutation Mink can currently propose. Run
+them in a synthetic store after migration
+`20260831_0046_mink_phase_5a_inventory_actions`; keep the independent
+`adjust_inventory` operator gate off outside the controlled test store.
+
+**PS-MINK-5A.1 ★ — One proposal means one physical shelf and one SKU**
+Ask Mink to add a signed whole-number quantity—or set an absolute target—for an
+exact tracked product or variant SKU at an exact active location. **Expect:** Gemini first reads the
+trusted SKU/location checkpoint and produces a private proposal. It accepts no
+store, product, variant or location ID from the prompt. Saving the proposal does
+not change stock. An absolute target is converted to a signed change only from
+that exact checkpoint. Parent SKUs with variants, untracked SKUs, missing locations,
+inactive locations, ambiguous names/SKUs and inaccessible assigned locations
+are refused without falling back to another shelf.
+
+**PS-MINK-5A.2 ★ — Approval is bound to current stock and reservations**
+Save a proposal and select **Review exact change**. **Expect:** the preview names
+the SKU and location and shows current on-hand, available, signed delta,
+resulting on-hand, reason and note. A removal that would make stock negative or
+lower than reserved quantity is refused. Zero, fractional and changes outside
+±1,000,000 are refused. Inventory View can read but only Inventory Manage can
+preview or execute.
+
+**PS-MINK-5A.3 ★ — A stale physical-stock decision never overwrites reality**
+After preview, adjust the same shelf through POS, an order/reservation, the
+dashboard or another tab; then approve the old preview. **Expect:** Mink records
+a conflict and makes no stock movement. The same applies if the saved proposal,
+tracking state, location activity/assignment or per-store tool gate changes.
+An approval older than ten minutes expires without a stock write.
+
+**PS-MINK-5A.4 ★ — Level and ledger commit together exactly once**
+Approve a valid proposal, including a case where the SKU has no existing
+`inventory_levels` row at that location. **Expect:** the level and exactly one
+`stock_movements` row commit in one transaction, aggregates/caches refresh and
+the standard inventory event/low-stock check runs after commit. Replaying the
+approval returns the completed result without another level change, ledger row,
+event, alert or AI-credit charge. Actor, store, product, optional variant,
+location, proposal version and before/after checkpoints are present in the
+append-only Mink audit.
+
+**PS-MINK-5A.5 — Physical stock corrections require a fresh decision**
+After execution ask Mink to undo it, then ask for a transfer or bulk adjustment.
+**Expect:** no automatic rollback is offered because physical stock may have
+moved. Mink may create a new inverse single-SKU proposal after reading current
+stock. Transfers, reservations, bulk inventory and multi-location writes remain
+outside Phase 5A.
+
 ## 12. Known gaps
 
 Real and deliberate, so nobody files them as bugs:
