@@ -157,8 +157,13 @@ External Application Load Balancer + Certificate Manager wildcard cert:
 1. **Certificate Manager**: a Google-managed cert for `storemink.com` **and**
    `*.storemink.com` via **DNS authorization** (add the CNAME it gives you).
 2. **Serverless NEG** → the `storemink-web` Cloud Run service.
-3. **Backend service** → NEG; **URL map** → backend; **target HTTPS proxy** (attach the cert); **global forwarding rule** (reserve a static IP).
-4. **DNS**: point `storemink.com` and `*.storemink.com` A/AAAA at the LB IP.
+3. **Backend service** → NEG; **URL map** → backend; **target HTTPS proxy** (attach the cert); **global forwarding rule** on port 443 (reserve a static IP).
+4. **HTTP redirect frontend** on the same static IP: a redirect-only URL map
+   (`httpsRedirect: true`, `PERMANENT_REDIRECT`, `stripQuery: false`), target
+   HTTP proxy, and `EXTERNAL_MANAGED` global forwarding rule on port 80. This
+   preserves the host, path, and query while returning 308, so a bare address
+   such as `pos.storemink.com` upgrades to HTTPS before it reaches Cloud Run.
+5. **DNS**: point `storemink.com` and `*.storemink.com` A/AAAA at the LB IP.
 
 Keep Vercel live throughout; flip DNS only when curl tests pass. **Rollback = revert DNS to Vercel.**
 

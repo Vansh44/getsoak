@@ -58,6 +58,13 @@ Every request belongs to exactly one store, resolved from the **Host header**.
 | `{slug}.storemink.com`, `{slug}.localhost`           | **Store subdomain** — storefront + `/dashboard` + `/auth` served directly                                         |
 | Anything else                                        | **Custom domain** — must have `settings.custom_domain_verified === true` to resolve                               |
 
+In production, the Google Cloud External Application Load Balancer owns both
+entry ports on the same static IP. Port 80 is a redirect-only frontend that
+returns a permanent 308 to the identical host, path, and query on HTTPS; port
+443 continues through the certificate map and serverless backend. Therefore a
+bare address such as `pos.storemink.com` is upgraded before the request reaches
+`proxy.ts` or Cloud Run.
+
 `proxy.ts` also gates auth: `/dashboard` requires a valid **Firebase session
 cookie** (`sm_session`; redirect to `/auth/login`), enforces
 `force_password_reset` → `/auth/set-password`, and sends POS staff
@@ -262,7 +269,9 @@ wholesip/
 │   │   │                      # with confirmed deletion, persisted drag/keyboard width,
 │   │   │                      # Help-matched robot identity and auto-growing composer;
 │   │   │                      # maximize is a shell-level viewport takeover above the
-│   │   │                      # dashboard topbar, navigation and page content.
+│   │   │                      # dashboard topbar, navigation and page content. Phones use
+│   │   │                      # one dynamic-viewport full-screen surface, history closed by
+│   │   │                      # default, a 16px no-zoom composer and one contained scroller.
 │   │   ├── mink-answer.tsx    # Safe React-rendered headings/lists/tables/emphasis/code plus
 │   │   │                      # allowlisted dashboard/Help links; no model HTML is executed.
 │   │   ├── mink-artifacts.tsx # Permission-safe metric/catalog/order/product/inventory/source cards
@@ -540,6 +549,8 @@ wholesip/
 │   │   ├── notification-actions.ts # ★ Notifications (§22): inbox + unread count
 │   │   │                      # (the bell polls it), mark read/all-read/archive,
 │   │   │                      # activity feed, preference get/save and delivery retry.
+│   │   │                      # The dashboard bell panel is viewport-guttered on phones
+│   │   │                      # and retains bell-edge alignment from `sm` upward.
 │   │   │                      # Tested across recipient/host scoping, permissions,
 │   │   │                      # validation, writes, email safety and dead-letter recovery.
 │   │   │                      # Scope = HOST-derived (store, or platform when
@@ -1479,6 +1490,8 @@ wholesip/
 │                              # sender/brand snapshots and schedule-aware email claiming;
 │                              # 0054 adds Phase 5F draft/action allowlists, atomic price target
 │                              # constraints, variant parent-version trigger and Help guidance;
+│                              # 0055 documents automatic POS HTTP→HTTPS entry; 0056 documents
+│                              # the phone-safe Mink full-screen/scroll/composer behavior;
 │                              # missing/draft/empty guide drift is repaired before publication.
 │                              # It follows the 0049/0050 UX migrations.
 ├── scripts/
@@ -2909,6 +2922,13 @@ template; `lib/mink/system-prompt.ts` reads and validates its markers, fence and
 required placeholders before injecting only trusted actor/tool context. Next
 output tracing and the narrow Docker-context exception ship that Markdown file
 with the standalone server.
+On phones, the Home prompt and topbar entry both resolve to the same full-screen
+Mink workspace. Its recent-conversation sidebar starts closed instead of taking
+an in-flow 288 px column, its 16 px composer avoids iOS focus zoom, and the
+message list owns vertical scrolling while the dashboard underneath is locked.
+The compact drawer uses `100dvh`/`100vw`, so browser chrome or a boundary swipe
+cannot expose and move the dashboard behind it. Tablet/desktop history,
+resizable drawer and full-view takeover behavior remain unchanged.
 When invitation-only rollout is explicitly disabled, reads become available to
 all stores but the existing store row still controls the independent drafting
 opt-in; disabling the invitation boundary never discards a store's operator-set
@@ -3448,7 +3468,12 @@ the trusted `store_id`, and direct customer PII is minimized/masked.
       and remain operator-editable; POS documentation is not duplicated in a
       static route. Forward-only migration
       `20260831_0045_pos_mobile_register_help` adds the phone and portrait-tablet
-      Products/Cart workflow to the register customization guide.
+      Products/Cart workflow to the register customization guide. Forward-only
+      migration `20260902_0055_pos_https_entry_help` explains the load
+      balancer's bare-address HTTPS upgrade in the POS overview and
+      troubleshooting guides; `20260902_0057_mobile_pos_notification_help`
+      documents the touch-safe POS viewport/focus behavior and phone-aligned
+      dashboard notification inbox.
     - **Merchant Help coverage baseline (2026-08-26):** migrations
       `20260826_0019_getting_started_account_help` through
       `20260826_0024_marketing_communications_help` upsert 81 guide records
@@ -3521,7 +3546,10 @@ the trusted `store_id`, and direct customer PII is minimized/masked.
     The public product site is separately served at **`pos.storemink.com`** by
     rewriting into `app/platform/pos`; `pos` is reserved from merchant signup,
     uses its own canonical/robots/sitemap, and the daily SEO reconciliation job
-    submits that sitemap alongside the apex, help and themes hosts.
+    submits that sitemap alongside the apex, help and themes hosts. Production
+    port 80 permanently redirects the same host/path/query to HTTPS before this
+    routing runs, so entering the bare product or merchant POS address works
+    without manually typing the scheme.
     `app/platform/pos/structured-data.ts` emits a connected Organization +
     WebSite + SoftwareApplication graph (visible feature list and the live Pro
     price included), so the product host resolves to StoreMink's shared company
@@ -3966,9 +3994,21 @@ the trusted `store_id`, and direct customer PII is minimized/masked.
         `(hover: none) and (pointer: coarse)`) switches it off there;
         `autoFocus` is gone for the same reason. The query pairs `hover: none`
         WITH coarse so a touchscreen laptop — which has a real keyboard — keeps
-        the fast path. It reaches BEHAVIOUR only, never rendered markup: the
-        SSR snapshot is `false`, so a placeholder or class keyed off it would
-        be a hydration mismatch on the exact devices it targets.
+        the fast path. The live media query is rechecked at the moment focus is
+        requested because the hydration snapshot is initially `false`; relying
+        on that snapshot alone gives a phone one desktop-style focus before the
+        touch state settles, which is enough to summon the keyboard. Desktop
+        focus uses `preventScroll`. The query reaches BEHAVIOUR only, never
+        rendered markup: a placeholder or class keyed off it would be a
+        hydration mismatch on the exact devices it targets.
+      - **★ PHONE FIELDS NEVER TRIGGER IOS FOCUS ZOOM.** `pos.css` enforces a
+        16 px editable-field size on touch-primary hardware, the Sell search
+        flex item may shrink below its long placeholder/camera control, and the
+        POS root is capped to `100vw` with horizontal overflow hidden. Products
+        and Cart are the named inertial scroll areas with vertical overscroll
+        containment, so their boundary swipe does not move or expose the page
+        shell. This applies to checkout, discounts and other POS fields too,
+        not only catalogue search.
       - **★ SO A SCAN MUST WORK WITH NOTHING FOCUSED.** Turning sticky focus
         off would otherwise cost an iPad + Bluetooth-scanner shop — a very
         ordinary setup — its scanner, silently. `createKeyboardWedge()` (pure,
@@ -5334,6 +5374,12 @@ the trusted `store_id`, and direct customer PII is minimized/masked.
       merchant). An empty database behaves exactly like the code defaults.
       Console at **Settings → Notifications**, gated on the `notifications`
       section; personal opt-outs at `…/notifications/me`.
+    - **THE PHONE BELL IS VIEWPORT-ALIGNED.** Below `sm`, the merchant inbox is
+      fixed between 12 px screen gutters with a dynamic-viewport height cap and
+      its own contained list scroll. It is not right-aligned to the bell there:
+      a 380 px panel anchored to a bell near the right edge extends past the
+      left side of a 390 px screen. From `sm` upward it retains the compact
+      bell-edge dropdown.
     - **EVERY registry entry HAS AN EMITTER — CI-enforced.**
       `lib/notifications/coverage.test.ts` fails unless each key is emitted from
       `app/`/`lib/` or listed in `PENDING` with the unbuilt feature it waits on.

@@ -51,7 +51,7 @@ vi.mock("./parked-panel", () => ({ ParkedPanel: () => null }));
 vi.mock("./receipt-overlay", () => ({ ReceiptOverlay: () => null }));
 vi.mock("./camera-scanner", () => ({ CameraScanner: () => null }));
 
-import { SellClient } from "./sell-client";
+import { SellClient, shouldRefocusPosSearch } from "./sell-client";
 import type {
   PosCatalogItem,
   RegisterConfig,
@@ -98,6 +98,23 @@ beforeEach(() => {
 });
 
 describe("Sell cart", () => {
+  it("does not restore scanner focus while live hardware is touch-primary", () => {
+    expect(
+      shouldRefocusPosSearch({
+        reportedTouchPrimary: false,
+        liveTouchPrimary: true,
+        overlayOpen: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldRefocusPosSearch({
+        reportedTouchPrimary: false,
+        liveTouchPrimary: false,
+        overlayOpen: false,
+      }),
+    ).toBe(true);
+  });
+
   it("keeps the selected product photo on the cart line", async () => {
     let container!: HTMLElement;
     await act(async () => {
@@ -154,5 +171,21 @@ describe("Sell cart", () => {
       screen.getByRole("button", { name: "Cart, 1 item" }),
     ).toHaveAttribute("aria-pressed", "true");
     expect(container.querySelector("aside")?.className).toContain("flex");
+  });
+
+  it("keeps the phone search and intended scroll areas within the viewport", async () => {
+    let container!: HTMLElement;
+    await act(async () => {
+      ({ container } = render(
+        <SellClient config={CONFIG} initialItems={[ITEM]} />,
+      ));
+    });
+
+    const search = screen.getByPlaceholderText(
+      "Scan a barcode or search products…",
+    );
+    expect(search).toHaveClass("min-w-0", "text-base", "sm:text-sm");
+    expect(search.parentElement).toHaveClass("min-w-0");
+    expect(container.querySelectorAll(".pos-scroll-area")).toHaveLength(2);
   });
 });

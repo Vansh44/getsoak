@@ -186,7 +186,11 @@ export function NotificationBell() {
       </button>
 
       {open && (
-        <div className="absolute right-0 top-[calc(100%+8px)] z-[200] flex max-h-[70vh] w-[min(380px,calc(100vw-24px))] flex-col overflow-hidden rounded-[var(--dash-radius)] border border-[var(--dash-border-strong)] bg-[var(--dash-surface)] shadow-[var(--dash-shadow-lg)]">
+        <div
+          role="dialog"
+          aria-label="Notifications"
+          className="fixed inset-x-3 top-16 z-[200] flex max-h-[calc(100dvh-5rem)] w-auto flex-col overflow-hidden overscroll-contain rounded-[var(--dash-radius)] border border-[var(--dash-border-strong)] bg-[var(--dash-surface)] shadow-[var(--dash-shadow-lg)] sm:absolute sm:inset-x-auto sm:right-0 sm:top-[calc(100%+8px)] sm:max-h-[70vh] sm:w-[min(380px,calc(100vw-24px))]"
+        >
           <div className="flex items-center justify-between gap-2 border-b border-[var(--dash-border)] px-4 py-3">
             <div className="text-[13px] font-semibold text-[var(--dash-text)]">
               Notifications
