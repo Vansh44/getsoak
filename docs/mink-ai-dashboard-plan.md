@@ -1,6 +1,6 @@
 # Mink AI Dashboard Agent — Architecture and Delivery Plan
 
-> **Status:** Phases 0–4 and Phases 5A–5E are implemented in code. Phase 2
+> **Status:** Phases 0–4 and Phases 5A–5F are implemented in code. Phase 2
 > remains the invited read-only merchant beta. Phase 3 adds a separate,
 > fail-closed operator opt-in
 > for private versioned drafts and atomic weighted credits through migration
@@ -28,10 +28,13 @@
 > `20260901_0053_mink_phase_5e_campaigns` adds a separately gated exact
 > coupon-email audience snapshot, non-PII branded sample, final human send
 > confirmation and schedule-aware delivery through the existing email queue.
+> Migration `20260901_0054_mink_phase_5f_bulk_prices` adds a separately gated,
+> maximum-20-line exact-SKU price proposal, impact review and atomic human
+> confirmation with full target/version/price checkpoints.
 > No transfer,
 > cancellation, refund, payment/shipment/pickup/POS lifecycle, product/page/
 > storefront or bulk publication, arbitrary-recipient or direct customer
-> contact, membership, bulk-price or arbitrary-code authority is
+> contact, membership, unbounded catalogue repricing or arbitrary-code authority is
 > present.
 >
 > **Plan date:** 2026-09-01
@@ -956,7 +959,7 @@ Deliver in separate gates:
 5. campaign audience preview, sample, schedule and final send confirmation;
 6. bulk price changes with revenue-impact summary.
 
-**Implementation:** ✅ Phases 5A–5E (items 1–5) are code-complete through 2026-09-01
+**Implementation:** ✅ Phases 5A–5F (items 1–6) are code-complete through 2026-09-01
 behind independent `adjust_inventory`, `bulk_adjust_inventory` and
 `transition_order_status` operator gates. In Phase 5A, Gemini receives only an
 exact SKU/location checkpoint reader
@@ -1026,8 +1029,29 @@ Scheduled sends are promoted only when due by the atomic claim function before
 `FOR UPDATE SKIP LOCKED`; remaining-work detection excludes future jobs, so
 self-chaining cannot spin. Gemini receives only coupon lookup and the private
 proposal tool, never audience options, sample, preview, execution or worker
-authority. Campaigns have no automatic cancellation or rollback. Item 6
-remains unbuilt and separately gated.
+authority. Campaigns have no automatic cancellation or rollback. Phase 5F
+adds `get_products_for_bulk_price_update` plus
+`propose_bulk_price_update` for a charged private 1–20-line exact-SKU price
+set, and an independent `bulk_update_prices` gate for the human-only preview
+and execution endpoint. Parent SKUs with variants are rejected in favour of
+exact sellable variant SKUs. Every line carries the complete final MRP,
+selling and special-price state; the checkpoint explicitly reports whether a
+special price is supported, and non-variant product SKUs must keep it cleared.
+The server canonicalizes INR to paise and enforces MRP ≥ selling ≥ special > 0,
+duplicate/ambiguity checks and a strict
+range. The five-minute preview reloads authoritative tenant-scoped products,
+binds product/variant identity, publication state, full-precision parent
+version and every current price, then shows line-by-line before/after values
+plus a one-unit-of-each basket impact summary. The summary is explicitly not a
+revenue forecast. Final confirmation locks targets deterministically, rechecks
+permission, drafting, gate, saved proposal, version and all checkpoints, and
+updates every product/variant atomically; one stale or invalid line changes
+nothing. Variant-price writes bump the parent product content checkpoint.
+Retries return the original approval/audit without repeating events. Existing
+orders retain their saved price snapshots while future storefront, checkout
+and POS baskets read the live prices. Gemini never receives the preview or
+execute endpoint, and there is no automatic price rollback; corrections need a
+fresh proposal or manual edit.
 
 Exit criteria:
 
@@ -1323,36 +1347,35 @@ would move risk into production rather than remove work.
 
 ## 21. Immediate next sprint
 
-The next sprint should validate and safely roll out Phase 5E before designing
-Phase 5F bulk pricing:
+The next sprint should validate and safely roll out Phase 5F before starting
+Phase 6 durable workflows:
 
-1. Apply migration `20260901_0053_mink_phase_5e_campaigns` after 0052 in
+1. Apply migration `20260901_0054_mink_phase_5f_bulk_prices` after 0053 in
    controlled staging, deploy matching application code and leave
-   `send_campaign` disabled for every merchant store.
-2. Change the authenticated `storemink-send-emails` Cloud Scheduler heartbeat
-   to once per minute only after the migration and application are live. Prove
-   future scheduled campaigns are never claimed and do not self-chain.
-3. On one synthetic store, enable beta, drafting and only the campaign gate.
-   Prove global, invitation, drafting, plan, Marketing Manage, email-config and
-   tool gates each stop options, preview and execution.
-4. Exercise all-customers and one-group snapshots with missing, invalid,
-   duplicate and suppressed addresses, an empty audience and the 10,000-row
-   boundary. The browser sample must contain no real recipient PII.
-5. Race group membership, customer email/name, suppression, coupon, store brand
-   and draft edits between preview and confirmation. Every drift must conflict
-   with zero campaign/recipient writes.
-6. Retry preview and confirmation concurrently. Exactly one campaign, exact
-   recipient set, approval and audit may exist; an immediate worker kick must
-   not repeat on replay.
-7. Exercise 5-minute/30-day boundaries, non-India browser zones and overlapping
-   worker heartbeats. Confirm exact sender/brand snapshot delivery,
-   delivery-time suppression and due promotion.
-8. Run the complete `P5E` pack and inspect audience, suppression, due-index and
-   worker claim plans. The model manifest may expose only coupon lookup and the
-   private proposal—never audience options, preview, execution or cron
-   authority. After four stable weeks, design Phase 5F. Transfers,
-   cancellations, refunds, arbitrary customer contact and bulk prices remain
-   unavailable.
+   `bulk_update_prices` disabled for every merchant store.
+2. On one synthetic store, enable beta, drafting and only the bulk-price gate.
+   Prove global, invitation, drafting, Products Manage and tool gates each stop
+   checkpoint, proposal, preview or execution at the correct boundary.
+3. Exercise product and variant SKUs, parent-SKU rejection, duplicates,
+   ambiguity, missing SKUs, 1/20/21-line limits, decimal/range bypasses,
+   special-price keep/clear/set and every ordering invariant.
+4. Compare the one-unit-each impact math against paise calculations for price
+   increases, decreases and effective-price-neutral tuple changes. Confirm the
+   UI never presents it as projected revenue and clearly marks published lines.
+5. Race manual product/variant price, publication, identity and version edits
+   between preview and confirmation. Every drift must conflict with zero price
+   writes; a forced failure on any line must roll back the whole batch.
+6. Retry preview and confirmation concurrently. Exactly one executed approval
+   and audit may exist, product events must fire once, and storefront caches
+   must reflect the new live prices while existing order snapshots stay fixed.
+7. Inspect the variant parent-version trigger, bounded tenant query plans,
+   target locks, constraints and service boundaries on a large synthetic
+   catalogue. Verify no browser or model input can select tenant/resource IDs.
+8. Run the complete `P5F` pack and inspect run telemetry. The model manifest may
+   expose only the exact price checkpoint and private proposal—never
+   `bulk_update_prices` or the browser endpoint. After a stable controlled
+   rollout, begin Phase 6 design. Transfers, cancellations, refunds, arbitrary
+   customer contact and unbounded catalogue mutations remain unavailable.
 
 The intended outcome is not “Gemini 3.7 answered impressively.” It is:
 

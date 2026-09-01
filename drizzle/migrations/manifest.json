@@ -1894,6 +1894,53 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260901_0054_mink_phase_5f_bulk_prices",
+      "description": "Add separately gated exact-SKU bulk price review with atomic conflict-safe execution and impact summary",
+      "file": "sql/20260901_0054_mink_phase_5f_bulk_prices.sql",
+      "checksum": "bb144bcca08d4231aeb9d4434b9573db4111e803e3ed9c6347ce064670ce6651",
+      "transaction": true,
+      "requires": ["20260901_0053_mink_phase_5e_campaigns"],
+      "verify": {},
+      "applyVerify": {
+        "constraints": [
+          "mink_drafts_bulk_price_target_check",
+          "mink_action_approvals_bulk_price_target_check",
+          "mink_action_audit_bulk_price_target_check"
+        ],
+        "queries": [
+          {
+            "name": "the variant-price checkpoint trigger exists",
+            "sql": "select count(*)::text from pg_trigger where tgname = 'product_variants_touch_parent_price' and not tgisinternal",
+            "equals": "1"
+          },
+          {
+            "name": "the Mink guide documents guarded atomic bulk prices",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%<h2>Update prices for up to 20 exact SKUs</h2>%' and body like '%Bulk price updates%' and body like '%available only for variant SKUs%' and body like '%applies atomically%' and body like '%not a sales or revenue forecast%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "constraints": [
+          "mink_drafts_bulk_price_target_check",
+          "mink_action_approvals_bulk_price_target_check",
+          "mink_action_audit_bulk_price_target_check"
+        ],
+        "queries": [
+          {
+            "name": "the variant-price checkpoint trigger already exists",
+            "sql": "select count(*)::text from pg_trigger where tgname = 'product_variants_touch_parent_price' and not tgisinternal",
+            "equals": "1"
+          },
+          {
+            "name": "the Mink guide already documents guarded atomic bulk prices",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%<h2>Update prices for up to 20 exact SKUs</h2>%' and body like '%Bulk price updates%'",
+            "equals": "1"
+          }
+        ]
+      }
     }
   ]
 }

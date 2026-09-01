@@ -4820,7 +4820,7 @@ export const minkDrafts = pgTable(
     }).onDelete("cascade"),
     check(
       "mink_drafts_kind_check",
-      sql`kind = ANY (ARRAY['product_description'::text, 'product_seo'::text, 'blog'::text, 'coupon_email'::text, 'customer_message'::text, 'product_create'::text, 'coupon_create'::text, 'coupon_update'::text, 'customer_group_create'::text, 'customer_group_update'::text, 'inventory_adjustment'::text, 'bulk_inventory_adjustment'::text, 'order_status_transition'::text])`,
+      sql`kind = ANY (ARRAY['product_description'::text, 'product_seo'::text, 'blog'::text, 'coupon_email'::text, 'customer_message'::text, 'product_create'::text, 'coupon_create'::text, 'coupon_update'::text, 'customer_group_create'::text, 'customer_group_update'::text, 'inventory_adjustment'::text, 'bulk_inventory_adjustment'::text, 'order_status_transition'::text, 'bulk_price_update'::text])`,
     ),
     check(
       "mink_drafts_status_check",
@@ -4841,6 +4841,10 @@ export const minkDrafts = pgTable(
     check(
       "mink_drafts_order_status_target_check",
       sql`kind <> 'order_status_transition' OR (destination_type = 'order' AND destination_id IS NOT NULL AND location_id IS NULL AND variant_id IS NULL)`,
+    ),
+    check(
+      "mink_drafts_bulk_price_target_check",
+      sql`kind <> 'bulk_price_update' OR (destination_type = 'price_bulk' AND destination_id IS NULL AND location_id IS NULL AND variant_id IS NULL AND jsonb_typeof(content_json -> 'lines_json') = 'string')`,
     ),
     check(
       "mink_drafts_title_check",
@@ -4980,7 +4984,7 @@ export const minkActionToolAccess = pgTable(
     }).onDelete("cascade"),
     check(
       "mink_action_tool_access_name_check",
-      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text, 'create_product'::text, 'create_coupon'::text, 'update_coupon'::text, 'create_customer_group'::text, 'update_customer_group'::text, 'adjust_inventory'::text, 'bulk_adjust_inventory'::text, 'transition_order_status'::text, 'publish_blog'::text, 'send_campaign'::text])`,
+      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text, 'create_product'::text, 'create_coupon'::text, 'update_coupon'::text, 'create_customer_group'::text, 'update_customer_group'::text, 'adjust_inventory'::text, 'bulk_adjust_inventory'::text, 'transition_order_status'::text, 'publish_blog'::text, 'send_campaign'::text, 'bulk_update_prices'::text])`,
     ),
     check(
       "mink_action_tool_access_enablement_check",
@@ -5094,6 +5098,9 @@ export const minkActionApprovals = pgTable(
     index("mink_action_approvals_campaign_send_idx")
       .on(table.storeId, table.status, table.createdAt.desc())
       .where(sql`${table.toolName} = 'send_campaign'`),
+    index("mink_action_approvals_bulk_price_idx")
+      .on(table.storeId, table.adminId, table.status, table.createdAt.desc())
+      .where(sql`${table.toolName} = 'bulk_update_prices'`),
     foreignKey({
       columns: [table.storeId],
       foreignColumns: [stores.id],
@@ -5116,11 +5123,11 @@ export const minkActionApprovals = pgTable(
     }).onDelete("cascade"),
     check(
       "mink_action_approvals_tool_check",
-      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text, 'create_product'::text, 'create_coupon'::text, 'update_coupon'::text, 'create_customer_group'::text, 'update_customer_group'::text, 'adjust_inventory'::text, 'bulk_adjust_inventory'::text, 'transition_order_status'::text, 'publish_blog'::text, 'send_campaign'::text])`,
+      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text, 'create_product'::text, 'create_coupon'::text, 'update_coupon'::text, 'create_customer_group'::text, 'update_customer_group'::text, 'adjust_inventory'::text, 'bulk_adjust_inventory'::text, 'transition_order_status'::text, 'publish_blog'::text, 'send_campaign'::text, 'bulk_update_prices'::text])`,
     ),
     check(
       "mink_action_approvals_resource_type_check",
-      sql`resource_type = ANY (ARRAY['product'::text, 'coupon'::text, 'customer_group'::text, 'inventory'::text, 'inventory_bulk'::text, 'order'::text, 'blog'::text, 'campaign'::text])`,
+      sql`resource_type = ANY (ARRAY['product'::text, 'coupon'::text, 'customer_group'::text, 'inventory'::text, 'inventory_bulk'::text, 'order'::text, 'blog'::text, 'campaign'::text, 'price_bulk'::text])`,
     ),
     check(
       "mink_action_approvals_operation_check",
@@ -5162,6 +5169,10 @@ export const minkActionApprovals = pgTable(
     check(
       "mink_action_approvals_campaign_send_target_check",
       sql`tool_name <> 'send_campaign' OR (resource_type = 'campaign' AND resource_id IS NOT NULL AND product_id IS NULL AND location_id IS NULL AND variant_id IS NULL AND operation = 'apply' AND source_approval_id IS NULL AND ((status = 'executed' AND result_id IS NOT NULL) OR (status <> 'executed' AND result_id IS NULL)))`,
+    ),
+    check(
+      "mink_action_approvals_bulk_price_target_check",
+      sql`tool_name <> 'bulk_update_prices' OR (resource_type = 'price_bulk' AND resource_id IS NULL AND product_id IS NULL AND location_id IS NULL AND variant_id IS NULL AND result_id IS NULL AND operation = 'apply' AND source_approval_id IS NULL AND jsonb_typeof(after_json -> 'lines') = 'array' AND jsonb_array_length(after_json -> 'lines') BETWEEN 1 AND 20)`,
     ),
   ],
 );
@@ -5238,6 +5249,9 @@ export const minkActionAudit = pgTable(
     index("mink_action_audit_campaign_send_idx")
       .on(table.storeId, table.resultId, table.createdAt.desc())
       .where(sql`${table.toolName} = 'send_campaign'`),
+    index("mink_action_audit_bulk_price_idx")
+      .on(table.storeId, table.createdAt.desc())
+      .where(sql`${table.toolName} = 'bulk_update_prices'`),
     foreignKey({
       columns: [table.approvalId, table.storeId],
       foreignColumns: [minkActionApprovals.id, minkActionApprovals.storeId],
@@ -5245,11 +5259,11 @@ export const minkActionAudit = pgTable(
     }).onDelete("restrict"),
     check(
       "mink_action_audit_tool_check",
-      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text, 'create_product'::text, 'create_coupon'::text, 'update_coupon'::text, 'create_customer_group'::text, 'update_customer_group'::text, 'adjust_inventory'::text, 'bulk_adjust_inventory'::text, 'transition_order_status'::text, 'publish_blog'::text, 'send_campaign'::text])`,
+      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text, 'create_product'::text, 'create_coupon'::text, 'update_coupon'::text, 'create_customer_group'::text, 'update_customer_group'::text, 'adjust_inventory'::text, 'bulk_adjust_inventory'::text, 'transition_order_status'::text, 'publish_blog'::text, 'send_campaign'::text, 'bulk_update_prices'::text])`,
     ),
     check(
       "mink_action_audit_resource_type_check",
-      sql`resource_type = ANY (ARRAY['product'::text, 'coupon'::text, 'customer_group'::text, 'inventory'::text, 'inventory_bulk'::text, 'order'::text, 'blog'::text, 'campaign'::text])`,
+      sql`resource_type = ANY (ARRAY['product'::text, 'coupon'::text, 'customer_group'::text, 'inventory'::text, 'inventory_bulk'::text, 'order'::text, 'blog'::text, 'campaign'::text, 'price_bulk'::text])`,
     ),
     check(
       "mink_action_audit_operation_check",
@@ -5283,6 +5297,10 @@ export const minkActionAudit = pgTable(
     check(
       "mink_action_audit_campaign_send_target_check",
       sql`tool_name <> 'send_campaign' OR (resource_type = 'campaign' AND resource_id IS NOT NULL AND product_id IS NULL AND location_id IS NULL AND variant_id IS NULL AND operation = 'apply' AND ((outcome = 'executed' AND result_id IS NOT NULL) OR (outcome <> 'executed' AND result_id IS NULL)))`,
+    ),
+    check(
+      "mink_action_audit_bulk_price_target_check",
+      sql`tool_name <> 'bulk_update_prices' OR (resource_type = 'price_bulk' AND resource_id IS NULL AND product_id IS NULL AND location_id IS NULL AND variant_id IS NULL AND result_id IS NULL AND operation = 'apply' AND jsonb_typeof(after_json -> 'lines') = 'array' AND jsonb_array_length(after_json -> 'lines') BETWEEN 1 AND 20)`,
     ),
   ],
 );

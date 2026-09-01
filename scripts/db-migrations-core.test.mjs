@@ -22,7 +22,7 @@ describe("database migration controls", () => {
   it("loads the repository manifest and checksums the enrolled SQL", async () => {
     const loaded = await loadManifest();
     expect(loaded.baseline.id).toBe("baseline:cloudsql-2026-08-14");
-    expect(loaded.migrations).toHaveLength(53);
+    expect(loaded.migrations).toHaveLength(54);
     expect(loaded.migrations[0]).toMatchObject({
       id: "20260814_0001_logistics_shiprocket",
       transaction: true,
@@ -699,6 +699,28 @@ describe("database migration controls", () => {
     );
     expect(loaded.migrations[52].sql).toContain(
       "Send or schedule one coupon-email campaign",
+    );
+    expect(loaded.migrations[53]).toMatchObject({
+      id: "20260901_0054_mink_phase_5f_bulk_prices",
+      transaction: true,
+      requires: ["20260901_0053_mink_phase_5e_campaigns"],
+    });
+    expect(loaded.migrations[53].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[53].sql).toContain("bulk_update_prices");
+    expect(loaded.migrations[53].sql).toContain(
+      "mink_action_approvals_bulk_price_target_check",
+    );
+    expect(loaded.migrations[53].sql).toContain(
+      "product_variants_touch_parent_price",
+    );
+    expect(loaded.migrations[53].sql).toContain(
+      "Update prices for up to 20 exact SKUs",
+    );
+    expect(loaded.migrations[53].sql).toMatch(
+      /\$phase5f\$\)\s*\)\s*UPDATE public\.help_articles/,
+    );
+    expect(loaded.migrations[53].sql).toContain(
+      "not a sales or revenue forecast",
     );
     const repairChecks = [
       loaded.migrations[22].applyVerify,
