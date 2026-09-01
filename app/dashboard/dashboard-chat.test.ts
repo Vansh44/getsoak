@@ -1,10 +1,14 @@
 import { createElement } from "react";
-import { render, screen } from "@testing-library/react";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clampMinkPanelWidth,
   DashboardChat,
+  isMinkScrollNearBottom,
   minkComposerHeight,
+  minkHistoryStartsOpen,
   shouldSubmitMinkComposer,
 } from "./dashboard-chat";
 import { useChat } from "./chat-context";
@@ -40,6 +44,14 @@ const baseChatState = {
 };
 
 beforeEach(() => {
+  Object.defineProperty(window, "innerWidth", {
+    configurable: true,
+    value: 1024,
+  });
+  Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+    configurable: true,
+    value: vi.fn(),
+  });
   vi.mocked(useChat).mockReturnValue(
     baseChatState as unknown as ReturnType<typeof useChat>,
   );
@@ -53,7 +65,95 @@ describe("Mink full view", () => {
       "fixed",
       "inset-0",
       "z-[90]",
+      "h-[100dvh]",
+      "max-w-full",
     );
+  });
+
+  it("starts without the in-flow history column on a phone", async () => {
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 390,
+    });
+
+    render(createElement(DashboardChat, { variant: "overlay" }));
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Show conversation sidebar" }),
+      ).toHaveAttribute("aria-expanded", "false"),
+    );
+    expect(
+      screen.queryByRole("complementary", {
+        name: "Mink AI conversations",
+      }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("uses a contained message scroller and a no-zoom mobile composer", () => {
+    vi.mocked(useChat).mockReturnValue({
+      ...baseChatState,
+      messages: [{ id: "user-1", role: "user", text: "Hi" }],
+    } as unknown as ReturnType<typeof useChat>);
+
+    render(createElement(DashboardChat, { variant: "overlay" }));
+
+    expect(screen.getByTestId("mink-message-scroller")).toHaveClass(
+      "min-h-0",
+      "overflow-y-auto",
+      "overscroll-contain",
+    );
+    expect(screen.getByLabelText("Message Mink AI")).toHaveClass(
+      "min-w-0",
+      "text-base",
+      "sm:text-sm",
+    );
+  });
+});
+
+describe("minkHistoryStartsOpen", () => {
+  it("keeps history closed on compact screens and open beside desktop chat", () => {
+    expect(minkHistoryStartsOpen(390)).toBe(false);
+    expect(minkHistoryStartsOpen(767)).toBe(false);
+    expect(minkHistoryStartsOpen(768)).toBe(true);
+    expect(minkHistoryStartsOpen(1440)).toBe(true);
+  });
+});
+
+describe("isMinkScrollNearBottom", () => {
+  it("follows streaming output only while the reader remains near the end", () => {
+    expect(
+      isMinkScrollNearBottom({
+        scrollHeight: 1200,
+        scrollTop: 744,
+        clientHeight: 400,
+      }),
+    ).toBe(true);
+    expect(
+      isMinkScrollNearBottom({
+        scrollHeight: 1200,
+        scrollTop: 500,
+        clientHeight: 400,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("Mink compact scroll ownership", () => {
+  it("pins the phone drawer to the viewport and locks the dashboard behind it", () => {
+    const css = readFileSync(
+      join(process.cwd(), "app/dashboard/dashboard.css"),
+      "utf8",
+    );
+
+    expect(css).toContain("@media (max-width: 639px)");
+    expect(css).toContain("width: 100vw;");
+    expect(css).toContain("height: 100dvh;");
+    expect(css).toContain(
+      ".dashboard-frame:has(.mink-chat-surface) .dash-content",
+    );
+    expect(css).toContain(".dashboard-shell .mink-message-scroll");
+    expect(css).toContain("overscroll-behavior-y: contain;");
   });
 });
 

@@ -282,6 +282,11 @@ are grouped into one digest per person.
 **In-app is polling, not push.** Supabase Realtime went with the Cloud SQL
 migration. A LISTEN/NOTIFY → SSE service is the upgrade path.
 
+On a phone, opening the merchant dashboard bell fixes the inbox between 12 px
+viewport gutters and caps it to the visible dynamic viewport. Its notification
+list scrolls inside the panel. From the `sm` breakpoint upward, the same inbox
+remains a compact dropdown aligned to the bell.
+
 ---
 
 ## 6. Who receives a team notification

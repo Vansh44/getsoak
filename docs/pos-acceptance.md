@@ -51,8 +51,9 @@ and FAQ anchors remain same-document native fragments on `pos.storemink.com`
 platform pricing, login, and signup deliberately navigate to `storemink.com`.
 
 **PS-0.3 — The Help Centre covers the full shipped POS journey**
-Open `help.storemink.com` after migration
-`20260825_0015_pos_help_documents` is applied.
+Open `help.storemink.com` after migrations
+`20260825_0015_pos_help_documents` and
+`20260902_0055_pos_https_entry_help` are applied.
 **Expect:** a dedicated **Point of Sale** card appears fourth in the category
 grid with its own scan icon and 17 published articles. The guides use easy
 language and cover requirements, locations, staff/PINs, authorised devices,
@@ -61,8 +62,18 @@ shifts, pickup, returns, refunds/store credit/exchanges/credit notes, reporting,
 and troubleshooting. Every article appears in the Topics tree and Help search,
 has a canonical `/help/point-of-sale/<slug>` URL, and is included in the Help
 sitemap. Claims describe shipped behaviour only, including the requirement for
-an internet connection to complete a sale; the articles remain editable from
-the operator Help console.
+an internet connection to complete a sale. The overview and troubleshooting
+guides also explain that users may enter a StoreMink address without typing the
+scheme and that plain HTTP is permanently upgraded to HTTPS; the articles
+remain editable from the operator Help console.
+
+**PS-0.4 ★ — Bare StoreMink addresses upgrade to HTTPS**
+Open `http://pos.storemink.com`, then repeat with an arbitrary path and query.
+Also open `http://{slug}.storemink.com/pos` for a real merchant.
+**Expect:** the load balancer returns a permanent 308 to the identical host,
+path, and query on `https://`. The product host finishes on the public POS page;
+the merchant host finishes at that store's operational register. No plain-HTTP
+request reaches the Next.js application.
 
 ---
 
@@ -872,6 +883,25 @@ On a tablet, tap several products into the cart.
 Sticky focus on the search box is switched off wherever `hover: none` and
 `pointer: coarse`, because iPadOS answers a programmatic focus by opening the
 keyboard over half the till. A laptop with a touchscreen keeps sticky focus.
+
+**PS-7.19a ★★ — Hydration cannot summon the phone keyboard**
+Cold-load `/pos/sell` on an iPhone or touch-primary tablet and do not touch the
+search field. Tap a product as soon as the grid appears, then repeat after a
+normal reload.
+**Expect:** the keyboard never opens. The focus decision rechecks the live media
+query instead of trusting the initial server snapshot, which reports non-touch
+during hydration. On a keyboard-first till the search still receives sticky
+focus without scrolling the register.
+
+**PS-7.19b ★★ — POS typing does not zoom or create a second page scroll**
+On iPhone Chrome/Safari, focus catalogue search, a line/order discount, customer
+mobile, and any tender field; type and dismiss the keyboard. Scroll Products to
+its end, switch to Cart, and repeat.
+**Expect:** the visual scale and full-width alignment never change, the camera
+control cannot push search outside the viewport, and only the active Products
+or Cart area scrolls. A boundary swipe never moves the POS shell or reveals a
+horizontal page strip. All editable POS controls render at least 16 px on
+touch-primary hardware.
 
 **PS-7.20 ★ — A tablet still scans, with nothing focused**
 On that same tablet, with a paired hardware scanner and no field focused

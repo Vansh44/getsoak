@@ -21,6 +21,9 @@
 > inventory intent, multiple-choice clarification and bounded per-location
 > comparison. Migration `20260901_0050_mink_full_view_takeover` makes maximize
 > cover the complete browser viewport, including dashboard chrome. Migration
+> `20260902_0056_mink_mobile_workspace_help` hardens that workspace on phones:
+> history starts closed, the composer does not trigger iOS focus zoom, and the
+> conversation is the only active scroll surface. Migration
 > `20260901_0051_mink_phase_5c_order_status` adds the separately gated exact
 > one-step online-delivery order transition. Migration
 > `20260901_0052_mink_phase_5d_blog_publication` adds one separately gated,
@@ -81,7 +84,10 @@ guarded-action slice now include:
   safe ChatGPT-style React renderer for headings, lists, tables, code, emphasis
   and allowlisted StoreMink links without raw HTML; maximize opens a true
   viewport takeover above the dashboard topbar, navigation and page content,
-  while restore returns to the remembered side-panel width;
+  while restore returns to the remembered side-panel width. Phones use one
+  dynamic-viewport full-screen surface from either entry point, start with
+  history closed, keep the composer at a no-zoom 16px, and lock the dashboard
+  behind the contained message scroller;
 - a separate published Help Centre guide for the dashboard alpha's supported
   questions, permission behavior, privacy and limits;
 - prompt-injection instructions that treat all tool values as untrusted data;

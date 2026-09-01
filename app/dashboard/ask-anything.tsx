@@ -38,7 +38,7 @@ export function AskAnything() {
         onChange={(e) => setText(e.target.value)}
         placeholder="Ask anything…"
         aria-label={`Message ${ASSISTANT_NAME}`}
-        className="flex-1 bg-transparent text-[15px] text-[var(--dash-text)] outline-none placeholder:text-[var(--dash-text-3)]"
+        className="min-w-0 flex-1 bg-transparent text-base text-[var(--dash-text)] outline-none placeholder:text-[var(--dash-text-3)] sm:text-[15px]"
       />
       {text.trim() ? (
         <button

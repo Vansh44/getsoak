@@ -96,6 +96,16 @@ const lineKey = (p: string, v: string | null) => `${p}:${v ?? ""}`;
 /** Camera support is fixed for the life of the page — nothing to subscribe to. */
 const subscribeNever = () => () => {};
 
+export function shouldRefocusPosSearch(input: {
+  reportedTouchPrimary: boolean;
+  liveTouchPrimary: boolean;
+  overlayOpen: boolean;
+}) {
+  return (
+    !input.reportedTouchPrimary && !input.liveTouchPrimary && !input.overlayOpen
+  );
+}
+
 export function SellClient({
   config,
   initialItems,
@@ -211,8 +221,20 @@ export function SellClient({
   const overlayOpen =
     tendering || !!choices || cameraOpen || layoutOpen || !!saleId;
   const refocus = useCallback(() => {
-    if (touchPrimary || overlayOpen) return;
-    scanRef.current?.focus();
+    // During hydration useSyncExternalStore briefly exposes its server
+    // snapshot (`false`). Re-check the live media query before focusing, or a
+    // phone can receive one desktop-style focus and open its keyboard before
+    // React publishes the touch-primary snapshot.
+    if (
+      !shouldRefocusPosSearch({
+        reportedTouchPrimary: touchPrimary,
+        liveTouchPrimary: isTouchPrimary(),
+        overlayOpen,
+      })
+    ) {
+      return;
+    }
+    scanRef.current?.focus({ preventScroll: true });
   }, [touchPrimary, overlayOpen]);
   useEffect(() => {
     refocus();
@@ -742,8 +764,8 @@ export function SellClient({
             />
           ) : (
             <>
-              <div className="mb-3 flex shrink-0 gap-2">
-                <div className="relative flex-1">
+              <div className="mb-3 flex min-w-0 shrink-0 gap-2">
+                <div className="relative min-w-0 flex-1">
                   <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--pos-ink-3)]" />
                   <input
                     ref={scanRef}
@@ -763,7 +785,7 @@ export function SellClient({
                       }
                     }}
                     placeholder="Scan a barcode or search products…"
-                    className="w-full rounded-xl border border-[var(--pos-border)] bg-[var(--pos-surface)] py-3 pl-9 pr-3 text-sm outline-none placeholder:text-[var(--pos-ink-3)] focus:border-[var(--pos-border-strong)]"
+                    className="min-w-0 w-full rounded-xl border border-[var(--pos-border)] bg-[var(--pos-surface)] py-3 pl-9 pr-3 text-base outline-none placeholder:text-[var(--pos-ink-3)] focus:border-[var(--pos-border-strong)] sm:text-sm"
                   />
                   {searching && (
                     <Loader2 className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-[var(--pos-ink-3)]" />
@@ -790,7 +812,7 @@ export function SellClient({
                 </div>
               )}
 
-              <div className="grid min-h-0 flex-1 auto-rows-max grid-cols-2 gap-2 overflow-y-auto sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
+              <div className="pos-scroll-area grid min-h-0 flex-1 auto-rows-max grid-cols-2 gap-2 overflow-y-auto overscroll-contain sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
                 {items.map((it) => {
                   const out = isOutOfStock(it);
                   return (
@@ -875,7 +897,7 @@ export function SellClient({
             mobilePane === "cart" ? "flex" : "hidden"
           } min-w-0 flex-1 flex-col bg-[var(--pos-surface)] lg:flex lg:w-[360px] lg:flex-none lg:border-l lg:border-[var(--pos-border)]`}
         >
-          <div className="min-h-0 flex-1 overflow-y-auto p-3">
+          <div className="pos-scroll-area min-h-0 flex-1 overflow-y-auto overscroll-contain p-3">
             {cart.length === 0 ? (
               <div className="py-16 text-center text-sm text-[var(--pos-ink-3)]">
                 <p>Scan or tap a product to start a sale.</p>
