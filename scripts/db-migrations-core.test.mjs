@@ -22,7 +22,7 @@ describe("database migration controls", () => {
   it("loads the repository manifest and checksums the enrolled SQL", async () => {
     const loaded = await loadManifest();
     expect(loaded.baseline.id).toBe("baseline:cloudsql-2026-08-14");
-    expect(loaded.migrations).toHaveLength(55);
+    expect(loaded.migrations).toHaveLength(56);
     expect(loaded.migrations[0]).toMatchObject({
       id: "20260814_0001_logistics_shiprocket",
       transaction: true,
@@ -735,6 +735,20 @@ describe("database migration controls", () => {
     expect(loaded.migrations[54].sql).toContain(
       "The address says this site cannot be reached",
     );
+    expect(loaded.migrations[55]).toMatchObject({
+      id: "20260902_0056_mink_mobile_workspace_help",
+      transaction: true,
+      requires: ["20260902_0055_pos_https_entry_help"],
+      verify: {},
+    });
+    expect(loaded.migrations[55].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[55].sql).toContain(
+      "recent conversations start closed behind the sidebar button",
+    );
+    expect(loaded.migrations[55].sql).toContain(
+      "the dashboard underneath cannot scroll",
+    );
+    expect(loaded.migrations[55].sql).toContain("without zooming the page");
     const repairChecks = [
       loaded.migrations[22].applyVerify,
       loaded.migrations[22].adoptVerify,

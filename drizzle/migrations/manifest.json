@@ -1968,6 +1968,33 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260902_0056_mink_mobile_workspace_help",
+      "description": "Document the phone-safe full-screen Mink workspace, no-zoom composer, and contained scrolling",
+      "file": "sql/20260902_0056_mink_mobile_workspace_help.sql",
+      "checksum": "d5e7f13607209139fab576f51a65845ef89693275b1a8e9e7fa91109f7ba3386",
+      "transaction": true,
+      "requires": ["20260902_0055_pos_https_entry_help"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "the Mink guide explains the phone-safe workspace",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%both the Home prompt and the topbar Mink button open a full-screen conversation%' and body like '%recent conversations start closed behind the sidebar button%' and body like '%the dashboard underneath cannot scroll%' and body like '%without zooming the page%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "the Mink guide already explains the phone-safe workspace",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%both the Home prompt and the topbar Mink button open a full-screen conversation%' and body like '%recent conversations start closed behind the sidebar button%' and body like '%the dashboard underneath cannot scroll%' and body like '%without zooming the page%'",
+            "equals": "1"
+          }
+        ]
+      }
     }
   ]
 }

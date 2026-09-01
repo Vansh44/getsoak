@@ -269,7 +269,9 @@ wholesip/
 │   │   │                      # with confirmed deletion, persisted drag/keyboard width,
 │   │   │                      # Help-matched robot identity and auto-growing composer;
 │   │   │                      # maximize is a shell-level viewport takeover above the
-│   │   │                      # dashboard topbar, navigation and page content.
+│   │   │                      # dashboard topbar, navigation and page content. Phones use
+│   │   │                      # one dynamic-viewport full-screen surface, history closed by
+│   │   │                      # default, a 16px no-zoom composer and one contained scroller.
 │   │   ├── mink-answer.tsx    # Safe React-rendered headings/lists/tables/emphasis/code plus
 │   │   │                      # allowlisted dashboard/Help links; no model HTML is executed.
 │   │   ├── mink-artifacts.tsx # Permission-safe metric/catalog/order/product/inventory/source cards
@@ -1486,6 +1488,8 @@ wholesip/
 │                              # sender/brand snapshots and schedule-aware email claiming;
 │                              # 0054 adds Phase 5F draft/action allowlists, atomic price target
 │                              # constraints, variant parent-version trigger and Help guidance;
+│                              # 0055 documents automatic POS HTTP→HTTPS entry; 0056 documents
+│                              # the phone-safe Mink full-screen/scroll/composer behavior;
 │                              # missing/draft/empty guide drift is repaired before publication.
 │                              # It follows the 0049/0050 UX migrations.
 ├── scripts/
@@ -2916,6 +2920,13 @@ template; `lib/mink/system-prompt.ts` reads and validates its markers, fence and
 required placeholders before injecting only trusted actor/tool context. Next
 output tracing and the narrow Docker-context exception ship that Markdown file
 with the standalone server.
+On phones, the Home prompt and topbar entry both resolve to the same full-screen
+Mink workspace. Its recent-conversation sidebar starts closed instead of taking
+an in-flow 288 px column, its 16 px composer avoids iOS focus zoom, and the
+message list owns vertical scrolling while the dashboard underneath is locked.
+The compact drawer uses `100dvh`/`100vw`, so browser chrome or a boundary swipe
+cannot expose and move the dashboard behind it. Tablet/desktop history,
+resizable drawer and full-view takeover behavior remain unchanged.
 When invitation-only rollout is explicitly disabled, reads become available to
 all stores but the existing store row still controls the independent drafting
 opt-in; disabling the invitation boundary never discards a store's operator-set

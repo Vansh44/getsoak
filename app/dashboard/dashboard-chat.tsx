@@ -37,6 +37,7 @@ const PANEL_WIDTH_KEY = "storemink:mink-panel-width";
 const DEFAULT_PANEL_WIDTH = 380;
 const MAX_PANEL_WIDTH = 720;
 const MAX_COMPOSER_HEIGHT = 160;
+const HISTORY_SIDEBAR_BREAKPOINT = 768;
 
 export function clampMinkPanelWidth(width: number, viewportWidth: number) {
   const safeViewport = Math.max(280, viewportWidth);
@@ -50,6 +51,20 @@ export function clampMinkPanelWidth(width: number, viewportWidth: number) {
 
 export function minkComposerHeight(scrollHeight: number) {
   return Math.min(Math.max(Math.ceil(scrollHeight), 24), MAX_COMPOSER_HEIGHT);
+}
+
+export function minkHistoryStartsOpen(viewportWidth: number) {
+  return viewportWidth >= HISTORY_SIDEBAR_BREAKPOINT;
+}
+
+export function isMinkScrollNearBottom(input: {
+  scrollHeight: number;
+  scrollTop: number;
+  clientHeight: number;
+  threshold?: number;
+}) {
+  const distance = input.scrollHeight - input.scrollTop - input.clientHeight;
+  return distance <= (input.threshold ?? 56);
 }
 
 export function shouldSubmitMinkComposer(input: {
@@ -95,6 +110,7 @@ export function DashboardChat({
   } = useChat();
   const isOverlay = variant === "overlay";
   const scrollRef = useRef<HTMLDivElement>(null);
+  const followLatestRef = useRef(true);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const deleteButtonRef = useRef<HTMLButtonElement>(null);
   const resizeRef = useRef<{
@@ -102,11 +118,23 @@ export function DashboardChat({
     startX: number;
     startWidth: number;
   } | null>(null);
-  const [historyOpen, setHistoryOpen] = useState(isOverlay);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] =
     useState<MinkConversationSummary | null>(null);
   const [deleteFailure, setDeleteFailure] = useState<string | null>(null);
   const [panelWidth, setPanelWidth] = useState(DEFAULT_PANEL_WIDTH);
+
+  useEffect(() => {
+    if (!isOverlay || !isChatOpen || !isExpanded) return;
+    // The desktop takeover benefits from persistent history beside the thread.
+    // On a phone that same 288px column left the conversation a ~100px sliver,
+    // so compact takeovers start with history closed and expose it on demand.
+    const frame = window.requestAnimationFrame(() => {
+      const shouldOpen = minkHistoryStartsOpen(window.innerWidth);
+      setHistoryOpen((open) => (open === shouldOpen ? open : shouldOpen));
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [isChatOpen, isExpanded, isOverlay]);
 
   useEffect(() => {
     if (isOverlay) return;
@@ -141,10 +169,12 @@ export function DashboardChat({
   }, [isOverlay, panelWidth]);
 
   useEffect(() => {
-    scrollRef.current?.scrollTo({
-      top: scrollRef.current.scrollHeight,
-      behavior: "smooth",
+    const scroller = scrollRef.current;
+    if (!scroller || !followLatestRef.current) return;
+    const frame = window.requestAnimationFrame(() => {
+      scroller.scrollTop = scroller.scrollHeight;
     });
+    return () => window.cancelAnimationFrame(frame);
   }, [messages, isReplying, error, statusText]);
 
   useEffect(() => {
@@ -173,6 +203,14 @@ export function DashboardChat({
   const updateWidth = useCallback((width: number) => {
     setPanelWidth(clampMinkPanelWidth(width, window.innerWidth));
   }, []);
+
+  const sendFromChat = useCallback(
+    (raw?: string) => {
+      followLatestRef.current = true;
+      send(raw);
+    },
+    [send],
+  );
 
   const beginResize = (event: PointerEvent<HTMLDivElement>) => {
     resizeRef.current = {
@@ -219,7 +257,7 @@ export function DashboardChat({
       return;
     }
     event.preventDefault();
-    if (input.trim() && !isHistoryLoading && !isReplying) send();
+    if (input.trim() && !isHistoryLoading && !isReplying) sendFromChat();
   };
 
   if (!isChatOpen) return null;
@@ -228,8 +266,8 @@ export function DashboardChat({
   const hasThread = messages.length > 0 || isReplying || Boolean(error);
   const draftEstimate = estimateMinkDraftIntent(input);
   const wrapperClass = isOverlay
-    ? "fixed inset-0 z-[90] flex min-h-0 flex-col overflow-hidden bg-white"
-    : "dash-chat relative flex h-full flex-shrink-0 flex-col overflow-hidden border-l border-t border-[#e5e5e5] bg-white shadow-sm";
+    ? "mink-chat-surface fixed inset-0 z-[90] flex h-[100dvh] w-screen max-w-full min-h-0 flex-col overflow-hidden overscroll-none bg-white"
+    : "mink-chat-surface dash-chat relative flex h-full flex-shrink-0 flex-col overflow-hidden overscroll-none border-l border-t border-[#e5e5e5] bg-white shadow-sm";
   const columnClass = isOverlay ? "mx-auto w-full max-w-3xl" : "w-full";
   const panelStyle = isOverlay
     ? undefined
@@ -261,7 +299,7 @@ export function DashboardChat({
         </div>
       )}
 
-      <header className="flex min-h-[64px] items-center justify-between gap-3 border-b border-[#ededed] px-3 py-2.5">
+      <header className="flex min-h-[64px] w-full max-w-full shrink-0 items-center justify-between gap-3 border-b border-[#ededed] px-3 py-2.5">
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <button
             type="button"
@@ -298,7 +336,7 @@ export function DashboardChat({
           <button
             type="button"
             onClick={toggleExpand}
-            className="rounded-md p-1.5 transition-colors hover:bg-[#f1f1f1]"
+            className="hidden rounded-md p-1.5 transition-colors hover:bg-[#f1f1f1] sm:inline-flex"
             aria-label={
               isOverlay ? "Collapse to side panel" : "Expand to full view"
             }
@@ -320,7 +358,7 @@ export function DashboardChat({
         </div>
       </header>
 
-      <div className="relative flex min-h-0 flex-1 overflow-hidden">
+      <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden">
         {historyOpen && (
           <ConversationSidebar
             conversations={conversations}
@@ -330,10 +368,12 @@ export function DashboardChat({
             isHistoryLoading={isHistoryLoading}
             deletingConversationId={deletingConversationId}
             onNewConversation={() => {
+              followLatestRef.current = true;
               reset();
               if (!isOverlay) setHistoryOpen(false);
             }}
             onSelect={(conversation) => {
+              followLatestRef.current = true;
               void loadConversation(conversation.id);
               if (!isOverlay) setHistoryOpen(false);
             }}
@@ -344,9 +384,9 @@ export function DashboardChat({
           />
         )}
 
-        <main className="flex min-w-0 flex-1 flex-col bg-white">
+        <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-white">
           {!hasThread ? (
-            <div className="flex flex-1 flex-col items-center justify-center overflow-y-auto p-6 text-center">
+            <div className="flex min-h-0 flex-1 touch-pan-y flex-col items-center justify-center overflow-y-auto overscroll-contain p-6 text-center">
               <div className="mb-4">
                 <MinkMark size="lg" />
               </div>
@@ -358,7 +398,7 @@ export function DashboardChat({
               </h3>
               <button
                 type="button"
-                onClick={() => send("What's new?")}
+                onClick={() => sendFromChat("What's new?")}
                 className="flex items-center gap-2 rounded-full border border-[#e5e5e5] px-4 py-2 text-sm font-medium text-[#1a1a1a] shadow-sm transition-colors hover:bg-[#f9f9f9]"
               >
                 <div className="h-2 w-2 rounded-full bg-[#6d4dff]" />
@@ -366,7 +406,16 @@ export function DashboardChat({
               </button>
             </div>
           ) : (
-            <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4">
+            <div
+              ref={scrollRef}
+              data-testid="mink-message-scroller"
+              onScroll={() => {
+                const scroller = scrollRef.current;
+                if (!scroller) return;
+                followLatestRef.current = isMinkScrollNearBottom(scroller);
+              }}
+              className="mink-message-scroll min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-contain px-4 py-4"
+            >
               <div className={`${columnClass} space-y-4`}>
                 {messages.map((message) =>
                   message.role === "user" ? (
@@ -387,7 +436,7 @@ export function DashboardChat({
                         </div>
                         <MinkArtifacts
                           artifacts={message.artifacts ?? []}
-                          onPrompt={send}
+                          onPrompt={sendFromChat}
                           promptDisabled={isReplying || isHistoryLoading}
                         />
                         <MinkFeedbackControls
@@ -417,7 +466,10 @@ export function DashboardChat({
                       <div>{error.message}</div>
                       <button
                         type="button"
-                        onClick={retry}
+                        onClick={() => {
+                          followLatestRef.current = true;
+                          retry();
+                        }}
                         className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-[#6d4dff] hover:underline"
                       >
                         <RotateCcw className="h-3 w-3" />
@@ -430,7 +482,7 @@ export function DashboardChat({
             </div>
           )}
 
-          <div className="border-t border-[#f1f1f1] p-4">
+          <div className="shrink-0 border-t border-[#f1f1f1] p-3 sm:p-4">
             <div className={columnClass}>
               {draftEstimate ? (
                 <div className="mb-1.5 flex items-center justify-between gap-2 px-1 text-[10px] text-[#6c6573]">
@@ -444,9 +496,9 @@ export function DashboardChat({
               <form
                 onSubmit={(event) => {
                   event.preventDefault();
-                  send();
+                  sendFromChat();
                 }}
-                className="flex items-end rounded-2xl border border-[#e5e5e5] bg-white px-3 py-2 shadow-sm transition-all focus-within:border-[#6d4dff] focus-within:ring-1 focus-within:ring-[#6d4dff]"
+                className="flex w-full min-w-0 max-w-full items-end rounded-2xl border border-[#e5e5e5] bg-white px-3 py-2 shadow-sm transition-all focus-within:border-[#6d4dff] focus-within:ring-1 focus-within:ring-[#6d4dff]"
               >
                 <textarea
                   ref={composerRef}
@@ -457,9 +509,9 @@ export function DashboardChat({
                   onKeyDown={composerKeyDown}
                   placeholder="Ask anything..."
                   aria-label={`Message ${ASSISTANT_NAME}`}
-                  className="min-h-6 max-h-40 flex-1 resize-none border-none bg-transparent py-0.5 text-sm leading-5 text-[#1a1a1a] outline-none placeholder:text-[#8c9196]"
+                  className="min-h-6 max-h-40 min-w-0 flex-1 resize-none border-none bg-transparent py-0.5 text-base leading-6 text-[#1a1a1a] outline-none placeholder:text-[#8c9196] sm:text-sm sm:leading-5"
                 />
-                <div className="ml-2 flex shrink-0 items-center gap-1 self-end text-[#8c9196]">
+                <div className="ml-1 flex shrink-0 items-center gap-1 self-end text-[#8c9196] sm:ml-2">
                   <button
                     type="button"
                     className="rounded-md p-1.5 transition-colors hover:bg-[#f1f1f1] hover:text-[#1a1a1a]"
@@ -603,8 +655,8 @@ function ConversationSidebar({
       aria-label="Mink AI conversations"
       className={
         isOverlay
-          ? "flex w-72 shrink-0 flex-col border-r border-[#e7e7e7] bg-[#f7f7f8]"
-          : "absolute inset-y-0 left-0 z-40 flex w-[min(300px,100%)] flex-col border-r border-[#e7e7e7] bg-[#f7f7f8] shadow-xl"
+          ? "absolute inset-y-0 left-0 z-40 flex w-[min(320px,100%)] shrink-0 flex-col overscroll-contain border-r border-[#e7e7e7] bg-[#f7f7f8] shadow-xl md:static md:z-auto md:w-72 md:shadow-none"
+          : "absolute inset-y-0 left-0 z-40 flex w-[min(300px,100%)] flex-col overscroll-contain border-r border-[#e7e7e7] bg-[#f7f7f8] shadow-xl"
       }
     >
       <div className="p-3">
