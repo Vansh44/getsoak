@@ -261,7 +261,7 @@ export async function executeMinkCampaign(input: {
       input.actor.storeId,
       approval.resourceId,
     );
-    const brand = await readBrand(db, input.actor.storeId, true);
+    const brand = await readBrand(db, input.actor.storeId);
     const audience = await resolveAudience(
       db,
       input.actor.storeId,
@@ -696,8 +696,26 @@ async function readCoupon(db: Db, storeId: string, couponId: string) {
   return rows[0];
 }
 
-async function readBrand(db: Db, storeId: string, lock = false) {
-  const query = db
+/**
+ * Read the store's sending identity.
+ *
+ * ★ IT DELIBERATELY DOES NOT LOCK THE STORE ROW. Execution used to take it
+ * `FOR UPDATE`, which reads as protection against a branding edit landing
+ * mid-send — but a row lock is held until the TRANSACTION commits, and this one
+ * goes on to insert the campaign plus up to 10,000 recipients. That serialised
+ * every other write to the same store row (a settings save, enabling POS, a
+ * plan change, the SEO hook stamping `settings.google_*`) behind the batch, and
+ * on a large audience an unrelated dashboard save could time out with nothing
+ * pointing back at the campaign.
+ *
+ * It bought nothing, because two things already close that window: the approved
+ * brand and sender are SNAPSHOTTED onto the campaign row (`brandSnapshot` /
+ * `senderAddress`), which is what the worker sends with, and the checkpoint
+ * hash re-compares this brand against the previewed one, so drift becomes a
+ * conflict rather than a surprise. Don't reintroduce the lock.
+ */
+async function readBrand(db: Db, storeId: string) {
+  const rows = await db
     .select({
       name: stores.name,
       settings: stores.settings,
@@ -706,7 +724,6 @@ async function readBrand(db: Db, storeId: string, lock = false) {
     .from(stores)
     .where(eq(stores.id, storeId))
     .limit(1);
-  const rows = lock ? await query.for("update") : await query;
   const store = rows[0];
   if (!store)
     throw new MinkRequestError(

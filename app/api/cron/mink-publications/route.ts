@@ -19,7 +19,15 @@ async function handle(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   const result = await runMinkBlogPublicationWorker();
-  return NextResponse.json({ ok: true, ...result });
+  // A row that fails has already rolled back and stays claimable, so the next
+  // minute retries it: answering 503 for one poison row among successes is how
+  // a job goes permanently red and stops being read. 503 is reserved for a run
+  // that made NO progress at all, which is the signal Cloud Scheduler retries.
+  const progressed = result.published + result.conflicted > 0;
+  return NextResponse.json(
+    { ok: result.failed === 0, ...result },
+    { status: result.failed > 0 && !progressed ? 503 : 200 },
+  );
 }
 
 export const GET = handle;

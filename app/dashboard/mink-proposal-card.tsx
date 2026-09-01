@@ -186,16 +186,7 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
         setDraft(next);
         setContent(next.content);
         setApproval(null);
-        setActionResult(
-          next.lastProductAction ??
-            next.lastDomainAction ??
-            next.lastInventoryAction ??
-            next.lastBulkInventoryAction ??
-            next.lastBulkPriceAction ??
-            next.lastOrderStatusAction ??
-            next.lastBlogPublication ??
-            next.lastCampaign,
-        );
+        setActionResult(latestActionResult(next));
         setError(null);
       })
       .catch((loadError) => {
@@ -264,16 +255,7 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
       setDraft(next);
       setContent(next.content);
       setApproval(null);
-      setActionResult(
-        next.lastProductAction ??
-          next.lastDomainAction ??
-          next.lastInventoryAction ??
-          next.lastBulkInventoryAction ??
-          next.lastBulkPriceAction ??
-          next.lastOrderStatusAction ??
-          next.lastBlogPublication ??
-          next.lastCampaign,
-      );
+      setActionResult(latestActionResult(next));
     } catch (saveError) {
       setError(
         saveError instanceof Error
@@ -301,16 +283,7 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
       setDraft(next);
       setContent(next.content);
       setApproval(null);
-      setActionResult(
-        next.lastProductAction ??
-          next.lastDomainAction ??
-          next.lastInventoryAction ??
-          next.lastBulkInventoryAction ??
-          next.lastBulkPriceAction ??
-          next.lastOrderStatusAction ??
-          next.lastBlogPublication ??
-          next.lastCampaign,
-      );
+      setActionResult(latestActionResult(next));
     } catch (rollbackError) {
       setError(
         rollbackError instanceof Error
@@ -390,18 +363,63 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
           approvalId: approval.id,
         },
       );
-      if (!next.result) throw new Error("The action result is unavailable.");
+      if (!next.result) {
+        throw new MinkActionRequestError(
+          "The action result is unavailable.",
+          "unknown",
+        );
+      }
       setApproval(next.result.approval);
       setActionResult(next.result);
     } catch (executeError) {
-      setApproval(null);
-      setError(
-        executeError instanceof Error
-          ? executeError.message
-          : "The dashboard change was not applied.",
-      );
+      // ★ ONLY A DEFINITE SERVER REJECTION PROVES NOTHING WAS APPLIED. These
+      // actions are irreversible (a queued campaign, a published blog, repriced
+      // SKUs), so an UNKNOWN outcome must never clear the approval: doing so
+      // re-opens "Review exact change", and a second preview/confirm creates a
+      // SECOND campaign or a duplicate post. Re-confirming the SAME approvalId
+      // is idempotent server-side and replays the original result.
+      if (
+        !(executeError instanceof MinkActionRequestError) ||
+        executeError.outcome !== "unknown"
+      ) {
+        setApproval(null);
+        setError(
+          executeError instanceof Error
+            ? executeError.message
+            : "The dashboard change was not applied.",
+        );
+        return;
+      }
+      const settled = await settledActionResult();
+      if (settled) {
+        setApproval(settled.approval);
+        setActionResult(settled);
+        return;
+      }
+      setError(UNKNOWN_ACTION_OUTCOME);
     } finally {
       setActionBusy(null);
+    }
+  }
+
+  /**
+   * Resolve an unknown execute outcome by asking the server what happened.
+   *
+   * `getMinkDraft` returns this draft's most recent EXECUTED approval, so a
+   * change that did commit lands in its normal success state instead of a wrong
+   * "not applied". Anything else — a different approval, or a failed read —
+   * returns null, and the caller keeps the approval so the same confirmation
+   * can be repeated safely.
+   */
+  async function settledActionResult() {
+    const executedId = approval?.id;
+    if (!executedId) return null;
+    try {
+      const next = await requestDraft(proposal.draftId);
+      const settled = latestActionResult(next);
+      return settled?.approval.id === executedId ? settled : null;
+    } catch {
+      return null;
     }
   }
 
@@ -1129,12 +1147,19 @@ async function requestLiveAction(
                 : actionType === "domain"
                   ? "action"
                   : "product-action";
-  const response = await fetch(`/api/mink/drafts/${draftId}/${endpoint}`, {
-    method: "POST",
-    cache: "no-store",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  let response: Response;
+  try {
+    response = await fetch(`/api/mink/drafts/${draftId}/${endpoint}`, {
+      method: "POST",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    // The request never produced an answer, so for an execute the server may
+    // well have committed. Never let this read as a refusal.
+    throw new MinkActionRequestError(UNREACHABLE_MINK_ACTION, "unknown");
+  }
   const payload = (await response.json().catch(() => ({}))) as {
     approval?: MinkActionApproval;
     result?: MinkActionResult;
@@ -1145,6 +1170,14 @@ async function requestLiveAction(
     >;
   };
   if (!response.ok) {
+    // A 4xx is the server's verdict: it validated, refused, and wrote nothing
+    // (or recorded the approval conflicted/expired). A 5xx is NOT a verdict —
+    // the routes answer 503 from one generic catch that covers failures both
+    // before and after the transaction commits, and a proxy 502/504 says even
+    // less — so it is classified as unknown.
+    if (response.status >= 500) {
+      throw new MinkActionRequestError(UNREACHABLE_MINK_ACTION, "unknown");
+    }
     const lineDetail = payload.lineErrors
       ?.slice(
         0,
@@ -1156,13 +1189,57 @@ async function requestLiveAction(
           : `Line ${line.line} (${line.sku}): ${line.message}`,
       )
       .join("\n");
-    throw new Error(
+    throw new MinkActionRequestError(
       [payload.error ?? "The Mink action is unavailable.", lineDetail]
         .filter(Boolean)
         .join("\n"),
+      "rejected",
     );
   }
   return payload;
+}
+
+const UNREACHABLE_MINK_ACTION =
+  "StoreMink couldn't reach Mink AI. Check your connection and try again.";
+
+const UNKNOWN_ACTION_OUTCOME =
+  "StoreMink couldn't confirm whether that change was applied, so nothing was assumed either way. Confirm this same approval again — repeating it is safe and reports what actually happened.";
+
+/**
+ * A failed Mink action request, carrying whether the server actually decided.
+ *
+ * `rejected` means it refused and wrote nothing. `unknown` means the outcome
+ * was never learned. The two must stay distinguishable, because the execute
+ * endpoints are irreversible and idempotent by approvalId: an unknown outcome
+ * has to keep the approval so the same confirmation can be repeated, while
+ * reporting it as a failure invites a duplicate action instead.
+ */
+class MinkActionRequestError extends Error {
+  constructor(
+    message: string,
+    readonly outcome: "rejected" | "unknown",
+  ) {
+    super(message);
+    this.name = "MinkActionRequestError";
+  }
+}
+
+/**
+ * The newest executed live action recorded against this draft, whichever
+ * Phase 4/5 workflow it belongs to. One reader, so a new action kind cannot be
+ * wired into some of the four call sites and forgotten in the others.
+ */
+function latestActionResult(draft: DraftResponse): MinkActionResult | null {
+  return (
+    draft.lastProductAction ??
+    draft.lastDomainAction ??
+    draft.lastInventoryAction ??
+    draft.lastBulkInventoryAction ??
+    draft.lastBulkPriceAction ??
+    draft.lastOrderStatusAction ??
+    draft.lastBlogPublication ??
+    draft.lastCampaign
+  );
 }
 
 function actionPreviewFields(
