@@ -76,4 +76,12 @@ describe("Mink Phase 4A product action contract", () => {
       "Blog publication and scheduling",
     );
   });
+
+  it("keeps the Phase 5E campaign gate independent", () => {
+    expect(isMinkActionTool("send_campaign")).toBe(true);
+    expect(isMinkDomainActionTool("send_campaign")).toBe(false);
+    expect(MINK_ACTION_TOOL_LABELS.send_campaign).toBe(
+      "Coupon email campaigns",
+    );
+  });
 });

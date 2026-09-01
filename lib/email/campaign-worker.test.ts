@@ -38,6 +38,7 @@ vi.mock("@/lib/db/client", () => ({
 }));
 
 import { processEmailQueue } from "./campaign-worker";
+import { getStoreBrandById } from "@/lib/store/brand";
 
 const campaign = {
   id: "camp1",
@@ -55,10 +56,11 @@ const campaign = {
 function wire(
   batch: Array<Record<string, unknown>>,
   suppressed: string[] = [],
+  campaignRow: Record<string, unknown> = campaign,
 ) {
   dbHolder.current = makeDbMock({
     // #1 the email_campaigns lookup, #2 the suppression lookup.
-    selectQueue: [[campaign], suppressed.map((email) => ({ email }))],
+    selectQueue: [[campaignRow], suppressed.map((email) => ({ email }))],
     executeQueue: [[], batch, []],
   });
 }
@@ -180,5 +182,39 @@ describe("processEmailQueue", () => {
       "live@x.com",
     ]);
     expect(result).toMatchObject({ processed: 2, sent: 1, failed: 1 });
+  });
+
+  it("uses the exact sender and brand snapshotted by a Mink approval", async () => {
+    vi.stubEnv("RESEND_API_KEY", "re_realkey");
+    wire(
+      [{ id: "r1", campaign_id: "camp1", email: "a@x.com", first_name: "A" }],
+      [],
+      {
+        ...campaign,
+        sender_address: "Approved Store <hello@approved.example>",
+        brand_snapshot: {
+          name: "Approved Store",
+          logoUrl: null,
+          primaryColor: "#123456",
+          tagline: null,
+          blurb: null,
+          legalName: null,
+          creditLine: null,
+          email: null,
+          phone: null,
+          hours: null,
+          social: { instagram: null, youtube: null, whatsapp: null },
+          badges: [],
+          domain: "approved.example",
+        },
+      },
+    );
+
+    await processEmailQueue();
+
+    expect(batchSend.mock.calls[0][0][0].from).toBe(
+      "Approved Store <hello@approved.example>",
+    );
+    expect(getStoreBrandById).not.toHaveBeenCalled();
   });
 });

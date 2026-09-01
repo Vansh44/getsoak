@@ -22,7 +22,7 @@ describe("database migration controls", () => {
   it("loads the repository manifest and checksums the enrolled SQL", async () => {
     const loaded = await loadManifest();
     expect(loaded.baseline.id).toBe("baseline:cloudsql-2026-08-14");
-    expect(loaded.migrations).toHaveLength(52);
+    expect(loaded.migrations).toHaveLength(53);
     expect(loaded.migrations[0]).toMatchObject({
       id: "20260814_0001_logistics_shiprocket",
       transaction: true,
@@ -678,6 +678,25 @@ describe("database migration controls", () => {
     );
     expect(loaded.migrations[51].sql).toContain(
       "$phase5d$)\n)\nUPDATE public.help_articles AS article",
+    );
+    expect(loaded.migrations[52]).toMatchObject({
+      id: "20260901_0053_mink_phase_5e_campaigns",
+      transaction: true,
+      requires: ["20260901_0052_mink_phase_5d_blog_publication"],
+    });
+    expect(loaded.migrations[52].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[52].sql).toContain("send_campaign");
+    expect(loaded.migrations[52].sql).toContain(
+      "email_campaigns_mink_approval_store_fkey",
+    );
+    expect(loaded.migrations[52].sql).toContain(
+      "email_campaign_recipients_campaign_store_fkey",
+    );
+    expect(loaded.migrations[52].sql).toContain("brand_snapshot");
+    expect(loaded.migrations[52].sql).toContain("WITH ready AS");
+    expect(loaded.migrations[52].sql).toContain("FOR UPDATE OF recipient SKIP LOCKED");
+    expect(loaded.migrations[52].sql).toContain(
+      "Send or schedule one coupon-email campaign",
     );
     const repairChecks = [
       loaded.migrations[22].applyVerify,

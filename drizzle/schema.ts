@@ -1505,9 +1505,9 @@ export const emailCampaignRecipients = pgTable(
       table.storeId.asc().nullsLast().op("uuid_ops"),
     ),
     foreignKey({
-      columns: [table.campaignId],
-      foreignColumns: [emailCampaigns.id],
-      name: "email_campaign_recipients_campaign_id_fkey",
+      columns: [table.campaignId, table.storeId],
+      foreignColumns: [emailCampaigns.id, emailCampaigns.storeId],
+      name: "email_campaign_recipients_campaign_store_fkey",
     }).onDelete("cascade"),
     foreignKey({
       columns: [table.storeId],
@@ -1539,17 +1539,43 @@ export const emailCampaigns = pgTable(
       .defaultNow()
       .notNull(),
     storeId: uuid("store_id").notNull(),
+    scheduledFor: timestamp("scheduled_for", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    minkApprovalId: uuid("mink_approval_id"),
+    audienceMode: text("audience_mode"),
+    audienceLabel: text("audience_label"),
+    senderAddress: text("sender_address"),
+    brandSnapshot: jsonb("brand_snapshot"),
+    confirmedAt: timestamp("confirmed_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
   },
   (table) => [
+    unique("email_campaigns_id_store_key").on(table.id, table.storeId),
+    unique("email_campaigns_mink_approval_key").on(table.minkApprovalId),
     index("idx_email_campaigns_store_id").using(
       "btree",
       table.storeId.asc().nullsLast().op("uuid_ops"),
     ),
+    index("email_campaigns_due_idx")
+      .on(table.scheduledFor, table.createdAt)
+      .where(sql`${table.status} = 'scheduled'`),
     foreignKey({
       columns: [table.storeId],
       foreignColumns: [stores.id],
       name: "email_campaigns_store_id_fkey",
     }).onDelete("cascade"),
+    check(
+      "email_campaigns_status_check",
+      sql`status = ANY (ARRAY['pending'::text, 'sending'::text, 'done'::text, 'scheduled'::text])`,
+    ),
+    check(
+      "email_campaigns_mink_metadata_check",
+      sql`(mink_approval_id IS NULL AND scheduled_for IS NULL AND audience_mode IS NULL AND audience_label IS NULL AND sender_address IS NULL AND brand_snapshot IS NULL AND confirmed_at IS NULL AND status <> 'scheduled') OR (mink_approval_id IS NOT NULL AND audience_mode = ANY (ARRAY['all'::text, 'group'::text]) AND length(btrim(audience_label)) BETWEEN 1 AND 200 AND length(btrim(sender_address)) BETWEEN 3 AND 320 AND jsonb_typeof(brand_snapshot) = 'object' AND confirmed_at IS NOT NULL AND (status <> 'scheduled' OR scheduled_for IS NOT NULL))`,
+    ),
   ],
 );
 
@@ -4954,7 +4980,7 @@ export const minkActionToolAccess = pgTable(
     }).onDelete("cascade"),
     check(
       "mink_action_tool_access_name_check",
-      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text, 'create_product'::text, 'create_coupon'::text, 'update_coupon'::text, 'create_customer_group'::text, 'update_customer_group'::text, 'adjust_inventory'::text, 'bulk_adjust_inventory'::text, 'transition_order_status'::text, 'publish_blog'::text])`,
+      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text, 'create_product'::text, 'create_coupon'::text, 'update_coupon'::text, 'create_customer_group'::text, 'update_customer_group'::text, 'adjust_inventory'::text, 'bulk_adjust_inventory'::text, 'transition_order_status'::text, 'publish_blog'::text, 'send_campaign'::text])`,
     ),
     check(
       "mink_action_tool_access_enablement_check",
@@ -5065,6 +5091,9 @@ export const minkActionApprovals = pgTable(
     index("mink_action_approvals_blog_publish_idx")
       .on(table.storeId, table.status, table.createdAt.desc())
       .where(sql`${table.toolName} = 'publish_blog'`),
+    index("mink_action_approvals_campaign_send_idx")
+      .on(table.storeId, table.status, table.createdAt.desc())
+      .where(sql`${table.toolName} = 'send_campaign'`),
     foreignKey({
       columns: [table.storeId],
       foreignColumns: [stores.id],
@@ -5087,11 +5116,11 @@ export const minkActionApprovals = pgTable(
     }).onDelete("cascade"),
     check(
       "mink_action_approvals_tool_check",
-      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text, 'create_product'::text, 'create_coupon'::text, 'update_coupon'::text, 'create_customer_group'::text, 'update_customer_group'::text, 'adjust_inventory'::text, 'bulk_adjust_inventory'::text, 'transition_order_status'::text, 'publish_blog'::text])`,
+      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text, 'create_product'::text, 'create_coupon'::text, 'update_coupon'::text, 'create_customer_group'::text, 'update_customer_group'::text, 'adjust_inventory'::text, 'bulk_adjust_inventory'::text, 'transition_order_status'::text, 'publish_blog'::text, 'send_campaign'::text])`,
     ),
     check(
       "mink_action_approvals_resource_type_check",
-      sql`resource_type = ANY (ARRAY['product'::text, 'coupon'::text, 'customer_group'::text, 'inventory'::text, 'inventory_bulk'::text, 'order'::text, 'blog'::text])`,
+      sql`resource_type = ANY (ARRAY['product'::text, 'coupon'::text, 'customer_group'::text, 'inventory'::text, 'inventory_bulk'::text, 'order'::text, 'blog'::text, 'campaign'::text])`,
     ),
     check(
       "mink_action_approvals_operation_check",
@@ -5129,6 +5158,10 @@ export const minkActionApprovals = pgTable(
     check(
       "mink_action_approvals_blog_publish_target_check",
       sql`tool_name <> 'publish_blog' OR (resource_type = 'blog' AND resource_id IS NULL AND product_id IS NULL AND location_id IS NULL AND variant_id IS NULL AND operation = 'apply' AND source_approval_id IS NULL AND ((status = 'executed' AND result_id IS NOT NULL) OR (status <> 'executed' AND result_id IS NULL)))`,
+    ),
+    check(
+      "mink_action_approvals_campaign_send_target_check",
+      sql`tool_name <> 'send_campaign' OR (resource_type = 'campaign' AND resource_id IS NOT NULL AND product_id IS NULL AND location_id IS NULL AND variant_id IS NULL AND operation = 'apply' AND source_approval_id IS NULL AND ((status = 'executed' AND result_id IS NOT NULL) OR (status <> 'executed' AND result_id IS NULL)))`,
     ),
   ],
 );
@@ -5202,6 +5235,9 @@ export const minkActionAudit = pgTable(
     index("mink_action_audit_blog_publish_idx")
       .on(table.storeId, table.resultId, table.createdAt.desc())
       .where(sql`${table.toolName} = 'publish_blog'`),
+    index("mink_action_audit_campaign_send_idx")
+      .on(table.storeId, table.resultId, table.createdAt.desc())
+      .where(sql`${table.toolName} = 'send_campaign'`),
     foreignKey({
       columns: [table.approvalId, table.storeId],
       foreignColumns: [minkActionApprovals.id, minkActionApprovals.storeId],
@@ -5209,11 +5245,11 @@ export const minkActionAudit = pgTable(
     }).onDelete("restrict"),
     check(
       "mink_action_audit_tool_check",
-      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text, 'create_product'::text, 'create_coupon'::text, 'update_coupon'::text, 'create_customer_group'::text, 'update_customer_group'::text, 'adjust_inventory'::text, 'bulk_adjust_inventory'::text, 'transition_order_status'::text, 'publish_blog'::text])`,
+      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text, 'create_product'::text, 'create_coupon'::text, 'update_coupon'::text, 'create_customer_group'::text, 'update_customer_group'::text, 'adjust_inventory'::text, 'bulk_adjust_inventory'::text, 'transition_order_status'::text, 'publish_blog'::text, 'send_campaign'::text])`,
     ),
     check(
       "mink_action_audit_resource_type_check",
-      sql`resource_type = ANY (ARRAY['product'::text, 'coupon'::text, 'customer_group'::text, 'inventory'::text, 'inventory_bulk'::text, 'order'::text, 'blog'::text])`,
+      sql`resource_type = ANY (ARRAY['product'::text, 'coupon'::text, 'customer_group'::text, 'inventory'::text, 'inventory_bulk'::text, 'order'::text, 'blog'::text, 'campaign'::text])`,
     ),
     check(
       "mink_action_audit_operation_check",
@@ -5243,6 +5279,10 @@ export const minkActionAudit = pgTable(
     check(
       "mink_action_audit_blog_publish_target_check",
       sql`tool_name <> 'publish_blog' OR (resource_type = 'blog' AND resource_id IS NULL AND product_id IS NULL AND location_id IS NULL AND variant_id IS NULL AND operation = 'apply' AND ((outcome = 'executed' AND result_id IS NOT NULL) OR (outcome <> 'executed' AND result_id IS NULL)))`,
+    ),
+    check(
+      "mink_action_audit_campaign_send_target_check",
+      sql`tool_name <> 'send_campaign' OR (resource_type = 'campaign' AND resource_id IS NOT NULL AND product_id IS NULL AND location_id IS NULL AND variant_id IS NULL AND operation = 'apply' AND ((outcome = 'executed' AND result_id IS NOT NULL) OR (outcome <> 'executed' AND result_id IS NULL)))`,
     ),
   ],
 );

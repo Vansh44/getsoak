@@ -22,6 +22,13 @@ import {
   type MinkBlogPublicationResult,
 } from "@/lib/mink/blog-publication-action-types";
 import {
+  MINK_CAMPAIGN_ACTION_FIELDS,
+  MINK_CAMPAIGN_FIELD_LABELS,
+  type MinkCampaignApproval,
+  type MinkCampaignAudienceOptions,
+  type MinkCampaignResult,
+} from "@/lib/mink/campaign-action-types";
+import {
   MINK_DRAFT_CONFIG,
   INVENTORY_ADJUSTMENT_REASONS,
   MAX_MINK_BULK_INVENTORY_LINES,
@@ -69,14 +76,16 @@ type MinkActionApproval =
   | MinkInventoryActionApproval
   | MinkBulkInventoryActionApproval
   | MinkOrderStatusActionApproval
-  | MinkBlogPublicationApproval;
+  | MinkBlogPublicationApproval
+  | MinkCampaignApproval;
 type MinkActionResult =
   | MinkProductActionResult
   | MinkDomainActionResult
   | MinkInventoryActionResult
   | MinkBulkInventoryActionResult
   | MinkOrderStatusActionResult
-  | MinkBlogPublicationResult;
+  | MinkBlogPublicationResult
+  | MinkCampaignResult;
 type DraftResponse = {
   id: string;
   kind: MinkDraftKind;
@@ -97,6 +106,7 @@ type DraftResponse = {
   lastBulkInventoryAction: MinkBulkInventoryActionResult | null;
   lastOrderStatusAction: MinkOrderStatusActionResult | null;
   lastBlogPublication: MinkBlogPublicationResult | null;
+  lastCampaign: MinkCampaignResult | null;
 };
 
 export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
@@ -118,6 +128,19 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
   const [scheduledFor, setScheduledFor] = useState(() =>
     defaultScheduledLocalTime(),
   );
+  const [campaignMode, setCampaignMode] = useState<"send_now" | "schedule">(
+    "send_now",
+  );
+  const [campaignScheduledFor, setCampaignScheduledFor] = useState(() =>
+    defaultScheduledLocalTime(),
+  );
+  const [campaignAudienceMode, setCampaignAudienceMode] = useState<
+    "all" | "group"
+  >("all");
+  const [campaignGroupId, setCampaignGroupId] = useState("");
+  const [campaignOptions, setCampaignOptions] =
+    useState<MinkCampaignAudienceOptions | null>(null);
+  const [campaignOptionsBusy, setCampaignOptionsBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fields = MINK_DRAFT_CONFIG[draft.kind].fields;
   const dirty = useMemo(
@@ -134,13 +157,15 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
     draft.kind === "bulk_inventory_adjustment";
   const supportsOrderStatusAction = draft.kind === "order_status_transition";
   const supportsBlogPublication = draft.kind === "blog";
+  const supportsCampaign = draft.kind === "coupon_email";
   const supportsLiveAction =
     supportsProductAction ||
     supportsDomainAction ||
     supportsInventoryAction ||
     supportsBulkInventoryAction ||
     supportsOrderStatusAction ||
-    supportsBlogPublication;
+    supportsBlogPublication ||
+    supportsCampaign;
 
   useEffect(() => {
     const controller = new AbortController();
@@ -155,7 +180,8 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
             next.lastInventoryAction ??
             next.lastBulkInventoryAction ??
             next.lastOrderStatusAction ??
-            next.lastBlogPublication,
+            next.lastBlogPublication ??
+            next.lastCampaign,
         );
         setError(null);
       })
@@ -173,6 +199,41 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
       });
     return () => controller.abort();
   }, [proposal.draftId]);
+
+  useEffect(() => {
+    if (!supportsCampaign || draft.currentVersion < 1 || campaignOptions)
+      return;
+    let active = true;
+    setCampaignOptionsBusy(true);
+    void requestLiveAction(proposal.draftId, "campaign", { action: "options" })
+      .then((next) => {
+        if (!active || !next.options) return;
+        setCampaignOptions(next.options);
+        setCampaignGroupId(
+          (current) => current || next.options?.groups[0]?.id || "",
+        );
+      })
+      .catch((optionsError) => {
+        if (active) {
+          setError(
+            optionsError instanceof Error
+              ? optionsError.message
+              : "Campaign audiences could not be loaded.",
+          );
+        }
+      })
+      .finally(() => {
+        if (active) setCampaignOptionsBusy(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [
+    campaignOptions,
+    draft.currentVersion,
+    proposal.draftId,
+    supportsCampaign,
+  ]);
 
   async function save() {
     setBusy("save");
@@ -196,7 +257,8 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
           next.lastInventoryAction ??
           next.lastBulkInventoryAction ??
           next.lastOrderStatusAction ??
-          next.lastBlogPublication,
+          next.lastBlogPublication ??
+          next.lastCampaign,
       );
     } catch (saveError) {
       setError(
@@ -231,7 +293,8 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
           next.lastInventoryAction ??
           next.lastBulkInventoryAction ??
           next.lastOrderStatusAction ??
-          next.lastBlogPublication,
+          next.lastBlogPublication ??
+          next.lastCampaign,
       );
     } catch (rollbackError) {
       setError(
@@ -251,10 +314,19 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
       const publicationTiming = supportsBlogPublication
         ? blogPublicationTiming(publicationMode, scheduledFor)
         : {};
+      const campaignSelection = supportsCampaign
+        ? campaignActionSelection({
+            audienceMode: campaignAudienceMode,
+            groupId: campaignGroupId,
+            mode: campaignMode,
+            scheduledLocal: campaignScheduledFor,
+          })
+        : {};
       const next = await requestLiveAction(
         proposal.draftId,
         liveActionType({
           supportsBlogPublication,
+          supportsCampaign,
           supportsBulkInventoryAction,
           supportsOrderStatusAction,
           supportsInventoryAction,
@@ -265,6 +337,7 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
           expectedDraftVersion: draft.currentVersion,
           idempotencyKey: crypto.randomUUID(),
           ...publicationTiming,
+          ...campaignSelection,
         },
       );
       setApproval(next.approval ?? null);
@@ -289,6 +362,7 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
         proposal.draftId,
         liveActionType({
           supportsBlogPublication,
+          supportsCampaign,
           supportsBulkInventoryAction,
           supportsOrderStatusAction,
           supportsInventoryAction,
@@ -320,7 +394,8 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
       supportsInventoryAction ||
       supportsBulkInventoryAction ||
       supportsOrderStatusAction ||
-      supportsBlogPublication
+      supportsBlogPublication ||
+      supportsCampaign
     )
       return;
     setActionBusy("rollback");
@@ -526,7 +601,15 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
                 <button
                   type="button"
                   onClick={reviewLiveAction}
-                  disabled={busy !== null || actionBusy !== null || dirty}
+                  disabled={
+                    busy !== null ||
+                    actionBusy !== null ||
+                    dirty ||
+                    (supportsCampaign &&
+                      (campaignOptionsBusy ||
+                        !campaignOptions ||
+                        (campaignAudienceMode === "group" && !campaignGroupId)))
+                  }
                   className="inline-flex items-center gap-1 rounded-lg border border-[#6d4dff] bg-white px-2.5 py-1.5 text-[10px] font-semibold text-[#5b3fd0] disabled:cursor-not-allowed disabled:opacity-45"
                 >
                   {actionBusy === "preview" ? (
@@ -594,6 +677,128 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
               </div>
             ) : null}
 
+            {supportsCampaign && !approval && !actionResult ? (
+              <div className="space-y-3 rounded-lg border border-[#eeeaf8] bg-white p-2.5">
+                <div>
+                  <div className="text-[9px] font-semibold text-[#5f5868]">
+                    Audience
+                  </div>
+                  <p className="mt-0.5 text-[9px] leading-4 text-[#82798d]">
+                    Mink snapshots eligible email addresses only when you
+                    review. Missing, invalid and suppressed addresses are
+                    excluded.
+                  </p>
+                  <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                    <label className="flex cursor-pointer items-center gap-2 rounded-md border border-[#e4dfef] px-2.5 py-2 text-[10px] text-[#44365f]">
+                      <input
+                        type="radio"
+                        name={`mink-campaign-audience-${draft.id}`}
+                        checked={campaignAudienceMode === "all"}
+                        disabled={campaignOptionsBusy || actionBusy !== null}
+                        onChange={() => changeCampaignAudience("all")}
+                      />
+                      {campaignOptions?.allLabel ?? "All customers"}
+                    </label>
+                    <label className="flex cursor-pointer items-center gap-2 rounded-md border border-[#e4dfef] px-2.5 py-2 text-[10px] text-[#44365f]">
+                      <input
+                        type="radio"
+                        name={`mink-campaign-audience-${draft.id}`}
+                        checked={campaignAudienceMode === "group"}
+                        disabled={
+                          campaignOptionsBusy ||
+                          actionBusy !== null ||
+                          !campaignOptions?.groups.length
+                        }
+                        onChange={() => changeCampaignAudience("group")}
+                      />
+                      One customer group
+                    </label>
+                  </div>
+                  {campaignAudienceMode === "group" ? (
+                    <label className="mt-2 block">
+                      <span className="mb-1 block text-[9px] font-semibold text-[#5f5868]">
+                        Exact group
+                      </span>
+                      <select
+                        value={campaignGroupId}
+                        disabled={campaignOptionsBusy || actionBusy !== null}
+                        onChange={(event) => {
+                          setCampaignGroupId(event.target.value);
+                          setApproval(null);
+                          setActionResult(null);
+                        }}
+                        className="h-9 w-full rounded-lg border border-[#dfdce5] bg-white px-2.5 text-xs text-[#252228] outline-none focus:border-[#6d4dff] focus:ring-1 focus:ring-[#6d4dff]"
+                      >
+                        {campaignOptions?.groups.map((group) => (
+                          <option key={group.id} value={group.id}>
+                            {group.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : null}
+                  {campaignOptions ? (
+                    <span className="mt-1 block text-[9px] leading-4 text-[#82798d]">
+                      Phase 5E supports at most{" "}
+                      {campaignOptions.maxRecipients.toLocaleString("en-IN")}{" "}
+                      source customers per campaign.
+                    </span>
+                  ) : null}
+                </div>
+
+                <div>
+                  <div className="flex items-center gap-1 text-[9px] font-semibold text-[#5f5868]">
+                    <CalendarClock className="h-3 w-3" /> Delivery timing
+                  </div>
+                  <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                    <label className="flex cursor-pointer items-center gap-2 rounded-md border border-[#e4dfef] px-2.5 py-2 text-[10px] text-[#44365f]">
+                      <input
+                        type="radio"
+                        name={`mink-campaign-timing-${draft.id}`}
+                        checked={campaignMode === "send_now"}
+                        disabled={actionBusy !== null}
+                        onChange={() => changeCampaignMode("send_now")}
+                      />
+                      Queue after final confirmation
+                    </label>
+                    <label className="flex cursor-pointer items-center gap-2 rounded-md border border-[#e4dfef] px-2.5 py-2 text-[10px] text-[#44365f]">
+                      <input
+                        type="radio"
+                        name={`mink-campaign-timing-${draft.id}`}
+                        checked={campaignMode === "schedule"}
+                        disabled={actionBusy !== null}
+                        onChange={() => changeCampaignMode("schedule")}
+                      />
+                      Schedule for later
+                    </label>
+                  </div>
+                  {campaignMode === "schedule" ? (
+                    <label className="mt-2 block">
+                      <span className="mb-1 block text-[9px] font-semibold text-[#5f5868]">
+                        Your browser local time
+                      </span>
+                      <input
+                        type="datetime-local"
+                        value={campaignScheduledFor}
+                        min={minimumScheduledLocalTime()}
+                        disabled={actionBusy !== null}
+                        onChange={(event) => {
+                          setCampaignScheduledFor(event.target.value);
+                          setApproval(null);
+                          setActionResult(null);
+                        }}
+                        className="h-9 w-full rounded-lg border border-[#dfdce5] bg-white px-2.5 text-xs text-[#252228] outline-none focus:border-[#6d4dff] focus:ring-1 focus:ring-[#6d4dff]"
+                      />
+                      <span className="mt-1 block text-[9px] leading-4 text-[#82798d]">
+                        Choose at least 5 minutes and no more than 30 days
+                        ahead. The server stores the exact instant in UTC.
+                      </span>
+                    </label>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+
             {dirty ? (
               <p className="text-[9px] font-medium text-amber-700">
                 Save this draft version before reviewing a live change.
@@ -631,6 +836,25 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
                     </div>
                   ))
                 )}
+                {isCampaignApproval(approval) && approval.sample ? (
+                  <div className="overflow-hidden rounded-lg border border-[#e4dfef] bg-white">
+                    <div className="border-b border-[#eeeaf8] px-2.5 py-2">
+                      <div className="text-[9px] font-semibold text-[#5f5868]">
+                        Branded sample · {approval.sample.recipientLabel}
+                      </div>
+                      <div className="mt-0.5 break-words text-[10px] text-[#292235]">
+                        {approval.sample.subject}
+                      </div>
+                    </div>
+                    <iframe
+                      title="Mink campaign email sample"
+                      sandbox=""
+                      referrerPolicy="no-referrer"
+                      srcDoc={approval.sample.html}
+                      className="h-72 w-full bg-white"
+                    />
+                  </div>
+                ) : null}
                 <div className="flex flex-wrap justify-end gap-2 pt-1">
                   <button
                     type="button"
@@ -715,7 +939,10 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
           Blog proposals can publish immediately or create one scheduled job
           only after an exact, expiring preview is approved. Scheduled jobs
           pause when Mink drafting or the publication kill switch is disabled,
-          and conflict instead of overwriting a changed blog.
+          and conflict instead of overwriting a changed blog. Coupon-email
+          campaigns use their own switch, snapshot one exact eligible audience,
+          show a non-PII branded sample and require a final confirmation before
+          any recipient is queued. Campaign delivery has no automatic rollback.
         </p>
       </div>
     </section>
@@ -736,6 +963,29 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
         scheduledAt < Date.now() + 5 * 60 * 1_000)
     ) {
       setScheduledFor(defaultScheduledLocalTime());
+    }
+    setApproval(null);
+    setActionResult(null);
+  }
+
+  function changeCampaignAudience(mode: "all" | "group") {
+    setCampaignAudienceMode(mode);
+    if (mode === "group" && !campaignGroupId) {
+      setCampaignGroupId(campaignOptions?.groups[0]?.id ?? "");
+    }
+    setApproval(null);
+    setActionResult(null);
+  }
+
+  function changeCampaignMode(mode: "send_now" | "schedule") {
+    setCampaignMode(mode);
+    const scheduledAt = Date.parse(campaignScheduledFor);
+    if (
+      mode === "schedule" &&
+      (!Number.isFinite(scheduledAt) ||
+        scheduledAt < Date.now() + 5 * 60 * 1_000)
+    ) {
+      setCampaignScheduledFor(defaultScheduledLocalTime());
     }
     setApproval(null);
     setActionResult(null);
@@ -793,6 +1043,7 @@ function fromProposal(proposal: Proposal): DraftResponse {
     lastBulkInventoryAction: null,
     lastOrderStatusAction: null,
     lastBlogPublication: null,
+    lastCampaign: null,
   };
 }
 
@@ -822,24 +1073,28 @@ async function requestLiveAction(
     | "inventory"
     | "bulk_inventory"
     | "order_status"
-    | "blog",
+    | "blog"
+    | "campaign",
   body: Record<string, unknown>,
 ): Promise<{
   approval?: MinkActionApproval;
   result?: MinkActionResult;
+  options?: MinkCampaignAudienceOptions;
 }> {
   const endpoint =
-    actionType === "blog"
-      ? "blog-publication"
-      : actionType === "bulk_inventory"
-        ? "bulk-inventory-action"
-        : actionType === "order_status"
-          ? "order-status-action"
-          : actionType === "inventory"
-            ? "inventory-action"
-            : actionType === "domain"
-              ? "action"
-              : "product-action";
+    actionType === "campaign"
+      ? "campaign-action"
+      : actionType === "blog"
+        ? "blog-publication"
+        : actionType === "bulk_inventory"
+          ? "bulk-inventory-action"
+          : actionType === "order_status"
+            ? "order-status-action"
+            : actionType === "inventory"
+              ? "inventory-action"
+              : actionType === "domain"
+                ? "action"
+                : "product-action";
   const response = await fetch(`/api/mink/drafts/${draftId}/${endpoint}`, {
     method: "POST",
     cache: "no-store",
@@ -849,6 +1104,7 @@ async function requestLiveAction(
   const payload = (await response.json().catch(() => ({}))) as {
     approval?: MinkActionApproval;
     result?: MinkActionResult;
+    options?: MinkCampaignAudienceOptions;
     error?: string;
     lineErrors?: MinkBulkInventoryValidationDetail[];
   };
@@ -879,6 +1135,12 @@ function actionPreviewFields(
       key,
       label:
         MINK_BLOG_PUBLICATION_FIELD_LABELS[key] ?? key.replaceAll("_", " "),
+    }));
+  }
+  if (isCampaignApproval(approval)) {
+    return MINK_CAMPAIGN_ACTION_FIELDS.map((key) => ({
+      key,
+      label: MINK_CAMPAIGN_FIELD_LABELS[key] ?? key.replaceAll("_", " "),
     }));
   }
   if (isSingleInventoryApproval(approval)) {
@@ -927,6 +1189,7 @@ function actionHeading(kind: MinkDraftKind) {
     return "Advance one delivery order by one status";
   }
   if (kind === "blog") return "Publish or schedule this saved blog";
+  if (kind === "coupon_email") return "Send or schedule this coupon email";
   return "Apply to the linked product";
 }
 
@@ -952,6 +1215,9 @@ function actionScope(kind: MinkDraftKind) {
   if (kind === "blog") {
     return "Requires Blogs Manage and an independent publication kill switch. Only this exact saved title, excerpt, body and SEO text can become one new blog; raw HTML, automatic links and model-side execution are blocked.";
   }
+  if (kind === "coupon_email") {
+    return "Requires Marketing Manage, Pro campaign access and an independent campaign switch. The server snapshots the exact unsuppressed audience, sender, coupon and saved copy; Gemini cannot reach the send endpoint.";
+  }
   return "Requires Products Manage permission and a separate operator kill switch. Price, stock, status and publishing are outside this action.";
 }
 
@@ -972,6 +1238,11 @@ function actionSuccessMessage(approval: MinkActionApproval) {
     return approval.after.publication_status === "Scheduled"
       ? "Approved blog publication scheduled."
       : "Approved blog published.";
+  }
+  if (isCampaignApproval(approval)) {
+    return approval.after.delivery === "Scheduled"
+      ? "Approved coupon campaign scheduled."
+      : "Approved coupon campaign queued for delivery.";
   }
   if (isCreateDomainTool(approval.toolName)) {
     return `Approved ${approval.resource.type.replace("_", " ")} created.`;
@@ -1022,17 +1293,25 @@ function isBlogPublicationApproval(
   return !("product" in approval) && approval.resource.type === "blog";
 }
 
+function isCampaignApproval(
+  approval: MinkActionApproval,
+): approval is MinkCampaignApproval {
+  return !("product" in approval) && approval.resource.type === "campaign";
+}
+
 function isAnyNonRollbackApproval(
   approval: MinkActionApproval,
 ): approval is
   | MinkInventoryActionApproval
   | MinkBulkInventoryActionApproval
   | MinkOrderStatusActionApproval
-  | MinkBlogPublicationApproval {
+  | MinkBlogPublicationApproval
+  | MinkCampaignApproval {
   return (
     isAnyInventoryApproval(approval) ||
     isOrderStatusApproval(approval) ||
-    isBlogPublicationApproval(approval)
+    isBlogPublicationApproval(approval) ||
+    isCampaignApproval(approval)
   );
 }
 
@@ -1043,6 +1322,11 @@ function actionApprovalButtonLabel(approval: MinkActionApproval) {
       ? "Approve and schedule"
       : "Approve and publish";
   }
+  if (isCampaignApproval(approval)) {
+    return approval.after.delivery === "Scheduled"
+      ? "Confirm and schedule campaign"
+      : "Confirm and queue campaign";
+  }
   return "Approve and apply";
 }
 
@@ -1052,21 +1336,52 @@ type LiveActionType =
   | "inventory"
   | "bulk_inventory"
   | "order_status"
-  | "blog";
+  | "blog"
+  | "campaign";
 
 function liveActionType(input: {
   supportsBlogPublication: boolean;
+  supportsCampaign: boolean;
   supportsBulkInventoryAction: boolean;
   supportsOrderStatusAction: boolean;
   supportsInventoryAction: boolean;
   supportsDomainAction: boolean;
 }): LiveActionType {
+  if (input.supportsCampaign) return "campaign";
   if (input.supportsBlogPublication) return "blog";
   if (input.supportsBulkInventoryAction) return "bulk_inventory";
   if (input.supportsOrderStatusAction) return "order_status";
   if (input.supportsInventoryAction) return "inventory";
   if (input.supportsDomainAction) return "domain";
   return "product";
+}
+
+function campaignActionSelection(input: {
+  audienceMode: "all" | "group";
+  groupId: string;
+  mode: "send_now" | "schedule";
+  scheduledLocal: string;
+}) {
+  const timing =
+    input.mode === "send_now"
+      ? { mode: input.mode }
+      : campaignSchedule(input.scheduledLocal);
+  return {
+    audienceMode: input.audienceMode,
+    ...(input.audienceMode === "group" ? { groupId: input.groupId } : {}),
+    ...timing,
+  };
+}
+
+function campaignSchedule(scheduledLocal: string) {
+  if (!scheduledLocal) {
+    throw new Error("Choose a future campaign date and time before reviewing.");
+  }
+  const scheduled = new Date(scheduledLocal);
+  if (Number.isNaN(scheduled.getTime())) {
+    throw new Error("Choose a valid future campaign time.");
+  }
+  return { mode: "schedule" as const, scheduledFor: scheduled.toISOString() };
 }
 
 function blogPublicationTiming(

@@ -1,11 +1,11 @@
 import "server-only";
 
 import { Resend } from "resend";
-import { and, count, eq, inArray, ne, sql } from "drizzle-orm";
+import { and, count, eq, inArray, lte, ne, or, sql } from "drizzle-orm";
 import { withService } from "@/lib/db/client";
 import { emailCampaignRecipients, emailCampaigns } from "@/drizzle/schema";
 import { mergeTokens, renderCouponEmail } from "@/lib/email/coupon-campaign";
-import { getStoreBrandById } from "@/lib/store/brand";
+import { getStoreBrandById, type StoreBrand } from "@/lib/store/brand";
 import { fromAddress } from "@/lib/email/sender";
 import { sendEmailBatch, type BatchSender } from "@/lib/email/send-batch";
 import { findSuppressed, normalizeEmail } from "@/lib/email/suppression";
@@ -30,6 +30,8 @@ interface CampaignRow {
   discount_label: string;
   valid_until_label: string | null;
   store_id: string;
+  sender_address: string | null;
+  brand_snapshot: unknown;
 }
 
 export interface WorkerResult {
@@ -44,6 +46,22 @@ function getResend(): Resend | null {
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey || apiKey.includes("placeholder")) return null;
   return new Resend(apiKey);
+}
+
+function readBrandSnapshot(value: unknown): StoreBrand | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const row = value as Partial<StoreBrand>;
+  if (
+    typeof row.name !== "string" ||
+    typeof row.primaryColor !== "string" ||
+    typeof row.domain !== "string" ||
+    !row.social ||
+    typeof row.social !== "object" ||
+    !Array.isArray(row.badges)
+  ) {
+    return null;
+  }
+  return row as StoreBrand;
 }
 
 /**
@@ -97,6 +115,8 @@ export async function processEmailQueue(
           discount_label: emailCampaigns.discountLabel,
           valid_until_label: emailCampaigns.validUntilLabel,
           store_id: emailCampaigns.storeId,
+          sender_address: emailCampaigns.senderAddress,
+          brand_snapshot: emailCampaigns.brandSnapshot,
         })
         .from(emailCampaigns)
         .where(inArray(emailCampaigns.id, campaignIds)),
@@ -105,10 +125,14 @@ export async function processEmailQueue(
       campaignRows.map((c) => [c.id, c as CampaignRow]),
     );
 
-    const storeIds = [...new Set(campaignRows.map((c) => c.store_id))].filter(
-      Boolean,
-    );
-    const brandsMap = new Map();
+    const storeIds = [
+      ...new Set(
+        campaignRows
+          .filter((campaign) => !readBrandSnapshot(campaign.brand_snapshot))
+          .map((campaign) => campaign.store_id),
+      ),
+    ].filter(Boolean);
+    const brandsMap = new Map<string, StoreBrand>();
     for (const sid of storeIds) {
       brandsMap.set(sid, await getStoreBrandById(sid));
     }
@@ -124,7 +148,9 @@ export async function processEmailQueue(
     // be recorded as sent.
     const prepared = batch.map((r) => {
       const c = campaigns.get(r.campaign_id);
-      const brand = c ? brandsMap.get(c.store_id) : undefined;
+      const brand = c
+        ? (readBrandSnapshot(c.brand_snapshot) ?? brandsMap.get(c.store_id))
+        : undefined;
       if (!c || !brand) return { id: r.id, message: null };
       if (suppressed.has(normalizeEmail(r.email))) {
         return { id: r.id, message: null };
@@ -134,7 +160,7 @@ export async function processEmailQueue(
       return {
         id: r.id,
         message: {
-          from: fromAddress(brand),
+          from: c.sender_address ?? fromAddress(brand),
           to: r.email,
           subject: mergeTokens(c.subject, firstName),
           html: renderCouponEmail({
@@ -223,11 +249,30 @@ export async function processEmailQueue(
 
   let remaining = 0;
   try {
+    const now = new Date().toISOString();
     const [row] = await withService((db) =>
       db
         .select({ n: count() })
         .from(emailCampaignRecipients)
-        .where(eq(emailCampaignRecipients.status, "pending")),
+        .innerJoin(
+          emailCampaigns,
+          and(
+            eq(emailCampaigns.id, emailCampaignRecipients.campaignId),
+            eq(emailCampaigns.storeId, emailCampaignRecipients.storeId),
+          ),
+        )
+        .where(
+          and(
+            eq(emailCampaignRecipients.status, "pending"),
+            or(
+              inArray(emailCampaigns.status, ["pending", "sending"]),
+              and(
+                eq(emailCampaigns.status, "scheduled"),
+                lte(emailCampaigns.scheduledFor, now),
+              ),
+            ),
+          ),
+        ),
     );
     remaining = row?.n ?? 0;
   } catch (err) {
