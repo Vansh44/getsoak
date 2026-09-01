@@ -694,7 +694,9 @@ describe("database migration controls", () => {
     );
     expect(loaded.migrations[52].sql).toContain("brand_snapshot");
     expect(loaded.migrations[52].sql).toContain("WITH ready AS");
-    expect(loaded.migrations[52].sql).toContain("FOR UPDATE OF recipient SKIP LOCKED");
+    expect(loaded.migrations[52].sql).toContain(
+      "FOR UPDATE OF recipient SKIP LOCKED",
+    );
     expect(loaded.migrations[52].sql).toContain(
       "Send or schedule one coupon-email campaign",
     );

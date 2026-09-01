@@ -10,9 +10,9 @@ const NOW = Date.parse("2026-09-01T00:00:00.000Z");
 
 describe("Mink Phase 5E campaign policy", () => {
   it("normalizes immediate sends without timing input", () => {
-    expect(normalizeMinkCampaignTiming({ mode: "send_now", nowMs: NOW })).toEqual(
-      { mode: "send_now", scheduledFor: null },
-    );
+    expect(
+      normalizeMinkCampaignTiming({ mode: "send_now", nowMs: NOW }),
+    ).toEqual({ mode: "send_now", scheduledFor: null });
   });
 
   it("accepts only canonical UTC schedules inside the bounded window", () => {
@@ -20,7 +20,11 @@ describe("Mink Phase 5E campaign policy", () => {
       NOW + MIN_MINK_CAMPAIGN_SCHEDULE_LEAD_MS,
     ).toISOString();
     expect(
-      normalizeMinkCampaignTiming({ mode: "schedule", scheduledFor, nowMs: NOW }),
+      normalizeMinkCampaignTiming({
+        mode: "schedule",
+        scheduledFor,
+        nowMs: NOW,
+      }),
     ).toEqual({ mode: "schedule", scheduledFor });
     expect(() =>
       normalizeMinkCampaignTiming({
