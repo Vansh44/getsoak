@@ -22,7 +22,7 @@ describe("database migration controls", () => {
   it("loads the repository manifest and checksums the enrolled SQL", async () => {
     const loaded = await loadManifest();
     expect(loaded.baseline.id).toBe("baseline:cloudsql-2026-08-14");
-    expect(loaded.migrations).toHaveLength(54);
+    expect(loaded.migrations).toHaveLength(55);
     expect(loaded.migrations[0]).toMatchObject({
       id: "20260814_0001_logistics_shiprocket",
       transaction: true,
@@ -721,6 +721,19 @@ describe("database migration controls", () => {
     );
     expect(loaded.migrations[53].sql).toContain(
       "not a sales or revenue forecast",
+    );
+    expect(loaded.migrations[54]).toMatchObject({
+      id: "20260902_0055_pos_https_entry_help",
+      transaction: true,
+      requires: ["20260901_0054_mink_phase_5f_bulk_prices"],
+      verify: {},
+    });
+    expect(loaded.migrations[54].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[54].sql).toContain(
+      "StoreMink permanently upgrades a plain HTTP request",
+    );
+    expect(loaded.migrations[54].sql).toContain(
+      "The address says this site cannot be reached",
     );
     const repairChecks = [
       loaded.migrations[22].applyVerify,

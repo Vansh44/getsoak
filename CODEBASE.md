@@ -58,6 +58,13 @@ Every request belongs to exactly one store, resolved from the **Host header**.
 | `{slug}.storemink.com`, `{slug}.localhost`           | **Store subdomain** — storefront + `/dashboard` + `/auth` served directly                                         |
 | Anything else                                        | **Custom domain** — must have `settings.custom_domain_verified === true` to resolve                               |
 
+In production, the Google Cloud External Application Load Balancer owns both
+entry ports on the same static IP. Port 80 is a redirect-only frontend that
+returns a permanent 308 to the identical host, path, and query on HTTPS; port
+443 continues through the certificate map and serverless backend. Therefore a
+bare address such as `pos.storemink.com` is upgraded before the request reaches
+`proxy.ts` or Cloud Run.
+
 `proxy.ts` also gates auth: `/dashboard` requires a valid **Firebase session
 cookie** (`sm_session`; redirect to `/auth/login`), enforces
 `force_password_reset` → `/auth/set-password`, and sends POS staff
@@ -3448,7 +3455,10 @@ the trusted `store_id`, and direct customer PII is minimized/masked.
       and remain operator-editable; POS documentation is not duplicated in a
       static route. Forward-only migration
       `20260831_0045_pos_mobile_register_help` adds the phone and portrait-tablet
-      Products/Cart workflow to the register customization guide.
+      Products/Cart workflow to the register customization guide. Forward-only
+      migration `20260902_0055_pos_https_entry_help` explains the load
+      balancer's bare-address HTTPS upgrade in the POS overview and
+      troubleshooting guides.
     - **Merchant Help coverage baseline (2026-08-26):** migrations
       `20260826_0019_getting_started_account_help` through
       `20260826_0024_marketing_communications_help` upsert 81 guide records
@@ -3521,7 +3531,10 @@ the trusted `store_id`, and direct customer PII is minimized/masked.
     The public product site is separately served at **`pos.storemink.com`** by
     rewriting into `app/platform/pos`; `pos` is reserved from merchant signup,
     uses its own canonical/robots/sitemap, and the daily SEO reconciliation job
-    submits that sitemap alongside the apex, help and themes hosts.
+    submits that sitemap alongside the apex, help and themes hosts. Production
+    port 80 permanently redirects the same host/path/query to HTTPS before this
+    routing runs, so entering the bare product or merchant POS address works
+    without manually typing the scheme.
     `app/platform/pos/structured-data.ts` emits a connected Organization +
     WebSite + SoftwareApplication graph (visible feature list and the live Pro
     price included), so the product host resolves to StoreMink's shared company

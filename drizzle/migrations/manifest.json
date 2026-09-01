@@ -1941,6 +1941,33 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260902_0055_pos_https_entry_help",
+      "description": "Document automatic HTTPS upgrades for bare POS and merchant addresses",
+      "file": "sql/20260902_0055_pos_https_entry_help.sql",
+      "checksum": "1a8e1f420eec7443d8d1859b27072a4567f180a191cd92c148129c7d96ebd74e",
+      "transaction": true,
+      "requires": ["20260901_0054_mink_phase_5f_bulk_prices"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "the POS guides explain automatic HTTPS entry",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and ((slug = 'pos-overview-and-requirements' and body like '%StoreMink permanently upgrades a plain HTTP request%' and body like '%the same host, path, and query on encrypted HTTPS%') or (slug = 'troubleshoot-pos-and-internet-issues' and body like '%<h2>The address says this site cannot be reached</h2>%' and body like '%you do not need to add <strong>https://</strong>%' and body like '%your merchant store domain followed by <strong>/pos</strong>%'))",
+            "equals": "2"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "the POS guides already explain automatic HTTPS entry",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and ((slug = 'pos-overview-and-requirements' and body like '%StoreMink permanently upgrades a plain HTTP request%' and body like '%the same host, path, and query on encrypted HTTPS%') or (slug = 'troubleshoot-pos-and-internet-issues' and body like '%<h2>The address says this site cannot be reached</h2>%' and body like '%you do not need to add <strong>https://</strong>%' and body like '%your merchant store domain followed by <strong>/pos</strong>%'))",
+            "equals": "2"
+          }
+        ]
+      }
     }
   ]
 }
