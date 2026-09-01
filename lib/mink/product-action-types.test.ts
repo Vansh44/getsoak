@@ -84,4 +84,12 @@ describe("Mink Phase 4A product action contract", () => {
       "Coupon email campaigns",
     );
   });
+
+  it("keeps the Phase 5F bulk-pricing gate independent", () => {
+    expect(isMinkActionTool("bulk_update_prices")).toBe(true);
+    expect(isMinkDomainActionTool("bulk_update_prices")).toBe(false);
+    expect(MINK_ACTION_TOOL_LABELS.bulk_update_prices).toBe(
+      "Bulk price updates",
+    );
+  });
 });

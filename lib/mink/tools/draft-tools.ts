@@ -22,6 +22,16 @@ import {
   resolveMinkBulkInventoryTargets,
   type MinkBulkInventoryLookupInput,
 } from "../bulk-inventory-targets";
+import {
+  assertMinkSpecialPriceSupported,
+  MAX_MINK_BULK_PRICE_LINES,
+  normalizeMinkPriceSet,
+} from "../bulk-price-policy";
+import {
+  resolveMinkBulkPriceTargets,
+  type MinkBulkPriceLookupInput,
+  type MinkBulkPriceTarget,
+} from "../bulk-price-targets";
 import type { MinkTool } from "./registry";
 import { resolveMinkLocation } from "./location-scope";
 import {
@@ -963,6 +973,250 @@ export const proposeBulkInventoryAdjustmentTool: MinkTool = {
   },
 };
 
+const bulkPriceLookupLineSchema = {
+  type: "object",
+  properties: {
+    product_sku: { type: "string", minLength: 1, maxLength: 100 },
+  },
+  required: ["product_sku"],
+  additionalProperties: false,
+};
+
+export const getProductsForBulkPriceUpdateTool: MinkTool = {
+  declaration: {
+    name: "get_products_for_bulk_price_update",
+    description:
+      "Read 1-20 exact sellable product or variant SKUs before a bulk price proposal. Returns authoritative MRP, selling, special and effective prices plus an opaque price_snapshot. A parent product with variants is rejected; use every exact variant SKU. This never changes prices.",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {
+        lines: {
+          type: "array",
+          minItems: 1,
+          maxItems: MAX_MINK_BULK_PRICE_LINES,
+          items: bulkPriceLookupLineSchema,
+        },
+      },
+      required: ["lines"],
+      additionalProperties: false,
+    },
+  },
+  permission: { section: "products", action: "view" },
+  available: draftingAvailable,
+  timeoutMs: 8_000,
+  async execute(actor, args) {
+    const inputs = readBulkPriceLookupLines(args.lines);
+    const resolved = await withActor(actor, (db) =>
+      resolveMinkBulkPriceTargets(db, actor, inputs),
+    );
+    return {
+      status: resolved.every((line) => !line.error)
+        ? "ready"
+        : "needs_correction",
+      currency: actor.currency,
+      max_lines: MAX_MINK_BULK_PRICE_LINES,
+      lines: await Promise.all(
+        resolved.map(async (line) =>
+          line.error
+            ? {
+                line: line.line,
+                sku: line.input.sku,
+                status: "error",
+                error_code: line.error.code,
+                error: line.error.message,
+              }
+            : {
+                line: line.line,
+                product: line.target.productName,
+                variant: line.target.variantName,
+                sku: line.target.sku,
+                publication_status: line.target.publicationStatus,
+                base_price: line.target.basePrice,
+                selling_price: line.target.sellingPrice,
+                special_price: line.target.specialPrice,
+                special_price_supported: line.target.supportsSpecialPrice,
+                effective_price: line.target.effectivePrice,
+                status: "ready",
+                price_snapshot: await bulkPriceSnapshot(actor, line.target),
+              },
+        ),
+      ),
+      dataAsOf: new Date().toISOString(),
+    };
+  },
+};
+
+const bulkPriceProposalLineSchema = {
+  type: "object",
+  properties: {
+    ...bulkPriceLookupLineSchema.properties,
+    price_snapshot: { type: "string", minLength: 64, maxLength: 64 },
+    base_price: {
+      type: "number",
+      exclusiveMinimum: 0,
+      maximum: 99_999_999.99,
+    },
+    selling_price: {
+      type: "number",
+      exclusiveMinimum: 0,
+      maximum: 99_999_999.99,
+    },
+    special_price_mode: {
+      type: "string",
+      enum: ["keep", "clear", "set"],
+      description:
+        "Keep the current special price, clear it, or set an explicit special_price.",
+    },
+    special_price: {
+      type: "number",
+      exclusiveMinimum: 0,
+      maximum: 99_999_999.99,
+    },
+  },
+  required: [
+    "product_sku",
+    "price_snapshot",
+    "base_price",
+    "selling_price",
+    "special_price_mode",
+  ],
+  additionalProperties: false,
+};
+
+export const proposeBulkPriceUpdateTool: MinkTool = {
+  declaration: {
+    name: "propose_bulk_price_update",
+    description:
+      "Create a charged private proposal for 1-20 exact sellable SKU price changes. First call get_products_for_bulk_price_update and pass every price_snapshot unchanged. Each line must supply the complete final MRP and selling price, and explicitly keep, clear or set its special price. The server enforces MRP >= selling >= special and reports every invalid line; it creates no proposal until all lines are valid. This never changes a live price. A human must save, review the unit-basket impact summary and approve the whole atomic batch.",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {
+        lines: {
+          type: "array",
+          minItems: 1,
+          maxItems: MAX_MINK_BULK_PRICE_LINES,
+          items: bulkPriceProposalLineSchema,
+        },
+      },
+      required: ["lines"],
+      additionalProperties: false,
+    },
+  },
+  permission: { section: "products", action: "manage" },
+  available: draftingAvailable,
+  timeoutMs: 10_000,
+  artifact: proposalArtifact,
+  async execute(actor, args) {
+    const lines = readBulkPriceProposalLines(args.lines);
+    const resolved = await withActor(actor, (db) =>
+      resolveMinkBulkPriceTargets(
+        db,
+        actor,
+        lines.map((line) => ({ sku: line.sku })),
+      ),
+    );
+    const errors: Array<Record<string, unknown>> = [];
+    const contentLines: Array<Record<string, string>> = [];
+    for (const result of resolved) {
+      const input = lines[result.line - 1];
+      if (!input) throw new MinkToolInputError("A bulk price line is missing.");
+      if (result.error) {
+        errors.push({
+          line: result.line,
+          sku: input.sku,
+          code: result.error.code,
+          message: result.error.message,
+        });
+        continue;
+      }
+      if (input.snapshot !== (await bulkPriceSnapshot(actor, result.target))) {
+        errors.push({
+          line: result.line,
+          sku: input.sku,
+          code: "snapshot_conflict",
+          message: "The SKU or current price changed. Read this line again.",
+        });
+        continue;
+      }
+      if (input.specialMode !== "set" && input.specialPrice !== undefined) {
+        errors.push({
+          line: result.line,
+          sku: input.sku,
+          code: "special_price_invalid",
+          message:
+            "special_price may be supplied only when special_price_mode is set.",
+        });
+        continue;
+      }
+      const special =
+        input.specialMode === "keep"
+          ? result.target.specialPrice
+          : input.specialMode === "clear"
+            ? null
+            : input.specialPrice;
+      try {
+        const prices = normalizeMinkPriceSet(
+          input.basePrice,
+          input.sellingPrice,
+          special,
+          `Line ${result.line} (${input.sku})`,
+        );
+        assertMinkSpecialPriceSupported(
+          prices.specialPrice,
+          result.target.supportsSpecialPrice,
+          `Line ${result.line} (${input.sku})`,
+        );
+        if (
+          prices.basePrice === result.target.basePrice &&
+          prices.sellingPrice === result.target.sellingPrice &&
+          prices.specialPrice === result.target.specialPrice
+        ) {
+          errors.push({
+            line: result.line,
+            sku: input.sku,
+            code: "no_price_change",
+            message: "The proposed prices are identical to the current prices.",
+          });
+          continue;
+        }
+        contentLines.push({
+          sku: result.target.sku,
+          base_price: prices.basePrice,
+          selling_price: prices.sellingPrice,
+          special_price: prices.specialPrice ?? "",
+        });
+      } catch (error) {
+        errors.push({
+          line: result.line,
+          sku: input.sku,
+          code: "price_invalid",
+          message: error instanceof Error ? error.message : "Invalid price.",
+        });
+      }
+    }
+    if (errors.length) {
+      return {
+        status: "needs_correction",
+        proposal_created: false,
+        valid_lines: contentLines.length,
+        invalid_lines: errors.length,
+        line_errors: errors,
+      };
+    }
+    return proposalOutput(
+      await createMinkDraftProposal({
+        actor,
+        kind: "bulk_price_update",
+        title: `Bulk price update · ${contentLines.length} SKUs`,
+        destinationType: "price_bulk",
+        destinationLabel: `${contentLines.length} SKU price changes`,
+        destinationPath: "/dashboard/products",
+        content: { lines_json: JSON.stringify(contentLines) },
+      }),
+    );
+  },
+};
+
 export const getOrderForStatusTransitionTool: MinkTool = {
   declaration: {
     name: "get_order_for_status_transition",
@@ -1088,6 +1342,8 @@ export const minkDraftTools = [
   proposeInventoryAdjustmentTool,
   getInventoryItemsForBulkAdjustmentTool,
   proposeBulkInventoryAdjustmentTool,
+  getProductsForBulkPriceUpdateTool,
+  proposeBulkPriceUpdateTool,
   getOrderForStatusTransitionTool,
   proposeOrderStatusTransitionTool,
 ];
@@ -1117,6 +1373,81 @@ type BulkProposalInput = {
   reason: string;
   note: string;
 };
+
+type BulkPriceProposalInput = {
+  sku: string;
+  snapshot: string;
+  basePrice: unknown;
+  sellingPrice: unknown;
+  specialMode: "keep" | "clear" | "set";
+  specialPrice: unknown;
+};
+
+function readBulkPriceLookupLines(value: unknown): MinkBulkPriceLookupInput[] {
+  if (
+    !Array.isArray(value) ||
+    value.length < 1 ||
+    value.length > MAX_MINK_BULK_PRICE_LINES
+  ) {
+    throw new MinkToolInputError(
+      `lines must contain 1-${MAX_MINK_BULK_PRICE_LINES} items.`,
+    );
+  }
+  return value.map((item, index) => {
+    const row = readBulkObject(item, index, ["product_sku"]);
+    return {
+      sku: readString(row.product_sku, `lines[${index}].product_sku`, 100),
+    };
+  });
+}
+
+function readBulkPriceProposalLines(value: unknown): BulkPriceProposalInput[] {
+  if (
+    !Array.isArray(value) ||
+    value.length < 1 ||
+    value.length > MAX_MINK_BULK_PRICE_LINES
+  ) {
+    throw new MinkToolInputError(
+      `lines must contain 1-${MAX_MINK_BULK_PRICE_LINES} items.`,
+    );
+  }
+  return value.map((item, index) => {
+    const row = readBulkObject(item, index, [
+      "product_sku",
+      "price_snapshot",
+      "base_price",
+      "selling_price",
+      "special_price_mode",
+      "special_price",
+    ]);
+    if (
+      row.special_price_mode !== "keep" &&
+      row.special_price_mode !== "clear" &&
+      row.special_price_mode !== "set"
+    ) {
+      throw new MinkToolInputError(
+        `lines[${index}].special_price_mode must be keep, clear or set.`,
+      );
+    }
+    if (row.special_price_mode === "set" && row.special_price === undefined) {
+      throw new MinkToolInputError(
+        `lines[${index}].special_price is required when special_price_mode is set.`,
+      );
+    }
+    return {
+      sku: readString(row.product_sku, `lines[${index}].product_sku`, 100),
+      snapshot: readString(
+        row.price_snapshot,
+        `lines[${index}].price_snapshot`,
+        64,
+      ),
+      basePrice: row.base_price,
+      sellingPrice: row.selling_price,
+      specialMode: row.special_price_mode,
+      specialPrice: row.special_price,
+    };
+  });
+}
 
 function readBulkLookupLines(value: unknown): MinkBulkInventoryLookupInput[] {
   if (
@@ -1232,6 +1563,23 @@ function bulkInventorySnapshot(
     target.onHand,
     target.reserved,
     target.version,
+  ]);
+}
+
+function bulkPriceSnapshot(
+  actor: MinkActorContext,
+  target: MinkBulkPriceTarget,
+) {
+  return sha256([
+    actor.storeId,
+    actor.adminId,
+    target.productId,
+    target.variantId,
+    target.sku,
+    target.productVersion,
+    target.basePrice,
+    target.sellingPrice,
+    target.specialPrice,
   ]);
 }
 

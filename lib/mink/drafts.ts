@@ -27,6 +27,8 @@ import { getLatestMinkInventoryAction } from "./inventory-actions";
 import type { MinkInventoryActionResult } from "./inventory-action-types";
 import { getLatestMinkBulkInventoryAction } from "./bulk-inventory-actions";
 import type { MinkBulkInventoryActionResult } from "./bulk-inventory-action-types";
+import { getLatestMinkBulkPriceAction } from "./bulk-price-actions";
+import type { MinkBulkPriceActionResult } from "./bulk-price-action-types";
 import { getLatestMinkOrderStatusAction } from "./order-status-actions";
 import type { MinkOrderStatusActionResult } from "./order-status-action-types";
 import { getLatestMinkBlogPublication } from "./blog-publication-actions";
@@ -54,6 +56,7 @@ const DRAFT_PERMISSION: Record<
   inventory_adjustment: { section: "inventory", action: "manage" },
   bulk_inventory_adjustment: { section: "inventory", action: "manage" },
   order_status_transition: { section: "orders", action: "manage" },
+  bulk_price_update: { section: "products", action: "manage" },
 };
 
 export interface MinkDraftState {
@@ -74,6 +77,7 @@ export interface MinkDraftState {
   lastDomainAction: MinkDomainActionResult | null;
   lastInventoryAction: MinkInventoryActionResult | null;
   lastBulkInventoryAction: MinkBulkInventoryActionResult | null;
+  lastBulkPriceAction: MinkBulkPriceActionResult | null;
   lastOrderStatusAction: MinkOrderStatusActionResult | null;
   lastBlogPublication: MinkBlogPublicationResult | null;
   lastCampaign: MinkCampaignResult | null;
@@ -235,6 +239,10 @@ export async function getMinkDraft(
     lastBulkInventoryAction:
       state.kind === "bulk_inventory_adjustment"
         ? await getLatestMinkBulkInventoryAction(actor, draftId)
+        : null,
+    lastBulkPriceAction:
+      state.kind === "bulk_price_update"
+        ? await getLatestMinkBulkPriceAction(actor, draftId)
         : null,
     lastOrderStatusAction:
       state.kind === "order_status_transition"
@@ -478,6 +486,7 @@ function toDraftState(
     lastDomainAction: null,
     lastInventoryAction: null,
     lastBulkInventoryAction: null,
+    lastBulkPriceAction: null,
     lastOrderStatusAction: null,
     lastBlogPublication: null,
     lastCampaign: null,

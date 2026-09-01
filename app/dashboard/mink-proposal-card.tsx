@@ -31,8 +31,10 @@ import {
 import {
   MINK_DRAFT_CONFIG,
   INVENTORY_ADJUSTMENT_REASONS,
+  MAX_MINK_BULK_PRICE_LINES,
   MAX_MINK_BULK_INVENTORY_LINES,
   type MinkBulkInventoryDraftLine,
+  type MinkBulkPriceDraftLine,
   type MinkDraftContent,
   type MinkDraftCreditSource,
   type MinkDraftKind,
@@ -61,6 +63,11 @@ import type {
   MinkBulkInventoryActionResult,
   MinkBulkInventoryValidationDetail,
 } from "@/lib/mink/bulk-inventory-action-types";
+import type {
+  MinkBulkPriceActionApproval,
+  MinkBulkPriceActionResult,
+  MinkBulkPriceValidationDetail,
+} from "@/lib/mink/bulk-price-action-types";
 import {
   MINK_ORDER_STATUS_ACTION_FIELDS,
   MINK_ORDER_STATUS_FIELD_LABELS,
@@ -75,6 +82,7 @@ type MinkActionApproval =
   | MinkDomainActionApproval
   | MinkInventoryActionApproval
   | MinkBulkInventoryActionApproval
+  | MinkBulkPriceActionApproval
   | MinkOrderStatusActionApproval
   | MinkBlogPublicationApproval
   | MinkCampaignApproval;
@@ -83,6 +91,7 @@ type MinkActionResult =
   | MinkDomainActionResult
   | MinkInventoryActionResult
   | MinkBulkInventoryActionResult
+  | MinkBulkPriceActionResult
   | MinkOrderStatusActionResult
   | MinkBlogPublicationResult
   | MinkCampaignResult;
@@ -104,6 +113,7 @@ type DraftResponse = {
   lastDomainAction: MinkDomainActionResult | null;
   lastInventoryAction: MinkInventoryActionResult | null;
   lastBulkInventoryAction: MinkBulkInventoryActionResult | null;
+  lastBulkPriceAction: MinkBulkPriceActionResult | null;
   lastOrderStatusAction: MinkOrderStatusActionResult | null;
   lastBlogPublication: MinkBlogPublicationResult | null;
   lastCampaign: MinkCampaignResult | null;
@@ -155,6 +165,7 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
   const supportsInventoryAction = draft.kind === "inventory_adjustment";
   const supportsBulkInventoryAction =
     draft.kind === "bulk_inventory_adjustment";
+  const supportsBulkPriceAction = draft.kind === "bulk_price_update";
   const supportsOrderStatusAction = draft.kind === "order_status_transition";
   const supportsBlogPublication = draft.kind === "blog";
   const supportsCampaign = draft.kind === "coupon_email";
@@ -163,6 +174,7 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
     supportsDomainAction ||
     supportsInventoryAction ||
     supportsBulkInventoryAction ||
+    supportsBulkPriceAction ||
     supportsOrderStatusAction ||
     supportsBlogPublication ||
     supportsCampaign;
@@ -179,6 +191,7 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
             next.lastDomainAction ??
             next.lastInventoryAction ??
             next.lastBulkInventoryAction ??
+            next.lastBulkPriceAction ??
             next.lastOrderStatusAction ??
             next.lastBlogPublication ??
             next.lastCampaign,
@@ -256,6 +269,7 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
           next.lastDomainAction ??
           next.lastInventoryAction ??
           next.lastBulkInventoryAction ??
+          next.lastBulkPriceAction ??
           next.lastOrderStatusAction ??
           next.lastBlogPublication ??
           next.lastCampaign,
@@ -292,6 +306,7 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
           next.lastDomainAction ??
           next.lastInventoryAction ??
           next.lastBulkInventoryAction ??
+          next.lastBulkPriceAction ??
           next.lastOrderStatusAction ??
           next.lastBlogPublication ??
           next.lastCampaign,
@@ -327,6 +342,7 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
         liveActionType({
           supportsBlogPublication,
           supportsCampaign,
+          supportsBulkPriceAction,
           supportsBulkInventoryAction,
           supportsOrderStatusAction,
           supportsInventoryAction,
@@ -363,6 +379,7 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
         liveActionType({
           supportsBlogPublication,
           supportsCampaign,
+          supportsBulkPriceAction,
           supportsBulkInventoryAction,
           supportsOrderStatusAction,
           supportsInventoryAction,
@@ -393,6 +410,7 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
       !actionResult ||
       supportsInventoryAction ||
       supportsBulkInventoryAction ||
+      supportsBulkPriceAction ||
       supportsOrderStatusAction ||
       supportsBlogPublication ||
       supportsCampaign
@@ -452,6 +470,14 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
       <div className="space-y-3 p-3">
         {draft.kind === "bulk_inventory_adjustment" ? (
           <BulkInventoryDraftEditor
+            value={content.lines_json ?? "[]"}
+            disabled={busy !== null || actionBusy !== null}
+            onChange={(lines) =>
+              changeContent("lines_json", JSON.stringify(lines))
+            }
+          />
+        ) : draft.kind === "bulk_price_update" ? (
+          <BulkPriceDraftEditor
             value={content.lines_json ?? "[]"}
             disabled={busy !== null || actionBusy !== null}
             onChange={(lines) =>
@@ -819,6 +845,8 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
                 </div>
                 {isBulkInventoryApproval(approval) ? (
                   <BulkInventoryActionPreview lines={approval.lines} />
+                ) : isBulkPriceApproval(approval) ? (
+                  <BulkPriceActionPreview approval={approval} />
                 ) : (
                   actionPreviewFields(approval, fields).map((field) => (
                     <div key={field.key} className="space-y-1">
@@ -943,6 +971,8 @@ export function MinkProposalCard({ proposal }: { proposal: Proposal }) {
           campaigns use their own switch, snapshot one exact eligible audience,
           show a non-PII branded sample and require a final confirmation before
           any recipient is queued. Campaign delivery has no automatic rollback.
+          Bulk prices require exact SKUs, show every before-and-after value and
+          apply all lines atomically; they also have no automatic rollback.
         </p>
       </div>
     </section>
@@ -1041,6 +1071,7 @@ function fromProposal(proposal: Proposal): DraftResponse {
     lastDomainAction: null,
     lastInventoryAction: null,
     lastBulkInventoryAction: null,
+    lastBulkPriceAction: null,
     lastOrderStatusAction: null,
     lastBlogPublication: null,
     lastCampaign: null,
@@ -1072,6 +1103,7 @@ async function requestLiveAction(
     | "domain"
     | "inventory"
     | "bulk_inventory"
+    | "bulk_price"
     | "order_status"
     | "blog"
     | "campaign",
@@ -1086,15 +1118,17 @@ async function requestLiveAction(
       ? "campaign-action"
       : actionType === "blog"
         ? "blog-publication"
-        : actionType === "bulk_inventory"
-          ? "bulk-inventory-action"
-          : actionType === "order_status"
-            ? "order-status-action"
-            : actionType === "inventory"
-              ? "inventory-action"
-              : actionType === "domain"
-                ? "action"
-                : "product-action";
+        : actionType === "bulk_price"
+          ? "bulk-price-action"
+          : actionType === "bulk_inventory"
+            ? "bulk-inventory-action"
+            : actionType === "order_status"
+              ? "order-status-action"
+              : actionType === "inventory"
+                ? "inventory-action"
+                : actionType === "domain"
+                  ? "action"
+                  : "product-action";
   const response = await fetch(`/api/mink/drafts/${draftId}/${endpoint}`, {
     method: "POST",
     cache: "no-store",
@@ -1106,14 +1140,20 @@ async function requestLiveAction(
     result?: MinkActionResult;
     options?: MinkCampaignAudienceOptions;
     error?: string;
-    lineErrors?: MinkBulkInventoryValidationDetail[];
+    lineErrors?: Array<
+      MinkBulkInventoryValidationDetail | MinkBulkPriceValidationDetail
+    >;
   };
   if (!response.ok) {
     const lineDetail = payload.lineErrors
-      ?.slice(0, MAX_MINK_BULK_INVENTORY_LINES)
-      .map(
-        (line) =>
-          `Line ${line.line} (${line.sku} at ${line.location}): ${line.message}`,
+      ?.slice(
+        0,
+        Math.max(MAX_MINK_BULK_INVENTORY_LINES, MAX_MINK_BULK_PRICE_LINES),
+      )
+      .map((line) =>
+        "location" in line
+          ? `Line ${line.line} (${line.sku} at ${line.location}): ${line.message}`
+          : `Line ${line.line} (${line.sku}): ${line.message}`,
       )
       .join("\n");
     throw new Error(
@@ -1150,6 +1190,7 @@ function actionPreviewFields(
     }));
   }
   if (isBulkInventoryApproval(approval)) return [];
+  if (isBulkPriceApproval(approval)) return [];
   if (isOrderStatusApproval(approval)) {
     return MINK_ORDER_STATUS_ACTION_FIELDS.map((key) => ({
       key,
@@ -1185,6 +1226,9 @@ function actionHeading(kind: MinkDraftKind) {
   if (kind === "bulk_inventory_adjustment") {
     return "Adjust up to 20 SKU/location lines atomically";
   }
+  if (kind === "bulk_price_update") {
+    return "Update prices for up to 20 exact SKUs atomically";
+  }
   if (kind === "order_status_transition") {
     return "Advance one delivery order by one status";
   }
@@ -1209,6 +1253,9 @@ function actionScope(kind: MinkDraftKind) {
   if (kind === "bulk_inventory_adjustment") {
     return "Requires Inventory Manage and a separate bulk-action kill switch. Every exact line is revalidated; one invalid or stale line prevents the entire batch from changing stock.";
   }
+  if (kind === "bulk_price_update") {
+    return "Requires Products Manage and a separate bulk-pricing kill switch. Every exact SKU and complete price tuple is revalidated; one invalid or stale line prevents the entire set from changing. Existing orders retain saved prices.";
+  }
   if (kind === "order_status_transition") {
     return "Requires Orders Manage and its independent operator kill switch. Only pending → processing → shipped → delivered is supported, one exact step at a time; payment, cancellation, pickup, POS and customer contact stay outside this action.";
   }
@@ -1230,6 +1277,9 @@ function actionSuccessMessage(approval: MinkActionApproval) {
   }
   if (isBulkInventoryApproval(approval)) {
     return `Approved atomic inventory batch recorded for ${approval.lines.length} lines.`;
+  }
+  if (isBulkPriceApproval(approval)) {
+    return `Approved atomic price update applied to ${approval.lines.length} exact SKUs.`;
   }
   if (isOrderStatusApproval(approval)) {
     return `Approved order status changed to ${approval.after.status}.`;
@@ -1254,6 +1304,7 @@ function actionRemovedResource(approval: MinkActionApproval) {
   return (
     !("product" in approval) &&
     !isAnyInventoryApproval(approval) &&
+    !isBulkPriceApproval(approval) &&
     approval.operation === "rollback" &&
     isCreateDomainTool(approval.toolName)
   );
@@ -1271,6 +1322,12 @@ function isBulkInventoryApproval(
   return (
     !("product" in approval) && approval.resource.type === "inventory_bulk"
   );
+}
+
+function isBulkPriceApproval(
+  approval: MinkActionApproval,
+): approval is MinkBulkPriceActionApproval {
+  return !("product" in approval) && approval.resource.type === "price_bulk";
 }
 
 function isAnyInventoryApproval(
@@ -1304,11 +1361,13 @@ function isAnyNonRollbackApproval(
 ): approval is
   | MinkInventoryActionApproval
   | MinkBulkInventoryActionApproval
+  | MinkBulkPriceActionApproval
   | MinkOrderStatusActionApproval
   | MinkBlogPublicationApproval
   | MinkCampaignApproval {
   return (
     isAnyInventoryApproval(approval) ||
+    isBulkPriceApproval(approval) ||
     isOrderStatusApproval(approval) ||
     isBlogPublicationApproval(approval) ||
     isCampaignApproval(approval)
@@ -1335,6 +1394,7 @@ type LiveActionType =
   | "domain"
   | "inventory"
   | "bulk_inventory"
+  | "bulk_price"
   | "order_status"
   | "blog"
   | "campaign";
@@ -1342,6 +1402,7 @@ type LiveActionType =
 function liveActionType(input: {
   supportsBlogPublication: boolean;
   supportsCampaign: boolean;
+  supportsBulkPriceAction: boolean;
   supportsBulkInventoryAction: boolean;
   supportsOrderStatusAction: boolean;
   supportsInventoryAction: boolean;
@@ -1349,6 +1410,7 @@ function liveActionType(input: {
 }): LiveActionType {
   if (input.supportsCampaign) return "campaign";
   if (input.supportsBlogPublication) return "blog";
+  if (input.supportsBulkPriceAction) return "bulk_price";
   if (input.supportsBulkInventoryAction) return "bulk_inventory";
   if (input.supportsOrderStatusAction) return "order_status";
   if (input.supportsInventoryAction) return "inventory";
@@ -1575,6 +1637,144 @@ function readEditableBulkLines(value: string): MinkBulkInventoryDraftLine[] {
   }
 }
 
+function BulkPriceDraftEditor({
+  value,
+  disabled,
+  onChange,
+}: {
+  value: string;
+  disabled: boolean;
+  onChange: (lines: MinkBulkPriceDraftLine[]) => void;
+}) {
+  const lines = useMemo(() => readEditableBulkPriceLines(value), [value]);
+
+  function updateLine(index: number, patch: Partial<MinkBulkPriceDraftLine>) {
+    onChange(
+      lines.map((line, i) => (i === index ? { ...line, ...patch } : line)),
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <div>
+          <div className="text-[10px] font-semibold text-[#5f5868]">
+            Exact SKU prices
+          </div>
+          <p className="text-[9px] text-[#82798d]">
+            {lines.length} / {MAX_MINK_BULK_PRICE_LINES} complete INR price sets
+          </p>
+        </div>
+        <button
+          type="button"
+          disabled={disabled || lines.length >= MAX_MINK_BULK_PRICE_LINES}
+          onClick={() =>
+            onChange([
+              ...lines,
+              {
+                sku: "",
+                base_price: "",
+                selling_price: "",
+                special_price: "",
+              },
+            ])
+          }
+          className="inline-flex items-center gap-1 rounded-md border border-[#d8cef8] px-2 py-1 text-[9px] font-semibold text-[#5b3fd0] disabled:opacity-45"
+        >
+          <Plus className="h-2.5 w-2.5" /> Add SKU
+        </button>
+      </div>
+      <p className="rounded-md bg-[#fff9e8] px-2 py-1.5 text-[9px] leading-4 text-[#735b17]">
+        Enter the full final tuple. MRP must be at least selling price; special
+        price must be at most selling price. Leave special price empty to clear
+        it.
+      </p>
+      {lines.map((line, index) => (
+        <div
+          key={index}
+          className="space-y-2 rounded-lg border border-[#eeeaf1] bg-[#fcfbfd] p-2.5"
+        >
+          <div className="flex items-center justify-between gap-2 text-[9px] font-semibold text-[#5f5868]">
+            <span>Line {index + 1}</span>
+            <button
+              type="button"
+              aria-label={`Delete bulk price line ${index + 1}`}
+              disabled={disabled || lines.length <= 1}
+              onClick={() => onChange(lines.filter((_, i) => i !== index))}
+              className="text-red-600 disabled:opacity-35"
+            >
+              <Trash2 className="h-3 w-3" />
+            </button>
+          </div>
+          <BulkInput
+            label="Exact sellable SKU"
+            value={line.sku}
+            maxLength={100}
+            disabled={disabled}
+            onChange={(next) => updateLine(index, { sku: next })}
+          />
+          <div className="grid gap-2 sm:grid-cols-3">
+            <BulkInput
+              label="MRP (₹)"
+              value={line.base_price}
+              maxLength={11}
+              inputMode="decimal"
+              disabled={disabled}
+              onChange={(next) => updateLine(index, { base_price: next })}
+            />
+            <BulkInput
+              label="Selling price (₹)"
+              value={line.selling_price}
+              maxLength={11}
+              inputMode="decimal"
+              disabled={disabled}
+              onChange={(next) => updateLine(index, { selling_price: next })}
+            />
+            <BulkInput
+              label="Special price (₹, optional)"
+              value={line.special_price}
+              maxLength={11}
+              inputMode="decimal"
+              disabled={disabled}
+              onChange={(next) => updateLine(index, { special_price: next })}
+            />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function readEditableBulkPriceLines(value: string): MinkBulkPriceDraftLine[] {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.slice(0, MAX_MINK_BULK_PRICE_LINES).flatMap((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+      const row = item as Record<string, unknown>;
+      return [
+        {
+          sku: typeof row.sku === "string" ? row.sku : "",
+          base_price:
+            typeof row.base_price === "string"
+              ? row.base_price
+              : String(row.base_price ?? ""),
+          selling_price:
+            typeof row.selling_price === "string"
+              ? row.selling_price
+              : String(row.selling_price ?? ""),
+          special_price:
+            typeof row.special_price === "string"
+              ? row.special_price
+              : String(row.special_price ?? ""),
+        },
+      ];
+    });
+  } catch {
+    return [];
+  }
+}
+
 function BulkInput({
   label,
   value,
@@ -1587,7 +1787,7 @@ function BulkInput({
   value: string;
   disabled: boolean;
   maxLength?: number;
-  inputMode?: "numeric";
+  inputMode?: "numeric" | "decimal";
   onChange: (value: string) => void;
 }) {
   return (
@@ -1642,4 +1842,126 @@ function BulkInventoryActionPreview({
       ))}
     </div>
   );
+}
+
+function BulkPriceActionPreview({
+  approval,
+}: {
+  approval: MinkBulkPriceActionApproval;
+}) {
+  return (
+    <div className="space-y-2">
+      <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
+        <PriceImpactMetric
+          label="Current 1-each basket"
+          value={formatInr(approval.impact.currentUnitBasket)}
+        />
+        <PriceImpactMetric
+          label="Proposed 1-each basket"
+          value={formatInr(approval.impact.proposedUnitBasket)}
+        />
+        <PriceImpactMetric
+          label="Effective change"
+          value={`${formatSignedInr(approval.impact.change)} · ${approval.impact.changePercent}`}
+        />
+        <PriceImpactMetric
+          label="Direction"
+          value={`${approval.impact.increases} up · ${approval.impact.decreases} down · ${approval.impact.unchangedEffective} same`}
+        />
+      </div>
+      <div className="overflow-x-auto rounded-md border border-[#eeeaf1]">
+        <table className="min-w-[650px] w-full text-left text-[9px]">
+          <thead className="bg-[#f7f5fa] text-[#665c75]">
+            <tr>
+              <th className="px-2 py-1.5 font-semibold">Product / SKU</th>
+              <th className="px-2 py-1.5 font-semibold">Current prices</th>
+              <th className="px-2 py-1.5 font-semibold">Proposed prices</th>
+              <th className="px-2 py-1.5 font-semibold">Effective change</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-[#eeeaf1] bg-white">
+            {approval.lines.map((line) => (
+              <tr key={line.line}>
+                <td className="px-2 py-2 align-top">
+                  <div className="font-semibold text-[#44365f]">
+                    {line.line}. {line.product}
+                    {line.variant ? ` · ${line.variant}` : ""}
+                  </div>
+                  <div className="mt-0.5 text-[#746c7d]">
+                    {line.sku} · {line.publicationStatus}
+                  </div>
+                </td>
+                <td className="px-2 py-2 align-top text-[#665c75]">
+                  <PriceTuple value={line.before} />
+                </td>
+                <td className="bg-[#faf8ff] px-2 py-2 align-top text-[#3d2b73]">
+                  <PriceTuple value={line.after} />
+                </td>
+                <td className="px-2 py-2 align-top font-semibold text-[#44365f]">
+                  {formatSignedInr(line.effectiveChange)}
+                  <div className="mt-0.5 font-normal text-[#746c7d]">
+                    {line.effectiveChangePercent}
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="rounded-md bg-[#fff9e8] px-2 py-1.5 text-[9px] leading-4 text-[#735b17]">
+        {approval.impact.note} {approval.impact.publishedLines} selected line
+        {approval.impact.publishedLines === 1 ? " is" : "s are"} currently
+        published.
+      </p>
+    </div>
+  );
+}
+
+function PriceImpactMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md bg-[#f7f5fa] p-2">
+      <div className="text-[8px] font-medium text-[#82798d]">{label}</div>
+      <div className="mt-0.5 text-[10px] font-semibold text-[#3d3155]">
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function PriceTuple({
+  value,
+}: {
+  value: MinkBulkPriceActionApproval["lines"][number]["before"];
+}) {
+  return (
+    <div className="space-y-0.5 whitespace-nowrap">
+      <div>MRP {formatInr(value.basePrice)}</div>
+      <div>Selling {formatInr(value.sellingPrice)}</div>
+      <div>
+        Special {value.specialPrice ? formatInr(value.specialPrice) : "Cleared"}
+      </div>
+      <div className="font-semibold">
+        Effective {formatInr(value.effectivePrice)}
+      </div>
+    </div>
+  );
+}
+
+function formatInr(value: string) {
+  const amount = Number(value);
+  return Number.isFinite(amount)
+    ? new Intl.NumberFormat("en-IN", {
+        style: "currency",
+        currency: "INR",
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }).format(amount)
+    : `₹${value}`;
+}
+
+function formatSignedInr(value: string) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return `₹${value}`;
+  const sign = amount > 0 ? "+" : amount < 0 ? "−" : "";
+  return `${sign}${formatInr(String(Math.abs(amount)))}`;
 }

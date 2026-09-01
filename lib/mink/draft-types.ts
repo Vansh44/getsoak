@@ -1,3 +1,10 @@
+import { parseMinkBulkPriceDraftLines } from "./bulk-price-policy";
+export {
+  MAX_MINK_BULK_PRICE_LINES,
+  parseMinkBulkPriceDraftLines,
+  type MinkBulkPriceDraftLine,
+} from "./bulk-price-policy";
+
 export const MINK_DRAFT_KINDS = [
   "product_description",
   "product_seo",
@@ -12,6 +19,7 @@ export const MINK_DRAFT_KINDS = [
   "inventory_adjustment",
   "bulk_inventory_adjustment",
   "order_status_transition",
+  "bulk_price_update",
 ] as const;
 
 export type MinkDraftKind = (typeof MINK_DRAFT_KINDS)[number];
@@ -286,6 +294,19 @@ export const MINK_DRAFT_CONFIG: Record<
       },
     ],
   },
+  bulk_price_update: {
+    label: "Bulk price update",
+    expectedCredits: 5,
+    fields: [
+      {
+        key: "lines_json",
+        label: "Bulk price lines",
+        required: true,
+        multiline: true,
+        maxLength: 12_000,
+      },
+    ],
+  },
 };
 
 function couponActionConfig(label: string) {
@@ -435,6 +456,10 @@ export function normalizeMinkDraftContent(
   }
   if (kind === "bulk_inventory_adjustment") {
     const lines = parseMinkBulkInventoryDraftLines(result.lines_json);
+    result.lines_json = JSON.stringify(lines);
+  }
+  if (kind === "bulk_price_update") {
+    const lines = parseMinkBulkPriceDraftLines(result.lines_json);
     result.lines_json = JSON.stringify(lines);
   }
   if (
@@ -598,53 +623,59 @@ export function estimateMinkDraftIntent(message: string): {
     return null;
   }
   const kind: MinkDraftKind | null =
-    /\b(mark|advance|move|update|set)\b.*\b(order|delivery)\b.*\b(processing|shipped|delivered)\b|\b(order|delivery)\b.*\b(processing|shipped|delivered)\b/.test(
+    /\b(bulk|multiple|many|all)\b.*\b(price|prices|pricing|mrp)\b|\b(price|prices|pricing|mrp)\b.*\b(bulk|multiple|many|all)\b/.test(
       value,
     )
-      ? "order_status_transition"
-      : /\b(bulk|multiple|many|all)\b.*\b(stock|inventory|skus?|products?|items?)\b|\b(stock|inventory)\b.*\b(bulk|multiple|many|all)\b/.test(
+      ? "bulk_price_update"
+      : /\b(mark|advance|move|update|set)\b.*\b(order|delivery)\b.*\b(processing|shipped|delivered)\b|\b(order|delivery)\b.*\b(processing|shipped|delivered)\b/.test(
             value,
           )
-        ? "bulk_inventory_adjustment"
-        : /\b(adjust|set|restock|remove|add|update)\b.*\b(stock|inventory|units?)\b|\b(stock|inventory)\b.*\b(adjust|set|restock|remove|add|update)\b/.test(
+        ? "order_status_transition"
+        : /\b(bulk|multiple|many|all)\b.*\b(stock|inventory|skus?|products?|items?)\b|\b(stock|inventory)\b.*\b(bulk|multiple|many|all)\b/.test(
               value,
             )
-          ? "inventory_adjustment"
-          : /\b(coupon|campaign|promo).*\b(email|mail)|\bemail.*\b(coupon|campaign|promo)/.test(
+          ? "bulk_inventory_adjustment"
+          : /\b(adjust|set|restock|remove|add|update)\b.*\b(stock|inventory|units?)\b|\b(stock|inventory)\b.*\b(adjust|set|restock|remove|add|update)\b/.test(
                 value,
               )
-            ? "coupon_email"
-            : /\b(create|add|new)\b.*\b(customer )?group\b|\b(customer )?group\b.*\b(create|add|new)\b/.test(
+            ? "inventory_adjustment"
+            : /\b(coupon|campaign|promo).*\b(email|mail)|\bemail.*\b(coupon|campaign|promo)/.test(
                   value,
                 )
-              ? "customer_group_create"
-              : /\b(update|edit|rewrite)\b.*\b(customer )?group\b|\b(customer )?group\b.*\b(update|edit|rewrite)\b/.test(
+              ? "coupon_email"
+              : /\b(create|add|new)\b.*\b(customer )?group\b|\b(customer )?group\b.*\b(create|add|new)\b/.test(
                     value,
                   )
-                ? "customer_group_update"
-                : /\b(create|add|new)\b.*\b(coupon|promo code)\b|\b(coupon|promo code)\b.*\b(create|add|new)\b/.test(
+                ? "customer_group_create"
+                : /\b(update|edit|rewrite)\b.*\b(customer )?group\b|\b(customer )?group\b.*\b(update|edit|rewrite)\b/.test(
                       value,
                     )
-                  ? "coupon_create"
-                  : /\b(update|edit)\b.*\b(coupon|promo code)\b|\b(coupon|promo code)\b.*\b(update|edit)\b/.test(
+                  ? "customer_group_update"
+                  : /\b(create|add|new)\b.*\b(coupon|promo code)\b|\b(coupon|promo code)\b.*\b(create|add|new)\b/.test(
                         value,
                       )
-                    ? "coupon_update"
-                    : /\b(create|add|new)\b.*\bproduct\b|\bproduct\b.*\b(create|add|new)\b/.test(
+                    ? "coupon_create"
+                    : /\b(update|edit)\b.*\b(coupon|promo code)\b|\b(coupon|promo code)\b.*\b(update|edit)\b/.test(
                           value,
-                        ) && !/\b(description|copy|seo|meta)\b/.test(value)
-                      ? "product_create"
-                      : /\b(customer|shopper).*\b(message|reply)|\bmessage.*\b(customer|shopper)/.test(
+                        )
+                      ? "coupon_update"
+                      : /\b(create|add|new)\b.*\bproduct\b|\bproduct\b.*\b(create|add|new)\b/.test(
                             value,
-                          )
-                        ? "customer_message"
-                        : /\b(blog|article|post)\b/.test(value)
-                          ? "blog"
-                          : /\b(seo|meta title|meta description)\b/.test(value)
-                            ? "product_seo"
-                            : /\b(product|description|copy)\b/.test(value)
-                              ? "product_description"
-                              : null;
+                          ) && !/\b(description|copy|seo|meta)\b/.test(value)
+                        ? "product_create"
+                        : /\b(customer|shopper).*\b(message|reply)|\bmessage.*\b(customer|shopper)/.test(
+                              value,
+                            )
+                          ? "customer_message"
+                          : /\b(blog|article|post)\b/.test(value)
+                            ? "blog"
+                            : /\b(seo|meta title|meta description)\b/.test(
+                                  value,
+                                )
+                              ? "product_seo"
+                              : /\b(product|description|copy)\b/.test(value)
+                                ? "product_description"
+                                : null;
   if (!kind) return null;
   const config = MINK_DRAFT_CONFIG[kind];
   return { kind, label: config.label, expectedCredits: config.expectedCredits };

@@ -28,6 +28,7 @@ describe("Mink draft contracts", () => {
       inventory_adjustment: 1,
       bulk_inventory_adjustment: 5,
       order_status_transition: 1,
+      bulk_price_update: 5,
     });
   });
 

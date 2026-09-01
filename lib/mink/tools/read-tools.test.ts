@@ -314,6 +314,7 @@ describe("Mink read-tool declarations", () => {
       "propose_coupon_update",
       "propose_customer_group_create",
       "propose_customer_group_update",
+      "propose_bulk_price_update",
     ]);
 
     const marketingTools = names({
@@ -432,6 +433,38 @@ describe("Mink read-tool declarations", () => {
     expect(bulkItems).not.toHaveProperty("product_id");
     expect(bulkItems).not.toHaveProperty("location_id");
     expect(bulkItems).toHaveProperty("inventory_snapshot");
+
+    const productTools = minkReadToolRegistry.declarationsFor({
+      ...ACTOR,
+      isSuperadmin: false,
+      draftingEnabled: true,
+      permissions: { products: ["view", "manage"] },
+    });
+    const bulkPriceReader = productTools.find(
+      (tool) => tool.name === "get_products_for_bulk_price_update",
+    );
+    const bulkPriceProposal = productTools.find(
+      (tool) => tool.name === "propose_bulk_price_update",
+    );
+    expect(bulkPriceReader?.parametersJsonSchema).toMatchObject({
+      required: ["lines"],
+      additionalProperties: false,
+      properties: { lines: { minItems: 1, maxItems: 20 } },
+    });
+    expect(bulkPriceProposal?.parametersJsonSchema).toMatchObject({
+      required: ["lines"],
+      additionalProperties: false,
+      properties: { lines: { minItems: 1, maxItems: 20 } },
+    });
+    const bulkPriceItems = (
+      bulkPriceProposal?.parametersJsonSchema.properties as {
+        lines?: { items?: { properties?: Record<string, unknown> } };
+      }
+    )?.lines?.items?.properties;
+    expect(bulkPriceItems).not.toHaveProperty("product_id");
+    expect(bulkPriceItems).not.toHaveProperty("variant_id");
+    expect(bulkPriceItems).toHaveProperty("price_snapshot");
+    expect(bulkPriceItems).toHaveProperty("special_price_mode");
   });
 
   it("rejects direct calls to every hidden business tool before data access", async () => {
