@@ -1832,6 +1832,68 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260901_0053_mink_phase_5e_campaigns",
+      "description": "Add separately gated exact coupon-email audience review, final send confirmation and schedule-aware delivery",
+      "file": "sql/20260901_0053_mink_phase_5e_campaigns.sql",
+      "checksum": "ebff0f32e127d5923886a1304d0ef0c8c25d74d447e2be0b0f2bf9b5afd6c816",
+      "transaction": true,
+      "requires": ["20260901_0052_mink_phase_5d_blog_publication"],
+      "verify": {},
+      "applyVerify": {
+        "columns": [
+          "email_campaigns.scheduled_for",
+          "email_campaigns.mink_approval_id",
+          "email_campaigns.audience_mode",
+          "email_campaigns.audience_label",
+          "email_campaigns.sender_address",
+          "email_campaigns.brand_snapshot",
+          "email_campaigns.confirmed_at"
+        ],
+        "constraints": [
+          "email_campaigns_id_store_key",
+          "email_campaign_recipients_campaign_store_fkey",
+          "email_campaigns_mink_approval_store_fkey",
+          "email_campaigns_mink_metadata_check",
+          "mink_action_approvals_campaign_send_target_check",
+          "mink_action_audit_campaign_send_target_check"
+        ],
+        "queries": [
+          {
+            "name": "the schedule-aware campaign claim function is server-only",
+            "sql": "select count(*)::text from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname = 'claim_email_batch' and p.prosecdef and has_function_privilege('app_service', p.oid, 'EXECUTE') and not has_function_privilege('app_user', p.oid, 'EXECUTE')",
+            "equals": "1"
+          },
+          {
+            "name": "the Mink guide documents exact guarded coupon campaigns",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%<h2>Send or schedule one coupon-email campaign</h2>%' and body like '%Coupon email campaigns%' and body like '%caps the source audience at 10,000 customer rows%' and body like '%never claims a future campaign%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "columns": [
+          "email_campaigns.scheduled_for",
+          "email_campaigns.mink_approval_id",
+          "email_campaigns.sender_address",
+          "email_campaigns.brand_snapshot"
+        ],
+        "constraints": [
+          "email_campaigns_mink_approval_store_fkey",
+          "email_campaign_recipients_campaign_store_fkey",
+          "email_campaigns_mink_metadata_check",
+          "mink_action_approvals_campaign_send_target_check",
+          "mink_action_audit_campaign_send_target_check"
+        ],
+        "queries": [
+          {
+            "name": "the Mink guide already documents guarded coupon campaigns",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%<h2>Send or schedule one coupon-email campaign</h2>%' and body like '%Coupon email campaigns%'",
+            "equals": "1"
+          }
+        ]
+      }
     }
   ]
 }

@@ -31,6 +31,8 @@ import { getLatestMinkOrderStatusAction } from "./order-status-actions";
 import type { MinkOrderStatusActionResult } from "./order-status-action-types";
 import { getLatestMinkBlogPublication } from "./blog-publication-actions";
 import type { MinkBlogPublicationResult } from "./blog-publication-action-types";
+import { getLatestMinkCampaign } from "./campaign-actions";
+import type { MinkCampaignResult } from "./campaign-action-types";
 import { getLatestMinkProductAction } from "./product-actions";
 import type { MinkProductActionResult } from "./product-action-types";
 import type { MinkActorContext, MinkArtifact } from "./types";
@@ -74,6 +76,7 @@ export interface MinkDraftState {
   lastBulkInventoryAction: MinkBulkInventoryActionResult | null;
   lastOrderStatusAction: MinkOrderStatusActionResult | null;
   lastBlogPublication: MinkBlogPublicationResult | null;
+  lastCampaign: MinkCampaignResult | null;
 }
 
 export async function createMinkDraftProposal(input: {
@@ -240,6 +243,10 @@ export async function getMinkDraft(
     lastBlogPublication:
       state.kind === "blog"
         ? await getLatestMinkBlogPublication(actor, draftId)
+        : null,
+    lastCampaign:
+      state.kind === "coupon_email"
+        ? await getLatestMinkCampaign(actor, draftId)
         : null,
   };
 }
@@ -473,6 +480,7 @@ function toDraftState(
     lastBulkInventoryAction: null,
     lastOrderStatusAction: null,
     lastBlogPublication: null,
+    lastCampaign: null,
   };
 }
 

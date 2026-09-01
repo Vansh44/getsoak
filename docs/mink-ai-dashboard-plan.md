@@ -1,6 +1,6 @@
 # Mink AI Dashboard Agent — Architecture and Delivery Plan
 
-> **Status:** Phases 0–4 and Phases 5A–5D are implemented in code. Phase 2
+> **Status:** Phases 0–4 and Phases 5A–5E are implemented in code. Phase 2
 > remains the invited read-only merchant beta. Phase 3 adds a separate,
 > fail-closed operator opt-in
 > for private versioned drafts and atomic weighted credits through migration
@@ -24,10 +24,14 @@
 > `20260901_0051_mink_phase_5c_order_status` adds the separately gated exact
 > one-step online-delivery order transition. Migration
 > `20260901_0052_mink_phase_5d_blog_publication` adds one separately gated,
-> explicitly approved immediate or scheduled blog publication. No transfer,
+> explicitly approved immediate or scheduled blog publication. Migration
+> `20260901_0053_mink_phase_5e_campaigns` adds a separately gated exact
+> coupon-email audience snapshot, non-PII branded sample, final human send
+> confirmation and schedule-aware delivery through the existing email queue.
+> No transfer,
 > cancellation, refund, payment/shipment/pickup/POS lifecycle, product/page/
-> storefront or bulk publication, campaign,
-> customer-contact, membership, bulk-price or arbitrary-code authority is
+> storefront or bulk publication, arbitrary-recipient or direct customer
+> contact, membership, bulk-price or arbitrary-code authority is
 > present.
 >
 > **Plan date:** 2026-09-01
@@ -952,7 +956,7 @@ Deliver in separate gates:
 5. campaign audience preview, sample, schedule and final send confirmation;
 6. bulk price changes with revenue-impact summary.
 
-**Implementation:** ✅ Phases 5A–5D (items 1–4) are code-complete through 2026-09-01
+**Implementation:** ✅ Phases 5A–5E (items 1–5) are code-complete through 2026-09-01
 behind independent `adjust_inventory`, `bulk_adjust_inventory` and
 `transition_order_status` operator gates. In Phase 5A, Gemini receives only an
 exact SKU/location checkpoint reader
@@ -1002,7 +1006,28 @@ claims at most 20 due rows with `FOR UPDATE SKIP LOCKED`; it publishes only if
 Mink, drafting and the tool gate remain enabled and the exact blog version is
 unchanged. Otherwise it pauses or records a conflict instead of overwriting a
 manual edit. Product/page/storefront/bulk publication and automatic rollback
-remain unavailable. Items 5–6 remain unbuilt and separately gated.
+remain unavailable. Phase 5E extends only the charged private `coupon_email`
+proposal linked to one existing coupon. Marketing Manage, Pro campaign access,
+drafting, configured email and an independent `send_campaign` gate protect
+audience options, preview and execution. The browser may select all customers
+or one current group, plus immediate delivery or one canonical UTC instant 5
+minutes–30 days ahead; it cannot submit recipients, copy, tenant identity,
+coupon facts or sender data. Preview resolves at most 10,000 source customer
+rows, normalizes and deduplicates addresses, removes invalid and globally
+suppressed addresses, and binds the exact recipient identity/email/name list
+with SHA-256. It shows counts, sender, coupon terms, complete saved copy and a
+sandboxed non-PII sample. The five-minute final approval rechecks the exact
+store/admin, plan, permission, switches, draft, coupon, sender, schedule and
+audience hash in one transaction. It atomically creates one campaign, exact
+recipient rows, approval result and audit; retries cannot duplicate them. The
+approved sender and brand are snapshotted, and suppression is checked again at
+delivery. Immediate sends kick the existing authenticated email queue.
+Scheduled sends are promoted only when due by the atomic claim function before
+`FOR UPDATE SKIP LOCKED`; remaining-work detection excludes future jobs, so
+self-chaining cannot spin. Gemini receives only coupon lookup and the private
+proposal tool, never audience options, sample, preview, execution or worker
+authority. Campaigns have no automatic cancellation or rollback. Item 6
+remains unbuilt and separately gated.
 
 Exit criteria:
 
@@ -1298,37 +1323,36 @@ would move risk into production rather than remove work.
 
 ## 21. Immediate next sprint
 
-The next sprint should validate and safely roll out Phase 5D before designing
-Phase 5E campaigns:
+The next sprint should validate and safely roll out Phase 5E before designing
+Phase 5F bulk pricing:
 
-1. Apply migration `20260901_0052_mink_phase_5d_blog_publication` after 0051 in
-   controlled staging, deploy matching application code and scheduler route,
-   and leave `publish_blog` disabled for every merchant store.
-2. On one synthetic store, enable beta, drafting and only the blog-publication gate. Prove
-   that global, invitation, drafting, permission and tool gates each stop both
-   preview and execution, including a gate disabled between approval and the
-   scheduled instant.
-3. Exercise immediate publication, minimum/maximum time boundaries, daylight-
-   saving/non-India browser zones, expired approval and due-job concurrency.
-   Confirm the displayed local time maps to the exact reviewed UTC instant.
-4. Race draft edits before approval and blog edits/deletion/manual publication
-   after scheduling. A stale approval commits zero blog/publication writes; a
-   changed or manually published scheduled blog becomes conflicted and is never
-   overwritten, while deliberate blog deletion cascades its pending job.
-5. Retry preview, execute and overlapping worker heartbeats. Exactly one blog,
-   approval, audit, publication row and discovery notification may result.
-   Disable each gate and prove due work pauses rather than being lost.
-6. Verify the five-minute expiry, streamed request-size bound, strict input
-   allowlist, actor/store rate limit, same-origin check and cross-tenant/admin
-   isolation. Treat every drafted title/body/SEO value as untrusted data and
-   verify raw HTML, script URLs and Markdown links remain inert.
-7. Run the read corpus plus the complete `P5D` pack and inspect due-worker and
-   store-scoped lookup query plans. The model manifest may expose only the
-   private blog proposal, never publication preview/execute or cron capability.
-8. Create and verify the production Cloud Scheduler job only after the route is
-   deployed. After four stable weeks and reconciled audits, design Phase 5E
-   campaigns. Transfers, cancellations, refunds, campaigns, bulk prices and
-   customer contact remain unavailable.
+1. Apply migration `20260901_0053_mink_phase_5e_campaigns` after 0052 in
+   controlled staging, deploy matching application code and leave
+   `send_campaign` disabled for every merchant store.
+2. Change the authenticated `storemink-send-emails` Cloud Scheduler heartbeat
+   to once per minute only after the migration and application are live. Prove
+   future scheduled campaigns are never claimed and do not self-chain.
+3. On one synthetic store, enable beta, drafting and only the campaign gate.
+   Prove global, invitation, drafting, plan, Marketing Manage, email-config and
+   tool gates each stop options, preview and execution.
+4. Exercise all-customers and one-group snapshots with missing, invalid,
+   duplicate and suppressed addresses, an empty audience and the 10,000-row
+   boundary. The browser sample must contain no real recipient PII.
+5. Race group membership, customer email/name, suppression, coupon, store brand
+   and draft edits between preview and confirmation. Every drift must conflict
+   with zero campaign/recipient writes.
+6. Retry preview and confirmation concurrently. Exactly one campaign, exact
+   recipient set, approval and audit may exist; an immediate worker kick must
+   not repeat on replay.
+7. Exercise 5-minute/30-day boundaries, non-India browser zones and overlapping
+   worker heartbeats. Confirm exact sender/brand snapshot delivery,
+   delivery-time suppression and due promotion.
+8. Run the complete `P5E` pack and inspect audience, suppression, due-index and
+   worker claim plans. The model manifest may expose only coupon lookup and the
+   private proposal—never audience options, preview, execution or cron
+   authority. After four stable weeks, design Phase 5F. Transfers,
+   cancellations, refunds, arbitrary customer contact and bulk prices remain
+   unavailable.
 
 The intended outcome is not “Gemini 3.7 answered impressively.” It is:
 

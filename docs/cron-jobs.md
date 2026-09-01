@@ -27,7 +27,7 @@ each job is a landmine the moment it does:
 
 | Job                       | What its absence would have cost under real traffic                                                                                                                                                                                                    |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `send-emails`             | Coupon email campaigns never send.                                                                                                                                                                                                                     |
+| `send-emails`             | Coupon email campaigns never send; Phase 5E scheduled campaigns also miss their reviewed delivery time.                                                                                                                                               |
 | `plan-expiry`             | A lapsed timed plan keeps its paid features **forever** — the durable half of the plan gate (`lib/plans.ts` `effectivePlan` covers reads only).                                                                                                        |
 | `expire-pending-payments` | Unpaid Razorpay orders are never reaped, so their stock reservations and coupon uses are held **permanently** — and it also carries the PICKUP sweeps, so expired collections never lapse and no collection reminder is ever sent.                     |
 | `domain-reconcile`        | A merchant's custom domain **never goes live** unless they happen to keep the settings tab open for the whole of Google's issuance window.                                                                                                             |
@@ -40,14 +40,14 @@ each job is a landmine the moment it does:
 > Note: production currently runs `main`, which has **no notification system** —
 > `lib/notifications/` and the `notification_email_queue` table do not exist
 > there. `send-emails` on prod drives only the coupon-campaign worker. Once
-> `staging` merges, the same job also drains notification email, and its 00:00
-> UTC slot becomes load-bearing (below).
+> `staging` merges, the same job also drains notification email. Phase 5E makes
+> its one-minute heartbeat load-bearing for scheduled campaign resolution.
 
 ## The jobs
 
 | Job                                 | Schedule (UTC) | Endpoint                                                 |
 | ----------------------------------- | -------------- | -------------------------------------------------------- |
-| `storemink-send-emails`             | `0 0 * * *`    | `https://storemink.com/api/cron/send-emails`             |
+| `storemink-send-emails`             | `* * * * *`    | `https://storemink.com/api/cron/send-emails`             |
 | `storemink-plan-expiry`             | `15 0 * * *`   | `https://storemink.com/api/cron/plan-expiry`             |
 | `storemink-expire-pending-payments` | `30 * * * *`   | `https://storemink.com/api/cron/expire-pending-payments` |
 | `storemink-seo-refresh`             | `0 2 * * *`    | `https://storemink.com/api/cron/seo-refresh`             |
@@ -76,6 +76,10 @@ then it would 404 or query an incomplete table.** Also,
 until migration `20260901_0052_mink_phase_5d_blog_publication` and the matching
 route are deployed. Create it with the same CRON_SECRET bearer contract only
 after both application and database verification pass.** Also,
+**the `storemink-send-emails` change from daily to once per minute belongs to
+Phase 5E. Apply it only after migration
+`20260901_0053_mink_phase_5e_campaigns` and the matching application are live;
+before that deployment, the older claim function is not schedule-aware.** Also,
 **`storemink-search-metrics` and `storemink-analytics-rollup`
 are PAUSED**: their routes are on `staging` and NOT YET on `main`, and prod
 deploys from `main` — so both 404 against `https://storemink.com`
@@ -234,9 +238,10 @@ service account first; see `docs/seo-indexing.md`.
 > Enabling both turned the same request into `200 {"ok":true}` with no other
 > change. They are free; there is no reason for either to be off.
 
-> **⚠ `send-emails` must stay at 00:00 UTC.** `DAILY_DIGEST_HOUR_UTC` is 23:00
-> _because_ the heartbeat is 00:00 UTC (CODEBASE.md §24). Moving this schedule
-> without moving that constant silently breaks digest timing.
+> **⚠ `send-emails` must stay once per minute after Phase 5E rollout.** Daily
+> digests still become eligible at `DAILY_DIGEST_HOUR_UTC` (23:00 UTC), and the
+> next minute heartbeat drains them. Future campaign rows are excluded from the
+> worker's remaining count, so this cadence does not self-chain while waiting.
 
 > **⚠ Timezone is `Etc/UTC`, not IST.** The cron expressions were lifted verbatim
 > from `vercel.json`, where they were always UTC. Re-creating them in

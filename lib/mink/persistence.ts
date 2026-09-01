@@ -350,7 +350,7 @@ export async function startMinkRun(input: {
         requestId: actor.requestId,
         model,
         promptVersion: actor.draftingEnabled
-          ? "draft-action-beta-v10"
+          ? "draft-action-beta-v11"
           : "read-beta-v4",
         toolRegistryVersion: actor.draftingEnabled
           ? "draft-beta-v8"
