@@ -174,4 +174,15 @@ describe("POS theme coverage", () => {
       ).toBe(true);
     }
   });
+
+  it("contains the phone viewport and prevents focus zoom on touch hardware", () => {
+    const css = read("pos.css");
+    expect(css).toContain("max-width: 100vw;");
+    expect(css).toContain("overflow-x: hidden;");
+    expect(css).toContain("@media (hover: none) and (pointer: coarse)");
+    expect(css).toContain(".pos-root :where(input, textarea, select)");
+    expect(css).toContain("font-size: 16px;");
+    expect(css).toContain(".pos-root .pos-scroll-area");
+    expect(css).toContain("overscroll-behavior-y: contain;");
+  });
 });

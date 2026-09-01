@@ -884,6 +884,25 @@ Sticky focus on the search box is switched off wherever `hover: none` and
 `pointer: coarse`, because iPadOS answers a programmatic focus by opening the
 keyboard over half the till. A laptop with a touchscreen keeps sticky focus.
 
+**PS-7.19a ★★ — Hydration cannot summon the phone keyboard**
+Cold-load `/pos/sell` on an iPhone or touch-primary tablet and do not touch the
+search field. Tap a product as soon as the grid appears, then repeat after a
+normal reload.
+**Expect:** the keyboard never opens. The focus decision rechecks the live media
+query instead of trusting the initial server snapshot, which reports non-touch
+during hydration. On a keyboard-first till the search still receives sticky
+focus without scrolling the register.
+
+**PS-7.19b ★★ — POS typing does not zoom or create a second page scroll**
+On iPhone Chrome/Safari, focus catalogue search, a line/order discount, customer
+mobile, and any tender field; type and dismiss the keyboard. Scroll Products to
+its end, switch to Cart, and repeat.
+**Expect:** the visual scale and full-width alignment never change, the camera
+control cannot push search outside the viewport, and only the active Products
+or Cart area scrolls. A boundary swipe never moves the POS shell or reveals a
+horizontal page strip. All editable POS controls render at least 16 px on
+touch-primary hardware.
+
 **PS-7.20 ★ — A tablet still scans, with nothing focused**
 On that same tablet, with a paired hardware scanner and no field focused
 (e.g. straight after tapping a product tile), scan a barcode.

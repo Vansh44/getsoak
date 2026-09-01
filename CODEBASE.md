@@ -549,6 +549,8 @@ wholesip/
 │   │   ├── notification-actions.ts # ★ Notifications (§22): inbox + unread count
 │   │   │                      # (the bell polls it), mark read/all-read/archive,
 │   │   │                      # activity feed, preference get/save and delivery retry.
+│   │   │                      # The dashboard bell panel is viewport-guttered on phones
+│   │   │                      # and retains bell-edge alignment from `sm` upward.
 │   │   │                      # Tested across recipient/host scoping, permissions,
 │   │   │                      # validation, writes, email safety and dead-letter recovery.
 │   │   │                      # Scope = HOST-derived (store, or platform when
@@ -3469,7 +3471,9 @@ the trusted `store_id`, and direct customer PII is minimized/masked.
       Products/Cart workflow to the register customization guide. Forward-only
       migration `20260902_0055_pos_https_entry_help` explains the load
       balancer's bare-address HTTPS upgrade in the POS overview and
-      troubleshooting guides.
+      troubleshooting guides; `20260902_0057_mobile_pos_notification_help`
+      documents the touch-safe POS viewport/focus behavior and phone-aligned
+      dashboard notification inbox.
     - **Merchant Help coverage baseline (2026-08-26):** migrations
       `20260826_0019_getting_started_account_help` through
       `20260826_0024_marketing_communications_help` upsert 81 guide records
@@ -3990,9 +3994,21 @@ the trusted `store_id`, and direct customer PII is minimized/masked.
         `(hover: none) and (pointer: coarse)`) switches it off there;
         `autoFocus` is gone for the same reason. The query pairs `hover: none`
         WITH coarse so a touchscreen laptop — which has a real keyboard — keeps
-        the fast path. It reaches BEHAVIOUR only, never rendered markup: the
-        SSR snapshot is `false`, so a placeholder or class keyed off it would
-        be a hydration mismatch on the exact devices it targets.
+        the fast path. The live media query is rechecked at the moment focus is
+        requested because the hydration snapshot is initially `false`; relying
+        on that snapshot alone gives a phone one desktop-style focus before the
+        touch state settles, which is enough to summon the keyboard. Desktop
+        focus uses `preventScroll`. The query reaches BEHAVIOUR only, never
+        rendered markup: a placeholder or class keyed off it would be a
+        hydration mismatch on the exact devices it targets.
+      - **★ PHONE FIELDS NEVER TRIGGER IOS FOCUS ZOOM.** `pos.css` enforces a
+        16 px editable-field size on touch-primary hardware, the Sell search
+        flex item may shrink below its long placeholder/camera control, and the
+        POS root is capped to `100vw` with horizontal overflow hidden. Products
+        and Cart are the named inertial scroll areas with vertical overscroll
+        containment, so their boundary swipe does not move or expose the page
+        shell. This applies to checkout, discounts and other POS fields too,
+        not only catalogue search.
       - **★ SO A SCAN MUST WORK WITH NOTHING FOCUSED.** Turning sticky focus
         off would otherwise cost an iPad + Bluetooth-scanner shop — a very
         ordinary setup — its scanner, silently. `createKeyboardWedge()` (pure,
@@ -5358,6 +5374,12 @@ the trusted `store_id`, and direct customer PII is minimized/masked.
       merchant). An empty database behaves exactly like the code defaults.
       Console at **Settings → Notifications**, gated on the `notifications`
       section; personal opt-outs at `…/notifications/me`.
+    - **THE PHONE BELL IS VIEWPORT-ALIGNED.** Below `sm`, the merchant inbox is
+      fixed between 12 px screen gutters with a dynamic-viewport height cap and
+      its own contained list scroll. It is not right-aligned to the bell there:
+      a 380 px panel anchored to a bell near the right edge extends past the
+      left side of a 390 px screen. From `sm` upward it retains the compact
+      bell-edge dropdown.
     - **EVERY registry entry HAS AN EMITTER — CI-enforced.**
       `lib/notifications/coverage.test.ts` fails unless each key is emitted from
       `app/`/`lib/` or listed in `PENDING` with the unbuilt feature it waits on.

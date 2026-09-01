@@ -1995,6 +1995,33 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260902_0057_mobile_pos_notification_help",
+      "description": "Document touch-safe mobile POS focus and scrolling plus the phone-aligned dashboard notification inbox",
+      "file": "sql/20260902_0057_mobile_pos_notification_help.sql",
+      "checksum": "0bf40217358fc0dfadfb85a4e78ab38d50a0961196a49ae52aeb74abd924a117",
+      "transaction": true,
+      "requires": ["20260902_0056_mink_mobile_workspace_help"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "the POS and notification guides explain their touch-safe phone surfaces",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and ((slug = 'customize-register-and-scan-products' and body like '%the register opens the software keyboard only after you select an editable field%' and body like '%Products and Cart each own their vertical scroll%' and body like '%without pushing either control beyond the screen%') or (slug = 'manage-store-and-personal-notifications' and body like '%<h2>Read the dashboard notification bell on a phone</h2>%' and body like '%the inbox aligns to the screen edges with a small gutter%' and body like '%scrolls inside the panel%'))",
+            "equals": "2"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "the POS and notification guides already explain their touch-safe phone surfaces",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and ((slug = 'customize-register-and-scan-products' and body like '%the register opens the software keyboard only after you select an editable field%' and body like '%Products and Cart each own their vertical scroll%' and body like '%without pushing either control beyond the screen%') or (slug = 'manage-store-and-personal-notifications' and body like '%<h2>Read the dashboard notification bell on a phone</h2>%' and body like '%the inbox aligns to the screen edges with a small gutter%' and body like '%scrolls inside the panel%'))",
+            "equals": "2"
+          }
+        ]
+      }
     }
   ]
 }

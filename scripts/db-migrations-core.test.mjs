@@ -22,7 +22,7 @@ describe("database migration controls", () => {
   it("loads the repository manifest and checksums the enrolled SQL", async () => {
     const loaded = await loadManifest();
     expect(loaded.baseline.id).toBe("baseline:cloudsql-2026-08-14");
-    expect(loaded.migrations).toHaveLength(56);
+    expect(loaded.migrations).toHaveLength(57);
     expect(loaded.migrations[0]).toMatchObject({
       id: "20260814_0001_logistics_shiprocket",
       transaction: true,
@@ -749,6 +749,19 @@ describe("database migration controls", () => {
       "the dashboard underneath cannot scroll",
     );
     expect(loaded.migrations[55].sql).toContain("without zooming the page");
+    expect(loaded.migrations[56]).toMatchObject({
+      id: "20260902_0057_mobile_pos_notification_help",
+      transaction: true,
+      requires: ["20260902_0056_mink_mobile_workspace_help"],
+      verify: {},
+    });
+    expect(loaded.migrations[56].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[56].sql).toContain(
+      "the register opens the software keyboard only after you select an editable field",
+    );
+    expect(loaded.migrations[56].sql).toContain(
+      "Read the dashboard notification bell on a phone",
+    );
     const repairChecks = [
       loaded.migrations[22].applyVerify,
       loaded.migrations[22].adoptVerify,
