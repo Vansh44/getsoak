@@ -65,12 +65,73 @@ const nextConfig: NextConfig = {
   // preview URLs and localhost all get it, production never does, and there is
   // no per-deploy flag anyone can forget. Duplicated here rather than imported
   // because next.config.ts is evaluated outside the app's module graph.
+  //
+  // ★ HSTS IS SET HERE TOO, and it is the half that stops a repeat of the
+  // pos.storemink.com outage. The load balancer had no port-80 rule at all, so
+  // `http://` closed the connection — and with no HSTS a browser has no way to
+  // know it should have used HTTPS, so a freshly TYPED host (no history entry
+  // to autocomplete a scheme from) failed outright. The LB redirect fixes the
+  // request; this stops the request being made over HTTP in the first place.
+  //
+  // ⚠ `includeSubDomains` is applied to OUR root domain ONLY. On storemink.com
+  // that is exactly the point — one visit to the apex protects `pos.`, `help.`,
+  // `themes.` and every merchant subdomain, which is what the incident needed.
+  // On a MERCHANT'S custom domain it would be an overreach: we serve `acme.com`
+  // over HTTPS, but `blog.acme.com` may be theirs, elsewhere, on plain HTTP,
+  // and pinning it is not ours to do. Custom domains therefore get the bare
+  // directive for their own host.
+  //
+  // No `preload`: the list is slow to leave, so it is a deliberate later step,
+  // not something to inherit from a copy-pasted snippet.
+  //
+  // Skipped in development — the header is ignored over plain HTTP by spec
+  // (RFC 6797 §8.1), so this is belt-and-braces rather than load-bearing.
   async headers() {
+    const root = (process.env.NEXT_PUBLIC_ROOT_DOMAIN || "storemink.com")
+      .trim()
+      .toLowerCase();
     const indexable =
-      (process.env.NEXT_PUBLIC_ROOT_DOMAIN || "storemink.com").toLowerCase() ===
-        "storemink.com" && process.env.NEXT_PUBLIC_NOINDEX !== "1";
-    if (indexable) return [];
+      root === "storemink.com" && process.env.NEXT_PUBLIC_NOINDEX !== "1";
+
+    // Next compiles a `has`/`missing` value as `new RegExp(`^${value}$`)` and
+    // matches it against the host with the PORT STRIPPED. So the port has to
+    // come off this side too — `NEXT_PUBLIC_ROOT_DOMAIN` carries one in local
+    // dev ("localhost:3000"), and a pattern that keeps it can never match, which
+    // silently downgrades every response to the weaker header. Caught by testing
+    // a built manifest rather than reading the docs. Anchoring is what makes the
+    // match exact: `evilstoremink.com` cannot satisfy it.
+    const ownHost = `(.*\\.)?${root
+      .split(":", 1)[0]
+      .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`;
+    const hsts =
+      process.env.NODE_ENV === "development"
+        ? []
+        : [
+            {
+              source: "/:path*",
+              has: [{ type: "host" as const, value: ownHost }],
+              headers: [
+                {
+                  key: "Strict-Transport-Security",
+                  value: "max-age=31536000; includeSubDomains",
+                },
+              ],
+            },
+            {
+              source: "/:path*",
+              missing: [{ type: "host" as const, value: ownHost }],
+              headers: [
+                {
+                  key: "Strict-Transport-Security",
+                  value: "max-age=31536000",
+                },
+              ],
+            },
+          ];
+
+    if (indexable) return hsts;
     return [
+      ...hsts,
       {
         source: "/:path*",
         headers: [
