@@ -228,7 +228,7 @@ export function DashboardChat({
   const hasThread = messages.length > 0 || isReplying || Boolean(error);
   const draftEstimate = estimateMinkDraftIntent(input);
   const wrapperClass = isOverlay
-    ? "absolute inset-0 z-20 flex flex-col overflow-hidden bg-white"
+    ? "fixed inset-0 z-[90] flex min-h-0 flex-col overflow-hidden bg-white"
     : "dash-chat relative flex h-full flex-shrink-0 flex-col overflow-hidden border-l border-t border-[#e5e5e5] bg-white shadow-sm";
   const columnClass = isOverlay ? "mx-auto w-full max-w-3xl" : "w-full";
   const panelStyle = isOverlay
@@ -236,7 +236,11 @@ export function DashboardChat({
     : ({ "--mink-chat-width": `${panelWidth}px` } as CSSProperties);
 
   return (
-    <div className={wrapperClass} style={panelStyle}>
+    <div
+      data-testid="mink-chat-surface"
+      className={wrapperClass}
+      style={panelStyle}
+    >
       {!isOverlay && (
         <div
           role="separator"
@@ -372,16 +376,20 @@ export function DashboardChat({
                       </div>
                     </div>
                   ) : (
-                    <div key={message.id} className="flex gap-2.5">
+                    <div key={message.id} className="flex min-w-0 gap-2.5 py-1">
                       <MinkMark size="sm" />
-                      <div className="max-w-[85%]">
+                      <div className="min-w-0 flex-1">
                         <div className="mb-1 text-[11px] font-semibold text-[#5c5f62]">
                           {ASSISTANT_NAME}
                         </div>
-                        <div className="rounded-2xl rounded-tl-sm bg-[#f6f6f7] px-3.5 py-2.5 text-sm text-[#1a1a1a]">
+                        <div className="pr-1">
                           <MinkAnswer text={message.text} />
                         </div>
-                        <MinkArtifacts artifacts={message.artifacts ?? []} />
+                        <MinkArtifacts
+                          artifacts={message.artifacts ?? []}
+                          onPrompt={send}
+                          promptDisabled={isReplying || isHistoryLoading}
+                        />
                         <MinkFeedbackControls
                           message={message}
                           submitting={feedbackSubmittingRunId === message.runId}
@@ -395,7 +403,7 @@ export function DashboardChat({
                 {isReplying && (
                   <div className="flex gap-2.5" aria-live="polite">
                     <MinkMark size="sm" />
-                    <div className="flex items-center gap-2 rounded-2xl rounded-tl-sm bg-[#f6f6f7] px-3.5 py-2.5 text-xs text-[#5c5f62]">
+                    <div className="flex items-center gap-2 py-2 text-xs text-[#5c5f62]">
                       <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#6d4dff]" />
                       {statusText ?? "Thinking…"}
                     </div>

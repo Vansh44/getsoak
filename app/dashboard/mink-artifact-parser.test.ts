@@ -3,12 +3,30 @@ import { readMinkArtifacts } from "./mink-artifact-parser";
 
 describe("readMinkArtifacts", () => {
   it("restores proposal cards alongside read-only artifacts", () => {
-    const artifacts = ["metrics", "records", "sources", "proposal"].map(
-      (type) => ({ type, marker: type }),
-    );
+    const artifacts = [
+      {
+        type: "clarification",
+        title: "Choose inventory scope",
+        question: "Which inventory scope should I use?",
+        choices: [{ label: "Shop", prompt: "Show Shop inventory" }],
+      },
+      { type: "metrics", marker: "metrics" },
+      {
+        type: "catalog",
+        marker: "catalog",
+        counts: {},
+        items: [],
+        filters: [],
+      },
+      { type: "records", marker: "records" },
+      { type: "sources", marker: "sources" },
+      { type: "proposal", marker: "proposal" },
+    ];
 
     expect(readMinkArtifacts(artifacts).map((item) => item.type)).toEqual([
+      "clarification",
       "metrics",
+      "catalog",
       "records",
       "sources",
       "proposal",
@@ -20,5 +38,39 @@ describe("readMinkArtifacts", () => {
     expect(
       readMinkArtifacts([null, { type: "unknown" }, ...valid]),
     ).toHaveLength(6);
+  });
+
+  it("rejects malformed or oversized catalogue artifacts", () => {
+    expect(
+      readMinkArtifacts([
+        { type: "catalog" },
+        {
+          type: "catalog",
+          counts: {},
+          items: Array.from({ length: 21 }, () => ({})),
+          filters: [],
+        },
+      ]),
+    ).toEqual([]);
+  });
+
+  it("rejects unsafe or oversized clarification choices", () => {
+    expect(
+      readMinkArtifacts([
+        {
+          type: "clarification",
+          question: "Choose",
+          choices: [{ label: "Shop", prompt: "" }],
+        },
+        {
+          type: "clarification",
+          question: "Choose",
+          choices: Array.from({ length: 7 }, () => ({
+            label: "Location",
+            prompt: "Show this location",
+          })),
+        },
+      ]),
+    ).toEqual([]);
   });
 });

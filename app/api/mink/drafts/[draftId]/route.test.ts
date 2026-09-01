@@ -93,6 +93,34 @@ describe("Mink private draft API", () => {
     });
   });
 
+  it("enforces the draft body bound from actual streamed bytes", async () => {
+    const response = await POST(
+      request({
+        action: "save",
+        expectedVersion: 0,
+        content: { lines_json: "x".repeat(33_000) },
+      }),
+      PARAMS,
+    );
+    expect(response.status).toBe(413);
+    expect(holder.actor).not.toHaveBeenCalled();
+    expect(holder.saveDraft).not.toHaveBeenCalled();
+  });
+
+  it("rejects unsupported top-level mutation fields", async () => {
+    const response = await POST(
+      request({
+        action: "save",
+        expectedVersion: 0,
+        content: { description: "Safe" },
+        storeId: "foreign-store",
+      }),
+      PARAMS,
+    );
+    expect(response.status).toBe(400);
+    expect(holder.actor).not.toHaveBeenCalled();
+  });
+
   it("requires a positive target for a rollback", async () => {
     const rejected = await POST(
       request({ action: "rollback", expectedVersion: 2, targetVersion: 0 }),

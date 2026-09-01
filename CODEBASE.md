@@ -18,9 +18,10 @@ store gets:
   settings — all no-code.
 - A connected, plan-gated **Point of Sale** for in-store checkout, shared
   inventory, pickup, returns, shifts and staff operations.
-- **Mink AI**, currently an invited read, draft and guarded-product-action beta,
-  to answer questions from live store data, prepare private reversible content
-  drafts and apply an explicitly approved product description or SEO change.
+- **Mink AI**, currently an invited read, drafting and guarded-action beta, to
+  answer questions from live store data, prepare private proposals and apply
+  only explicitly approved, independently gated product, coupon,
+  customer-group, inventory or delivery-order changes.
 
 The codebase began as **WholeSip** (a single D2C juice brand, store #1) and was
 converted to multi-tenant in phases. It still exists as the fallback store
@@ -30,16 +31,16 @@ tokens were renamed to `--sm-*` and `WHOLESIP_STORE_ID` to `FALLBACK_STORE_ID`.
 
 ## 2. Tech stack
 
-| Layer     | Tech                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Framework | Next.js 16 (App Router, `--turbopack` dev) — **breaking-changes version; read `node_modules/next/dist/docs/` before writing code** (see AGENTS.md)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| UI        | React 19, Tailwind CSS v4, shadcn/ui (`components/ui/`), Base UI, lucide-react, sonner (toasts), recharts (charts), TipTap (rich-text editor), CodeMirror 6 (`@uiw/react-codemirror` — website-builder code editor, lazy-loaded)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| Backend   | Supabase (Postgres + Auth + Storage + RLS), server actions in `app/actions/`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| Email     | Resend + nodemailer (`lib/email/`), Vercel cron `/api/cron/send-emails` (daily, `vercel.json`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| AI        | Gemini (`lib/ai/gemini.ts`); per-store brand voice (`lib/ai/brand-voice.ts` + `store_brand_profiles`) with plan-capped usage metering (`lib/ai/quota.ts`); task prompts in `brand/tasks/`. The dashboard Mink drawer has a default-on, invitation-gated Vertex/Gemini 3.7 beta in `lib/mink/` + `app/api/mink/`: its marked runtime system prompt is `docs/mink-ai-system-prompt.md`, validated and rendered by `lib/mink/system-prompt.ts`. Phase 2 streams permission/location-aware store, catalogue, sales, order, inventory and Help reads; Phase 3 adds separately opted-in private proposals. Phase 4A adds independently gated product description/SEO actions; 4B adds unpublished, untracked draft-product creation; 4C adds disabled/hidden coupon create/update; and 4D adds customer-group metadata create/update. Every action uses a saved proposal, exact ten-minute human approval, tenant/permission/tool/version rechecks, idempotent transactional execution, append-only outcomes and checkpointed safe rollback. Gemini receives proposal tools but no live execute tool. Inventory, order status, publication, campaigns, customer contact/group membership, bulk prices and arbitrary coding remain unavailable. Operators control every gate and inspect redacted metrics at `/dashboard/mink`; the 50-case live harness is `npm run mink:eval`, and the phase-wise manual catalogue is `docs/mink-ai-test-prompts.md`. An explicit global disable or missing invite retains the canned coming-soon response. Architecture and phased rollout are tracked in `docs/mink-ai-dashboard-plan.md`. |
-| Testing   | Vitest + Testing Library + jsdom, coverage via v8 (`coverage/` is generated output — never edit)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| Browsers  | **`browserslist` in package.json is the stated floor: Chrome/Edge 111, Firefox 128, Safari/iOS 16.4.** Not a preference — Tailwind v4 depends on `@property` and `color-mix()` and does not work below it, so this records a constraint a dependency already imposed rather than inventing one. Two authored CSS features sit BELOW that floor and so are always available: `:has()` (Chrome 105+/Safari 15.4+/Firefox 121+) and container queries (Chrome 105+/Safari 16+/Firefox 110+), both used by the dashboard table compaction, which is nonetheless wrapped in `@supports selector(:has(+ *)) and (container-type: inline-size)` so the dependency is stated where it is used and stays graceful if the floor is ever lowered. **⚠ There is NO cross-browser test infrastructure** — vitest runs in jsdom, which renders nothing. Chrome is the only browser this has been exercised in                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| Deploy    | **Google Cloud Run** via branch-specific Cloud Build triggers (`dev` → `storemink-web-dev`, `staging` → `storemink-web`, `main` → `storemink-web-prod`; Dockerfile + `cloudbuild.yaml`). The Cloud Build deploy owns the complete runtime environment; Mink's model/limit settings and separate invited-beta requirement are declared as substitutions. The global runtime defaults enabled, while the per-store invitation requirement defaults on and remains the fail-closed merchant boundary. CI on GitHub Actions (`.github/workflows/ci.yml`: lint → typecheck → test → test:shuffle → prettier → build); `npm run typecheck` runs `next typegen` before `tsc --noEmit` because the Next-managed `next-env.d.ts` is deliberately gitignored and a clean checkout otherwise has no static-image or route declarations. Database DDL is a separate, checksummed release gate (`npm run db:migrate`; see `drizzle/manual/README.md`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| Layer     | Tech                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Framework | Next.js 16 (App Router, `--turbopack` dev) — **breaking-changes version; read `node_modules/next/dist/docs/` before writing code** (see AGENTS.md)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| UI        | React 19, Tailwind CSS v4, shadcn/ui (`components/ui/`), Base UI, lucide-react, sonner (toasts), recharts (charts), TipTap (rich-text editor), CodeMirror 6 (`@uiw/react-codemirror` — website-builder code editor, lazy-loaded)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Backend   | Supabase (Postgres + Auth + Storage + RLS), server actions in `app/actions/`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| Email     | Resend + nodemailer (`lib/email/`), authenticated `/api/cron/send-emails` queue heartbeat (Cloud Scheduler every minute after Phase 5E rollout; `vercel.json` is non-production documentation)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| AI        | Gemini (`lib/ai/gemini.ts`); per-store brand voice (`lib/ai/brand-voice.ts` + `store_brand_profiles`) with plan-capped usage metering (`lib/ai/quota.ts`); task prompts in `brand/tasks/`. The dashboard Mink drawer has a default-on, invitation-gated Vertex/Gemini 3.7 beta in `lib/mink/` + `app/api/mink/`: its marked runtime system prompt is `docs/mink-ai-system-prompt.md`, validated and rendered by `lib/mink/system-prompt.ts`. Phase 2 streams permission/location-aware store, catalogue, sales, order, inventory and Help reads; vague multi-location catalogue-stock questions now produce permission-safe multiple-choice clarification instead of silently using a combined total, while explicit comparison returns shelf-level counts. Phase 3 adds separately opted-in private proposals. Phase 4A adds independently gated product description/SEO actions; 4B adds unpublished, untracked draft-product creation; 4C adds disabled/hidden coupon create/update; and 4D adds customer-group metadata create/update. Phase 5A adds an independently gated, human-approved adjustment for one exact tracked SKU at one exact active accessible location; Phase 5B adds a separate 5-credit, maximum-20-line bulk inventory proposal and atomic approval; Phase 5C adds a separate one-credit, one-order, one-forward-step online-delivery status proposal/approval for pending → processing → shipped → delivered; Phase 5D adds a separate immediate/scheduled publication approval for one exact saved blog proposal plus a bounded conflict-safe worker; Phase 5E adds independently gated coupon-email audience selection, exact non-PII preview, final confirmation and immediate/scheduled queueing; Phase 5F adds an independently gated 1–20 exact-SKU bulk price proposal, one-unit basket impact review and atomic conflict-safe execution. Every action uses a saved proposal, exact short-lived human approval, tenant/permission/tool/version rechecks, idempotent transactional execution and append-only outcomes; Phase 4 supports checkpointed safe rollback, while inventory, order-status, blog-publication, campaign and price corrections use fresh/manual domain workflows. Gemini receives checkpoint/proposal tools but no live execute tool. Transfers, cancellation/refunds/payment/shipment changes, pickup/POS lifecycle, product/page/storefront/bulk publication, arbitrary customer contact/group membership, unbounded catalogue repricing and arbitrary coding remain unavailable. Operators control every gate and inspect redacted metrics at `/dashboard/mink`; the 50-case live harness is `npm run mink:eval`, and the phase-wise manual catalogue is `docs/mink-ai-test-prompts.md`. An explicit global disable or missing invite retains the canned coming-soon response. Architecture and phased rollout are tracked in `docs/mink-ai-dashboard-plan.md`. |
+| Testing   | Vitest + Testing Library + jsdom, coverage via v8 (`coverage/` is generated output — never edit)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Browsers  | **`browserslist` in package.json is the stated floor: Chrome/Edge 111, Firefox 128, Safari/iOS 16.4.** Not a preference — Tailwind v4 depends on `@property` and `color-mix()` and does not work below it, so this records a constraint a dependency already imposed rather than inventing one. Two authored CSS features sit BELOW that floor and so are always available: `:has()` (Chrome 105+/Safari 15.4+/Firefox 121+) and container queries (Chrome 105+/Safari 16+/Firefox 110+), both used by the dashboard table compaction, which is nonetheless wrapped in `@supports selector(:has(+ *)) and (container-type: inline-size)` so the dependency is stated where it is used and stays graceful if the floor is ever lowered. **⚠ There is NO cross-browser test infrastructure** — vitest runs in jsdom, which renders nothing. Chrome is the only browser this has been exercised in                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| Deploy    | **Google Cloud Run** via branch-specific Cloud Build triggers (`dev` → `storemink-web-dev`, `staging` → `storemink-web`, `main` → `storemink-web-prod`; Dockerfile + `cloudbuild.yaml`). The Cloud Build deploy owns the complete runtime environment; Mink's model/limit settings and separate invited-beta requirement are declared as substitutions. The global runtime defaults enabled, while the per-store invitation requirement defaults on and remains the fail-closed merchant boundary. CI on GitHub Actions (`.github/workflows/ci.yml`: lint → typecheck → test → test:shuffle → prettier → build); `npm run typecheck` runs `next typegen` before `tsc --noEmit` because the Next-managed `next-env.d.ts` is deliberately gitignored and a clean checkout otherwise has no static-image or route declarations. Database DDL is a separate, checksummed release gate (`npm run db:migrate`; see `drizzle/manual/README.md`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 
 ## 3. Multi-tenancy architecture (the core concept)
 
@@ -259,10 +260,12 @@ wholesip/
 │   │   │                      # expanded view; receives the private server-side flag.
 │   │   ├── dashboard-chat.tsx # Mink panel/full-view renderer: Codex-style history sidebar
 │   │   │                      # with confirmed deletion, persisted drag/keyboard width,
-│   │   │                      # Help-matched robot identity and auto-growing composer.
-│   │   ├── mink-answer.tsx    # Safe React-rendered bold/inline-code subset; model text
-│   │   │                      # is never raw HTML and `**` markers do not leak into UI.
-│   │   ├── mink-artifacts.tsx # Permission-safe metric/order/product/inventory/source cards
+│   │   │                      # Help-matched robot identity and auto-growing composer;
+│   │   │                      # maximize is a shell-level viewport takeover above the
+│   │   │                      # dashboard topbar, navigation and page content.
+│   │   ├── mink-answer.tsx    # Safe React-rendered headings/lists/tables/emphasis/code plus
+│   │   │                      # allowlisted dashboard/Help links; no model HTML is executed.
+│   │   ├── mink-artifacts.tsx # Permission-safe metric/catalog/order/product/inventory/source cards
 │   │   │                      # plus private proposal cards; mink-proposal-card.tsx edits,
 │   │   │                      # versions/restores proposals and provides Phase 4's exact,
 │   │   │                      # explicitly approved product/coupon/group action/rollback UX.
@@ -568,8 +571,20 @@ wholesip/
 │       │                      # same-origin writes, optimistic versions, actor/store/RBAC scope.
 │       │   ├── product-action/ # ★ Phase 4A same-origin preview/execute/rollback endpoint;
 │       │                      # accepts ids/versions only, never browser-supplied product text.
-│       │   └── action/        # ★ Phase 4B–4D same-origin exact preview/execute/rollback;
+│       │   ├── action/        # ★ Phase 4B–4D same-origin exact preview/execute/rollback;
 │       │                      # draft products, disabled coupons and group metadata only.
+│       │   ├── inventory-action/ # ★ Phase 5A same-origin preview/execute endpoint for one
+│       │                      # exact tracked SKU/location; accepts only approval metadata.
+│       │   ├── bulk-inventory-action/ # ★ Phase 5B separately rate-limited preview/execute;
+│       │                      # max 20 exact lines, human approval, atomic all-or-nothing write.
+│       │   ├── order-status-action/ # ★ Phase 5C same-origin one-order preview/execute;
+│       │                      # forward delivery status only, five-minute approval and audit.
+│       │   ├── blog-publication/ # ★ Phase 5D same-origin exact blog preview/execute;
+│       │   │                  # publish now or persist one bounded schedule after human approval.
+│       │   ├── campaign-action/ # ★ Phase 5E same-origin audience options/preview/execute;
+│       │   │                  # exact coupon-email snapshot + final queue/schedule confirmation.
+│       │   └── bulk-price-action/ # ★ Phase 5F same-origin preview/execute for one saved
+│       │                      # max-20 exact-SKU tuple; impact review + atomic all-or-nothing write.
 │       ├── pos/live/          # ★ Authenticated no-store GET transport for every
 │       │                      # background POS read (badge, queue, stock, paged
 │       │                      # catalogue). Server Actions are client-serialized,
@@ -577,9 +592,10 @@ wholesip/
 │       ├── webhooks/logistics/[connectionId]/ # ★ §35 authenticated carrier events;
 │       │                      # provider-neutral URL accepted by Shiprocket; duplicate and
 │       │                      # out-of-order safe, raw payload service-only
-│       ├── cron/send-emails/  # Daily worker for BOTH outbound queues (Vercel
-│       │                      # cron): coupon campaigns + notification emails
-│       │                      # (§22). Self-chains while either has work left
+│       ├── cron/send-emails/  # Minute Cloud Scheduler heartbeat for outbound queues:
+│       │                      # coupon campaigns + notification emails (§22).
+│       │                      # Phase 5E promotes due campaigns atomically and
+│       │                      # excludes future schedules from self-chaining.
 │       ├── cron/plan-expiry/  # ★ Daily: flips expired timed plans → free (§15)
 │       ├── cron/expire-pending-payments/ # ★ Hourly reaper for unpaid razorpay
 │       │                      # orders: mark paid if captured, else cancel+restock (§18)
@@ -592,6 +608,8 @@ wholesip/
 │       ├── cron/help-embeddings/ # ★ Hourly Mink AI semantic-index reconciler (§21):
 │       │                      # CRON_SECRET-gated bounded batches, self-chains while
 │       │                      # work remains, and returns 503 on provider failure
+│       ├── cron/mink-publications/ # ★ Every minute: CRON_SECRET-gated bounded Phase 5D
+│       │                      # due-blog publisher; exact-version conflict detection + SKIP LOCKED.
 │       ├── cron/domain-reconcile/ # ★ HOURLY (§30): finishes every custom domain
 │       │                      # whose certificate issued after the merchant closed
 │       │                      # the tab. Without it a domain only ever goes live if
@@ -981,6 +999,9 @@ wholesip/
 │   │                          # card artifacts carrying explicit date/location/channel scope.
 │   │                          # Location scope accepts a unique canonical name or safe
 │   │                          # name-plus-type alias and never broadens a failed named request.
+│   │                          # Catalogue stock requires an explicit publication-only,
+│   │                          # clarify, combined, by-location or exact-location intent;
+│   │                          # vague multi-location stock asks return bounded quick choices.
 │   │                          # Order/customer output is role-gated and masks direct PII;
 │   │                          # selected IDs are revalidated against the trusted tenant.
 │   │                          # persistence.ts owns actor-scoped conversations/runs, redacted
@@ -998,9 +1019,34 @@ wholesip/
 │   │                          # writes, idempotency/conflict checks, immutable outcomes and
 │   │                          # safe rollback. Product creation stays unpublished/untracked;
 │   │                          # coupon writes stay disabled/hidden and group writes metadata-only.
+│   │                          # inventory-action-types.ts + inventory-actions.ts add Phase 5A's
+│   │                          # single-SKU/location checkpoint, independent gate, exact stock/
+│   │                          # reservation concurrency guards and atomic level + movement write;
+│   │                          # bulk-inventory-targets.ts batches exact line resolution in four
+│   │                          # fixed queries; bulk-inventory-action-types.ts +
+│   │                          # bulk-inventory-actions.ts add Phase 5B's separate max-20 gate,
+│   │                          # per-line validation and atomic all-or-nothing level/movement batch.
+│   │                          # Neither inventory action has automatic physical-stock rollback;
+│   │                          # order-status-policy.ts + order-status-target.ts and the matching
+│   │                          # action/types module add Phase 5C exact-reference, location/payment/
+│   │                          # cancellation/carrier guards and one-step transactional execution;
+│   │                          # blog-publication-policy/content/action-types/actions/worker add
+│   │                          # Phase 5D exact sanitized blog publication, UTC schedule bounds,
+│   │                          # tenant-composite persistence and conflict-safe bounded execution;
+│   │                          # campaign-policy/audience/action-types/actions add Phase 5E exact audience
+│   │                          # snapshots, branded sample, final confirmation and queue scheduling;
+│   │                          # bulk-price-policy/targets/action-types/actions add Phase 5F exact-SKU
+│   │                          # tuple validation, one-unit impact review and atomic guarded repricing;
+│   │                          # action-integrity.ts gives approval payloads canonical JSON hashes.
+│   │                          # Transfer, cancellation, refund, shipment, arbitrary customer
+│   │                          # contact and non-blog publication authority remain unavailable.
+│   │                          # catalog-health-read.ts returns bounded product publication plus
+│   │                          # exact/combined stock lists or a maximum-20-location comparison
+│   │                          # using Inventory's simple-product/variant, missing-shelf-zero and
+│   │                          # effective-threshold contract.
 │   │                          # timestamps.ts canonicalizes coupon business dates without
 │   │                          # weakening full-precision resource-version checkpoints.
-│   │                          # No model tool can publish, send or execute a live mutation.
+│   │                          # No model tool can publish, schedule, send or execute a live mutation.
 │   │                          # `evals/mink/read-alpha.json` + `npm run mink:eval` are the
 │   │                          # 50-case live tool/safety/latency gate.
 │   ├── help/                   # ★ Public Help reads/types plus Mink AI retrieval (§21):
@@ -1419,7 +1465,22 @@ wholesip/
 │                              # documents draft-product, disabled-coupon and group-metadata limits;
 │                              # 0044 documents restored proposal cards, independent drafting
 │                              # rollout and exact action/rollback checkpoint behavior; 0045 documents
-│                              # the responsive Products/Cart register flow on phones and portrait tablets.
+│                              # the responsive Products/Cart register flow on phones and portrait tablets;
+│                              # 0046 adds Phase 5A exact single-SKU/location inventory approvals,
+│                              # trusted target columns, indexes and the matching Help contract;
+│                              # 0047 adds the separate bounded atomic Phase 5B bulk gate,
+│                              # constraints/indexes and line-by-line Help guidance; 0048 documents
+│                              # location-aware SKU catalogue health and safe structured answers;
+│                              # 0051 adds Phase 5C's exact forward delivery-order gate, constraints,
+│                              # indexes and anchor-independent, operator-edit-safe Help contract;
+│                              # 0052 adds Phase 5D's exact blog gate, store-composite scheduled-job
+│                              # ledger, forced-RLS worker contract and current publication Help;
+│                              # 0053 adds Phase 5E campaign gate/audience metadata, exact approved
+│                              # sender/brand snapshots and schedule-aware email claiming;
+│                              # 0054 adds Phase 5F draft/action allowlists, atomic price target
+│                              # constraints, variant parent-version trigger and Help guidance;
+│                              # missing/draft/empty guide drift is repaired before publication.
+│                              # It follows the 0049/0050 UX migrations.
 ├── scripts/
 │   ├── dev-server.mjs         # ★ resource-aware Next dev runner: 2 GB heap on ≤12 GB
 │   │                          # machines, 3 GB on ≤20 GB, uncapped above; rotates
@@ -2830,7 +2891,7 @@ amountPaise}` for the modal. `confirmOnlinePayment` verifies the HMAC
       fake period delta. The old unimported hard-coded performance, inventory
       and operational demo widgets were deleted.
 
-20a. **Mink AI dashboard agent — invited read, private drafting and guarded Phase 4 action beta.** This is separate
+20a. **Mink AI dashboard agent — invited read, private drafting and guarded Phase 4/5D action beta.** This is separate
 from the public Help Centre assistant. `MINK_AI_ENABLED` is a private,
 server-read kill switch that defaults enabled and can be set explicitly false;
 `MINK_BETA_REQUIRE_INVITE` defaults true and requires an enabled
@@ -2855,9 +2916,18 @@ drafting entitlement.
 Its read tools cover store profile, catalogue summary, product search,
 recognized net sales, low stock, masked orders/current order, current product
 and published Help Centre retrieval. Sales and orders reuse the dashboard's
-date/timezone/refund/channel contract; stock uses per-SKU thresholds. Applied
-date/location/channel scope returns with structured metric, order, product,
-inventory or Help-source cards instead of living only in prose. Browser route
+date/timezone/refund/channel contract. Catalogue health now separates
+product-level publication counts from sellable-SKU inventory counts, evaluates
+simple products and variants with the Inventory workspace's effective-threshold
+rules, and reads either the trigger-maintained all-location aggregate or the
+exact trusted shelf scope. Its bounded catalogue card lists each returned SKU
+with publication and stock badges; stock fields are omitted without Inventory
+View permission. Applied date/location/channel scope returns with structured
+metric, catalogue, order, product, inventory or Help-source cards instead of
+living only in prose. Assistant prose uses a safe ChatGPT-style React renderer
+for headings, paragraphs, nested lists, tables, quotes, code, emphasis and only
+allowlisted dashboard/StoreMink Help links; raw model HTML and arbitrary links
+remain inert. Browser route
 and selected product/order IDs are hints only: the server normalizes the route
 and revalidates every record against the trusted store before exposing context.
 Model-supplied location names are intersected with server-derived assignments;
@@ -2965,7 +3035,198 @@ the trusted `store_id`, and direct customer PII is minimized/masked.
      same business value without weakening the version guard. Product inventory/variants/publication,
      coupon activation/visibility/audience/sending, group membership, orders,
      campaigns, bulk prices, customer contact and StoreMink source/deployment
-     access remain absent. Migration
+     access remain absent from Phase 4.
+
+     Phase 5A adds `get_inventory_item_for_adjustment` and
+     `propose_inventory_adjustment` to the permission-filtered model manifest,
+     never a write tool. The former resolves an exact visible SKU and exact
+     active location name inside the actor's trusted assignment, rejects parent
+     SKUs with variants, ambiguity and untracked stock, and returns a SHA-256
+     checkpoint opaque to Gemini. The latter must return that checkpoint
+     unchanged and creates a 1-credit `inventory_adjustment` private proposal
+     containing only a server-normalized signed bounded quantity (from either a
+     signed change or absolute target), allowlisted reason and bounded
+     audit note; trusted product, optional variant and location IDs are stored
+     separately by the server. `POST /api/mink/drafts/[draftId]/inventory-action`
+     accepts only saved-version/idempotency or approval IDs. It re-authenticates,
+     rate-limits, checks Inventory Manage, drafting and the independent
+     `adjust_inventory` operator gate, locks the actor/store approval, then
+     revalidates the active assigned location, tracking state, exact
+     `inventory_levels.updated_at`, `on_hand` and `reserved`. Adjustments are
+     non-zero integers bounded to ±1,000,000 and cannot reduce on-hand below
+     zero or reserved stock. A successful transaction performs one optimistic
+     level write (including safe creation of an absent level), one exact
+     `stock_movements` ledger insert and one immutable action audit; retries
+     return the original result without duplicate inventory events or alerts.
+     Inventory has no automatic rollback because later physical movement cannot
+     be inferred safely: a correction is a new inverse proposal against the
+     current checkpoint. Inactive/inaccessible/default/all-location fallback,
+     transfers and reservation edits remain unavailable.
+     Migration `20260831_0046_mink_phase_5a_inventory_actions` adds the trusted
+     target columns, constraints, partial audit/approval indexes and published
+     Help guidance.
+
+     Phase 5B adds `get_inventory_items_for_bulk_adjustment` and
+     `propose_bulk_inventory_adjustment`, still never a model-callable write.
+     The checkpoint reader accepts 1–20 explicit visible SKU/location pairs and
+     resolves locations, products, variants and inventory levels in four fixed,
+     bounded store-scoped queries. It returns every line as ready with an opaque
+     actor-bound checkpoint or as a specific missing, duplicate, ambiguous,
+     untracked or inaccessible error; a proposal is not created or charged
+     until every line is valid. The 5-credit private proposal stores only exact
+     visible SKU/location values, signed bounded quantities, allowlisted reasons
+     and bounded notes. `POST /api/mink/drafts/[draftId]/bulk-inventory-action`
+     accepts only a saved version/idempotency key or approval ID, has its own
+     four-per-minute actor/store limit, enforces actual streamed body bytes and
+     the independent `bulk_adjust_inventory` operator gate, and returns
+     line-specific errors without accepting business fields from the browser.
+     Its five-minute approval locks the actor/store approval and existing level
+     rows, then rechecks Inventory Manage, assigned active locations, tracking,
+     draft version, target IDs, full-precision timestamps, on-hand and reserved
+     quantities for every line. Duplicate pairs, more than 20 lines, invalid
+     deltas, below-zero/below-reserved results or one stale line block the whole
+     action. Writes run in deterministic lock order in one database transaction:
+     all optimistic level changes, one movement per line, the approval and one
+     append-only batch audit commit together, or every write rolls back. Replay
+     cannot duplicate stock, movements, events or alerts. Correction requires a
+     new current-stock proposal; transfers remain unavailable. Migration
+     `20260831_0047_mink_phase_5b_bulk_inventory` adds the fail-closed schema,
+     partial indexes and published Help contract.
+
+     Phase 5C adds `get_order_for_status_transition` and
+     `propose_order_status_transition` to the permission-filtered model manifest,
+     still never a live execute tool. The checkpoint reader accepts one exact
+     visible order reference, resolves it only inside the authenticated tenant
+     and assigned-location scope, minimizes returned order data and binds a
+     SHA-256 snapshot to actor, order version, status, payment, channel,
+     fulfilment, cancellation, location and latest shipment state. The 1-credit
+     private `order_status_transition` proposal stores the trusted order ID
+     server-side and allows only a target status plus bounded internal audit
+     note. The pure policy permits exactly one online-delivery forward step:
+     pending → processing, processing → shipped or shipped → delivered. It
+     rejects POS, pickup, pending cancellation, unpaid non-COD, skip/reverse/
+     terminal/completed/bulk requests and every payment/refund/contact authority.
+     When a carrier shipment exists, shipped requires picked-up/transit evidence,
+     delivered requires carrier-confirmed delivery, and NDR/RTO/cancelled/lost/
+     damaged states fail closed. `POST /api/mink/drafts/[draftId]/order-status-action`
+     accepts only a saved version/idempotency key or approval ID, enforces actual
+     streamed bytes, same-origin, a six-per-minute actor/store limit, Orders
+     Manage, drafting and the independent `transition_order_status` gate. Its
+     five-minute preview/execute path locks and rechecks draft, approval, exact
+     order version and all material checkpoint fields. The optimistic order
+     write, approval and append-only audit commit in one transaction; a delivered
+     transition preserves the first `delivered_at`. Replay returns the original
+     result and emits no duplicate normal status/customer event. Status rollback
+     is intentionally unavailable: corrections use established Orders/Logistics
+     workflows. Migration `20260901_0051_mink_phase_5c_order_status` owns the new
+     allowlists, target constraints, partial indexes and published Help contract.
+
+     Phase 5D keeps the existing 5-credit `blog` proposal as the only
+     model-facing capability; Gemini still has no live publish or schedule tool.
+     The saved proposal card exposes Publish after approval or Schedule for
+     later only in the authenticated browser. `POST
+     /api/mink/drafts/[draftId]/blog-publication` accepts a saved version,
+     idempotency key and timing for preview, or only an approval ID for execute;
+     it has a 4KB streamed body cap, strict-key parsing, same-origin protection,
+     a six-per-minute actor/store limit and Blogs Manage plus drafting plus the
+     independent `publish_blog` gate. The five-minute approval canonically
+     hashes the exact title, excerpt, Markdown body, optional SEO fields,
+     publication mode and UTC instant. Execution rechecks the actor/store,
+     permission, gates, draft version and hash inside one service transaction,
+     escapes raw HTML, sanitizes a deliberately small Markdown subset and does
+     not activate Markdown links. It creates exactly one new blog plus one
+     `mink_blog_publications` ledger row; approval retry returns the original
+     result without duplicate blog, audit or discovery notification.
+
+     Immediate approval publishes the blog and triggers normal storefront
+     revalidation/discovery. Scheduling accepts only a timezone-bearing instant
+     5 minutes–90 days ahead and creates a private blog draft. The
+     CRON_SECRET-only `/api/cron/mink-publications` worker claims at most 20 due
+     rows with `FOR UPDATE SKIP LOCKED`, checks global/store drafting and the
+     per-tool gate, then publishes only when the approval/result link and exact
+     blog version still match. Disabled gates pause work; a manual edit or
+     other publication records a conflict instead of overwriting, while
+     deliberate blog deletion cascades the still-pending publication row.
+     The service-only ledger has forced RLS, revoked app-user access and
+     store-composite foreign keys to the draft, approval and blog. Categories,
+     tags, media, featured state, product/page/storefront/bulk publication,
+     campaigns and automatic rollback remain outside Phase 5D. Migration
+     `20260901_0052_mink_phase_5d_blog_publication` owns the constraints, table,
+     indexes, access contract and published Help guidance.
+
+     Phase 5E keeps `get_coupon_for_draft` and `propose_coupon_email` as the
+     only model-facing campaign capabilities. The authenticated proposal card
+     loads tenant-owned audience choices from `POST
+     /api/mink/drafts/[draftId]/campaign-action`, then lets a human select all
+     customers or one exact group and immediate delivery or a UTC instant 5
+     minutes–30 days ahead. The same-origin endpoint has a 4KB streamed body
+     cap, strict keys, a four-per-minute actor/store limit and accepts no
+     recipient list, copy, tenant ID, coupon facts or sender data. Marketing
+     Manage, Pro email-campaign entitlement, drafting, configured email and the
+     independent `send_campaign` gate are enforced server-side.
+
+     Preview resolves at most 10,000 tenant customer rows, normalizes and
+     deduplicates email, excludes missing/invalid and globally suppressed
+     addresses, and SHA-256-binds the sorted exact customer/email/name snapshot
+     to the saved proposal, coupon version, sender, brand and timing. The card
+     shows all eligible/excluded counts, complete saved copy and a sandboxed
+     branded sample using only the literal “Customer”. The five-minute final
+     confirmation re-locks and rechecks every checkpoint; drift commits no
+     campaign recipients. Success atomically inserts one `email_campaigns` row,
+     its exact `email_campaign_recipients`, approval and append-only audit.
+     Approval replay returns the original result and does not kick delivery
+     twice. Approved sender/brand are persisted as immutable delivery snapshots,
+     while the existing worker checks suppression again immediately before send.
+
+     Immediate campaigns enter the existing queue and trigger its authenticated
+     worker. Scheduled campaigns stay `scheduled` until the schedule-aware
+     `claim_email_batch` promotes due rows and claims recipients with `FOR UPDATE
+     SKIP LOCKED`; the worker's remaining count joins campaign state so future
+     rows cannot cause self-chain loops. Production therefore changes the
+     existing `storemink-send-emails` Cloud Scheduler heartbeat from daily to
+     every minute only after migration/application rollout. There is no second
+     sender or cron route and no automatic campaign cancellation/rollback.
+     Migration `20260901_0053_mink_phase_5e_campaigns` owns the new allowlists,
+     store-composite approval and campaign-recipient FKs, metadata constraints/indexes, claim function
+     and published Help contract.
+
+     Phase 5F adds `get_products_for_bulk_price_update` and
+     `propose_bulk_price_update` to the Products View/Manage model manifest,
+     never `bulk_update_prices` or the browser executor. The checkpoint reader
+     resolves 1–20 exact tenant-owned product/variant SKUs in two bounded
+     queries, rejects missing, duplicate and ambiguous SKUs, and requires exact
+     variant SKUs when a product has variants. It returns authoritative MRP,
+     selling, optional special and effective prices, explicitly reports that
+     only variant SKUs support a special price, and returns an actor-bound
+     opaque checkpoint. The charged private `bulk_price_update` proposal stores the
+     complete canonical INR tuple for every line and enforces MRP ≥ selling ≥
+     special > 0, at most two decimals, an explicit keep/clear/set special-price
+     decision and the supported money range. A non-variant product SKU must
+     keep its unsupported special price cleared; both proposal and preview
+     reject an attempted value so execution cannot silently drop it.
+
+     `POST /api/mink/drafts/[draftId]/bulk-price-action` is same-origin,
+     no-store, strict-key, 4KB streamed-body limited and independently limited
+     to four actor/store requests per minute. The browser can send only a saved
+     version/idempotency key or approval ID. Products Manage, drafting and the
+     independent default-off `bulk_update_prices` gate are checked at preview
+     and execution. The five-minute preview reloads authoritative targets and
+     binds exact product/variant identity, publication status, parent product
+     version and all current prices. Its card shows every tuple and a signed
+     one-unit-of-each basket change; this is explicitly not a revenue forecast.
+     Final execution locks parent products then variants deterministically,
+     rechecks every checkpoint and writes all lines in one transaction. One
+     invalid/stale line rolls back the complete set. A variant-price trigger
+     bumps its parent product content/version checkpoint. Retry returns the
+     original executed approval/audit and emits no duplicate product events.
+     Product/storefront caches are revalidated for future carts; existing order
+     line snapshots remain unchanged. There is no automatic price rollback:
+     correction needs a fresh proposal or manual product edit. Migration
+     `20260901_0054_mink_phase_5f_bulk_prices` owns the new allowlists, target
+     constraints, partial indexes, parent-version trigger and published Help
+     contract.
+
+     Migration
      `20260829_0038_mink_phase_1b` adds retry/partial-usage/versioned micro-USD
      cost columns and a cross-store run index. `/dashboard/mink`, gated at its
      page before the service-role read, shows operators status, p95 latency,
@@ -2976,7 +3237,7 @@ the trusted `store_id`, and direct customer PII is minimized/masked.
      `docs/mink-ai-test-prompts.md` catalogue covers phase-wise manual prompts
      plus UX, permission, tenancy, credit, approval, conflict, idempotency and
      rollback acceptance scenarios. The original migration
-     publishes the guide; migrations 0036–0044 keep
+     publishes the guide; migrations 0036–0054 keep
      `use-mink-ai-in-your-dashboard` aligned with these capabilities and limits.
 
 21. **Help Centre (`help.storemink.com`) — platform-global, operator-managed
@@ -5311,8 +5572,8 @@ the trusted `store_id`, and direct customer PII is minimized/masked.
       `/api/cron/send-emails`. A Resend round-trip must never sit on a
       checkout's code path. Retries back off (5/15/45 min, 3 attempts).
       **Digests** date each row to the END of its window (clock-aligned, so one
-      window is one email); `DAILY_DIGEST_HOUR_UTC` is 23:00 because the cron
-      heartbeat is 00:00 UTC — **move it if the cron moves.**
+      window is one email); `DAILY_DIGEST_HOUR_UTC` is 23:00 and the Phase 5E
+      minute heartbeat drains it on the next tick.
 
 25. **Legal & consent — versioned policies, and consent as evidence.**
     - **TWO LAYERS, DIFFERENT HOMES.** StoreMink's OWN policies (Terms,

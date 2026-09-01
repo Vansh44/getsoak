@@ -22,7 +22,7 @@ describe("database migration controls", () => {
   it("loads the repository manifest and checksums the enrolled SQL", async () => {
     const loaded = await loadManifest();
     expect(loaded.baseline.id).toBe("baseline:cloudsql-2026-08-14");
-    expect(loaded.migrations).toHaveLength(45);
+    expect(loaded.migrations).toHaveLength(54);
     expect(loaded.migrations[0]).toMatchObject({
       id: "20260814_0001_logistics_shiprocket",
       transaction: true,
@@ -570,6 +570,158 @@ describe("database migration controls", () => {
       "Use the register on a phone or portrait tablet",
     );
     expect(loaded.migrations[44].sql).toContain("separate full-width views");
+    expect(loaded.migrations[45]).toMatchObject({
+      id: "20260831_0046_mink_phase_5a_inventory_actions",
+      transaction: true,
+      requires: ["20260831_0045_pos_mobile_register_help"],
+    });
+    expect(loaded.migrations[45].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[45].sql).toContain("adjust_inventory");
+    expect(loaded.migrations[45].sql).toContain(
+      "mink_action_approvals_inventory_target_check",
+    );
+    expect(loaded.migrations[45].sql).toContain(
+      "writes the inventory level and stock-movement ledger in one database transaction",
+    );
+    expect(loaded.migrations[46]).toMatchObject({
+      id: "20260831_0047_mink_phase_5b_bulk_inventory",
+      transaction: true,
+      requires: ["20260831_0046_mink_phase_5a_inventory_actions"],
+    });
+    expect(loaded.migrations[46].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[46].sql).toContain("bulk_adjust_inventory");
+    expect(loaded.migrations[46].sql).toContain(
+      "mink_action_approvals_bulk_inventory_target_check",
+    );
+    expect(loaded.migrations[46].sql).toContain(
+      "database rolls the whole batch back",
+    );
+    expect(loaded.migrations[47]).toMatchObject({
+      id: "20260831_0048_mink_catalog_health_ui",
+      transaction: true,
+      requires: ["20260831_0047_mink_phase_5b_bulk_inventory"],
+    });
+    expect(loaded.migrations[47].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[47].sql).toContain(
+      "Low-stock and out-of-stock counts are sellable-SKU counts",
+    );
+    expect(loaded.migrations[47].sql).toContain(
+      "Model text is never treated as raw HTML",
+    );
+    expect(loaded.migrations[48]).toMatchObject({
+      id: "20260831_0049_mink_inventory_scope_clarification",
+      transaction: true,
+      requires: ["20260831_0048_mink_catalog_health_ui"],
+    });
+    expect(loaded.migrations[48].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[48].sql).toContain(
+      "does not silently assume an all-location total",
+    );
+    expect(loaded.migrations[48].sql).toContain(
+      "missing inventory-level row counts as zero at that shelf",
+    );
+    expect(loaded.migrations[49]).toMatchObject({
+      id: "20260901_0050_mink_full_view_takeover",
+      transaction: true,
+      requires: ["20260831_0049_mink_inventory_scope_clarification"],
+    });
+    expect(loaded.migrations[49].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[49].sql).toContain(
+      "covering the dashboard topbar, left navigation and page content",
+    );
+    expect(loaded.migrations[50]).toMatchObject({
+      id: "20260901_0051_mink_phase_5c_order_status",
+      transaction: true,
+      requires: ["20260901_0050_mink_full_view_takeover"],
+    });
+    expect(loaded.migrations[50].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[50].sql).toContain("transition_order_status");
+    expect(loaded.migrations[50].sql).toContain(
+      "mink_action_approvals_order_status_target_check",
+    );
+    expect(loaded.migrations[50].sql).toContain(
+      "Pending or approved cancellation states and any refund activity block advancement",
+    );
+    expect(loaded.migrations[50].sql).toContain(
+      "otherwise append the complete section",
+    );
+    expect(loaded.migrations[50].sql).toContain(
+      "ON CONFLICT (slug) DO NOTHING",
+    );
+    expect(loaded.migrations[50].sql).toContain("status = 'published'");
+    expect(loaded.migrations[50].sql).toContain(
+      "DROP CONSTRAINT IF EXISTS mink_drafts_order_status_target_check",
+    );
+    expect(loaded.migrations[50].sql).toContain(
+      "CREATE INDEX IF NOT EXISTS mink_action_approvals_order_status_idx",
+    );
+    expect(loaded.migrations[50].sql).toContain(
+      "body LIKE '%do not offer automatic rollback%'",
+    );
+    expect(loaded.migrations[51]).toMatchObject({
+      id: "20260901_0052_mink_phase_5d_blog_publication",
+      transaction: true,
+      requires: ["20260901_0051_mink_phase_5c_order_status"],
+    });
+    expect(loaded.migrations[51].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[51].sql).toContain("publish_blog");
+    expect(loaded.migrations[51].sql).toContain(
+      "mink_blog_publications_blog_store_fkey",
+    );
+    expect(loaded.migrations[51].sql).toContain(
+      "outcome <> 'executed' AND result_id IS NULL",
+    );
+    expect(loaded.migrations[51].sql).toContain("FORCE ROW LEVEL SECURITY");
+    expect(loaded.migrations[51].sql).toContain("Publish or schedule one blog");
+    expect(loaded.migrations[51].sql).toContain(
+      "does not activate Markdown links",
+    );
+    expect(loaded.migrations[51].sql).toContain(
+      "$phase5d$)\n)\nUPDATE public.help_articles AS article",
+    );
+    expect(loaded.migrations[52]).toMatchObject({
+      id: "20260901_0053_mink_phase_5e_campaigns",
+      transaction: true,
+      requires: ["20260901_0052_mink_phase_5d_blog_publication"],
+    });
+    expect(loaded.migrations[52].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[52].sql).toContain("send_campaign");
+    expect(loaded.migrations[52].sql).toContain(
+      "email_campaigns_mink_approval_store_fkey",
+    );
+    expect(loaded.migrations[52].sql).toContain(
+      "email_campaign_recipients_campaign_store_fkey",
+    );
+    expect(loaded.migrations[52].sql).toContain("brand_snapshot");
+    expect(loaded.migrations[52].sql).toContain("WITH ready AS");
+    expect(loaded.migrations[52].sql).toContain(
+      "FOR UPDATE OF recipient SKIP LOCKED",
+    );
+    expect(loaded.migrations[52].sql).toContain(
+      "Send or schedule one coupon-email campaign",
+    );
+    expect(loaded.migrations[53]).toMatchObject({
+      id: "20260901_0054_mink_phase_5f_bulk_prices",
+      transaction: true,
+      requires: ["20260901_0053_mink_phase_5e_campaigns"],
+    });
+    expect(loaded.migrations[53].checksum).toMatch(/^[0-9a-f]{64}$/);
+    expect(loaded.migrations[53].sql).toContain("bulk_update_prices");
+    expect(loaded.migrations[53].sql).toContain(
+      "mink_action_approvals_bulk_price_target_check",
+    );
+    expect(loaded.migrations[53].sql).toContain(
+      "product_variants_touch_parent_price",
+    );
+    expect(loaded.migrations[53].sql).toContain(
+      "Update prices for up to 20 exact SKUs",
+    );
+    expect(loaded.migrations[53].sql).toMatch(
+      /\$phase5f\$\)\s*\)\s*UPDATE public\.help_articles/,
+    );
+    expect(loaded.migrations[53].sql).toContain(
+      "not a sales or revenue forecast",
+    );
     const repairChecks = [
       loaded.migrations[22].applyVerify,
       loaded.migrations[22].adoptVerify,

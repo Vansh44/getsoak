@@ -1592,6 +1592,355 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260831_0046_mink_phase_5a_inventory_actions",
+      "description": "Add human-approved, exact single-SKU single-location Mink inventory adjustments and Help Centre guidance",
+      "file": "sql/20260831_0046_mink_phase_5a_inventory_actions.sql",
+      "transaction": true,
+      "requires": ["20260831_0045_pos_mobile_register_help"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "Mink Phase 5A schema and independent inventory gate exist",
+            "sql": "select count(*)::text from information_schema.columns where table_schema = 'public' and ((table_name = 'mink_drafts' and column_name in ('location_id', 'variant_id')) or (table_name = 'mink_action_approvals' and column_name in ('location_id', 'variant_id')) or (table_name = 'mink_action_audit' and column_name in ('location_id', 'variant_id')))",
+            "equals": "6"
+          },
+          {
+            "name": "the Mink guide documents exact single-location inventory approval safety",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%<h2>Adjust one SKU at one location</h2>%' and body like '%Inventory Manage%' and body like '%writes the inventory level and stock-movement ledger in one database transaction%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "Mink Phase 5A inventory target columns already exist",
+            "sql": "select count(*)::text from information_schema.columns where table_schema = 'public' and ((table_name = 'mink_drafts' and column_name in ('location_id', 'variant_id')) or (table_name = 'mink_action_approvals' and column_name in ('location_id', 'variant_id')) or (table_name = 'mink_action_audit' and column_name in ('location_id', 'variant_id')))",
+            "equals": "6"
+          },
+          {
+            "name": "the Mink guide already documents single-SKU inventory approvals",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%<h2>Adjust one SKU at one location</h2>%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260831_0047_mink_phase_5b_bulk_inventory",
+      "description": "Add separately gated, bounded and atomic Mink bulk inventory adjustments with line-level Help Centre guidance",
+      "file": "sql/20260831_0047_mink_phase_5b_bulk_inventory.sql",
+      "transaction": true,
+      "requires": ["20260831_0046_mink_phase_5a_inventory_actions"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "Mink Phase 5B bulk inventory constraints and indexes exist",
+            "sql": "select count(*)::text from pg_constraint where conname in ('mink_drafts_bulk_inventory_target_check', 'mink_action_approvals_bulk_inventory_target_check', 'mink_action_audit_bulk_inventory_target_check')",
+            "equals": "3"
+          },
+          {
+            "name": "the Mink guide documents bounded atomic bulk inventory approval safety",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%<h2>Adjust multiple inventory lines</h2>%' and body like '%between 1 and 20 exact inventory-tracked SKU%' and body like '%Execution is atomic%' and body like '%database rolls the whole batch back%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "Mink Phase 5B bulk inventory constraints already exist",
+            "sql": "select count(*)::text from pg_constraint where conname in ('mink_drafts_bulk_inventory_target_check', 'mink_action_approvals_bulk_inventory_target_check', 'mink_action_audit_bulk_inventory_target_check')",
+            "equals": "3"
+          },
+          {
+            "name": "the Mink guide already documents bounded atomic bulk inventory approvals",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%<h2>Adjust multiple inventory lines</h2>%' and body like '%Execution is atomic%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260831_0048_mink_catalog_health_ui",
+      "description": "Document location-aware SKU catalogue health and safe structured Mink answer formatting",
+      "file": "sql/20260831_0048_mink_catalog_health_ui.sql",
+      "transaction": true,
+      "requires": ["20260831_0047_mink_phase_5b_bulk_inventory"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "the Mink guide documents location-aware sellable-SKU health and safe answer formatting",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%<h2>Read catalogue and stock health</h2>%' and body like '%Low-stock and out-of-stock counts are sellable-SKU counts%' and body like '%all-location total can be low even when one individual shop is out of stock%' and body like '%Model text is never treated as raw HTML%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "the Mink guide already documents location-aware catalogue health",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%<h2>Read catalogue and stock health</h2>%' and body like '%sellable-SKU counts%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260831_0049_mink_inventory_scope_clarification",
+      "description": "Document explicit Mink inventory-scope clarification and bounded per-location catalogue-health comparison",
+      "file": "sql/20260831_0049_mink_inventory_scope_clarification.sql",
+      "checksum": "1656d6a8a7fb08c380dcd6da1ccd8532853e3fa13ea5c49471c140f74451c4de",
+      "transaction": true,
+      "requires": ["20260831_0048_mink_catalog_health_ui"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "the Mink guide documents scope choices and per-location stock semantics",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%does not silently assume an all-location total%' and body like '%<strong>Compare locations</strong>%' and body like '%missing inventory-level row counts as zero at that shelf%' and body like '%first 20 accessible locations%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "the Mink guide already documents scope choices and per-location stock semantics",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%does not silently assume an all-location total%' and body like '%<strong>Compare locations</strong>%' and body like '%missing inventory-level row counts as zero at that shelf%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260901_0050_mink_full_view_takeover",
+      "description": "Make the dashboard Mink maximized surface a full-viewport takeover and document the restore behavior",
+      "file": "sql/20260901_0050_mink_full_view_takeover.sql",
+      "checksum": "2c2e713d4dace686e79a1f7c1984af93cdd24c72584a9ec01313e4eafd583304",
+      "transaction": true,
+      "requires": ["20260831_0049_mink_inventory_scope_clarification"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "the Mink dashboard guide documents the full-view takeover",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%Select <strong>Expand</strong> to open Mink AI across the full browser window%' and body like '%covering the dashboard topbar, left navigation and page content%' and body like '%Select <strong>Collapse</strong> to return to the drawer%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "the Mink dashboard guide already documents the full-view takeover",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%covering the dashboard topbar, left navigation and page content%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260901_0051_mink_phase_5c_order_status",
+      "description": "Add a separately gated, forward-only and human-approved Mink delivery order-status transition with drift-repairing Help Centre guidance",
+      "file": "sql/20260901_0051_mink_phase_5c_order_status.sql",
+      "checksum": "f4a3121a21c9ee71d828d2ebc71fb0c6c5c7a11a385e40ac92068f7342bdbb43",
+      "transaction": true,
+      "requires": ["20260901_0050_mink_full_view_takeover"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "Mink Phase 5C order-status constraints and indexes exist",
+            "sql": "select count(*)::text from pg_constraint where conname in ('mink_drafts_order_status_target_check', 'mink_action_approvals_order_status_target_check', 'mink_action_audit_order_status_target_check')",
+            "equals": "3"
+          },
+          {
+            "name": "the Mink guide documents guarded delivery order-status transitions",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%<h2>Advance one delivery order</h2>%' and body like '%pending → processing%' and body like '%Delivery order-status transitions%' and body like '%Pending or approved cancellation states and any refund activity block advancement%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "Mink Phase 5C order-status constraints already exist",
+            "sql": "select count(*)::text from pg_constraint where conname in ('mink_drafts_order_status_target_check', 'mink_action_approvals_order_status_target_check', 'mink_action_audit_order_status_target_check')",
+            "equals": "3"
+          },
+          {
+            "name": "the Mink guide already documents guarded delivery order-status transitions",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%<h2>Advance one delivery order</h2>%' and body like '%Delivery order-status transitions%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260901_0052_mink_phase_5d_blog_publication",
+      "description": "Add separately gated exact blog publication and a conflict-safe bounded schedule worker with current Help Centre guidance",
+      "file": "sql/20260901_0052_mink_phase_5d_blog_publication.sql",
+      "checksum": "38ad7b2aa4d822bebcf3b0a77638b062216941d1dc8b01c39b15c7d0248258e7",
+      "transaction": true,
+      "requires": ["20260901_0051_mink_phase_5c_order_status"],
+      "verify": {},
+      "applyVerify": {
+        "tables": ["mink_blog_publications"],
+        "columns": [
+          "mink_blog_publications.approval_id",
+          "mink_blog_publications.blog_id",
+          "mink_blog_publications.scheduled_for",
+          "mink_blog_publications.blog_version",
+          "mink_blog_publications.published_at"
+        ],
+        "constraints": [
+          "blogs_id_store_key",
+          "mink_action_approvals_blog_publish_target_check",
+          "mink_action_audit_blog_publish_target_check",
+          "mink_blog_publications_blog_store_fkey",
+          "mink_blog_publications_timing_check"
+        ],
+        "rlsTables": ["mink_blog_publications"],
+        "queries": [
+          {
+            "name": "the Mink guide documents exact guarded blog publication and scheduling",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%<h2>Publish or schedule one blog</h2>%' and body like '%Blog publication and scheduling%' and body like '%from 5 minutes to 90 days ahead%' and body like '%does not activate Markdown links%' and body like '%produces a conflict instead of overwriting%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "tables": ["mink_blog_publications"],
+        "constraints": [
+          "mink_action_approvals_blog_publish_target_check",
+          "mink_action_audit_blog_publish_target_check",
+          "mink_blog_publications_blog_store_fkey",
+          "mink_blog_publications_timing_check"
+        ],
+        "rlsTables": ["mink_blog_publications"],
+        "queries": [
+          {
+            "name": "the Mink guide already documents guarded blog publication and scheduling",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%<h2>Publish or schedule one blog</h2>%' and body like '%Blog publication and scheduling%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260901_0053_mink_phase_5e_campaigns",
+      "description": "Add separately gated exact coupon-email audience review, final send confirmation and schedule-aware delivery",
+      "file": "sql/20260901_0053_mink_phase_5e_campaigns.sql",
+      "checksum": "ebff0f32e127d5923886a1304d0ef0c8c25d74d447e2be0b0f2bf9b5afd6c816",
+      "transaction": true,
+      "requires": ["20260901_0052_mink_phase_5d_blog_publication"],
+      "verify": {},
+      "applyVerify": {
+        "columns": [
+          "email_campaigns.scheduled_for",
+          "email_campaigns.mink_approval_id",
+          "email_campaigns.audience_mode",
+          "email_campaigns.audience_label",
+          "email_campaigns.sender_address",
+          "email_campaigns.brand_snapshot",
+          "email_campaigns.confirmed_at"
+        ],
+        "constraints": [
+          "email_campaigns_id_store_key",
+          "email_campaign_recipients_campaign_store_fkey",
+          "email_campaigns_mink_approval_store_fkey",
+          "email_campaigns_mink_metadata_check",
+          "mink_action_approvals_campaign_send_target_check",
+          "mink_action_audit_campaign_send_target_check"
+        ],
+        "queries": [
+          {
+            "name": "the schedule-aware campaign claim function is server-only",
+            "sql": "select count(*)::text from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname = 'claim_email_batch' and p.prosecdef and has_function_privilege('app_service', p.oid, 'EXECUTE') and not has_function_privilege('app_user', p.oid, 'EXECUTE')",
+            "equals": "1"
+          },
+          {
+            "name": "the Mink guide documents exact guarded coupon campaigns",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%<h2>Send or schedule one coupon-email campaign</h2>%' and body like '%Coupon email campaigns%' and body like '%caps the source audience at 10,000 customer rows%' and body like '%never claims a future campaign%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "columns": [
+          "email_campaigns.scheduled_for",
+          "email_campaigns.mink_approval_id",
+          "email_campaigns.sender_address",
+          "email_campaigns.brand_snapshot"
+        ],
+        "constraints": [
+          "email_campaigns_mink_approval_store_fkey",
+          "email_campaign_recipients_campaign_store_fkey",
+          "email_campaigns_mink_metadata_check",
+          "mink_action_approvals_campaign_send_target_check",
+          "mink_action_audit_campaign_send_target_check"
+        ],
+        "queries": [
+          {
+            "name": "the Mink guide already documents guarded coupon campaigns",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%<h2>Send or schedule one coupon-email campaign</h2>%' and body like '%Coupon email campaigns%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260901_0054_mink_phase_5f_bulk_prices",
+      "description": "Add separately gated exact-SKU bulk price review with atomic conflict-safe execution and impact summary",
+      "file": "sql/20260901_0054_mink_phase_5f_bulk_prices.sql",
+      "checksum": "bb144bcca08d4231aeb9d4434b9573db4111e803e3ed9c6347ce064670ce6651",
+      "transaction": true,
+      "requires": ["20260901_0053_mink_phase_5e_campaigns"],
+      "verify": {},
+      "applyVerify": {
+        "constraints": [
+          "mink_drafts_bulk_price_target_check",
+          "mink_action_approvals_bulk_price_target_check",
+          "mink_action_audit_bulk_price_target_check"
+        ],
+        "queries": [
+          {
+            "name": "the variant-price checkpoint trigger exists",
+            "sql": "select count(*)::text from pg_trigger where tgname = 'product_variants_touch_parent_price' and not tgisinternal",
+            "equals": "1"
+          },
+          {
+            "name": "the Mink guide documents guarded atomic bulk prices",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%<h2>Update prices for up to 20 exact SKUs</h2>%' and body like '%Bulk price updates%' and body like '%available only for variant SKUs%' and body like '%applies atomically%' and body like '%not a sales or revenue forecast%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "constraints": [
+          "mink_drafts_bulk_price_target_check",
+          "mink_action_approvals_bulk_price_target_check",
+          "mink_action_audit_bulk_price_target_check"
+        ],
+        "queries": [
+          {
+            "name": "the variant-price checkpoint trigger already exists",
+            "sql": "select count(*)::text from pg_trigger where tgname = 'product_variants_touch_parent_price' and not tgisinternal",
+            "equals": "1"
+          },
+          {
+            "name": "the Mink guide already documents guarded atomic bulk prices",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%<h2>Update prices for up to 20 exact SKUs</h2>%' and body like '%Bulk price updates%'",
+            "equals": "1"
+          }
+        ]
+      }
     }
   ]
 }

@@ -25,7 +25,92 @@ describe("Mink draft contracts", () => {
       coupon_update: 1,
       customer_group_create: 1,
       customer_group_update: 1,
+      inventory_adjustment: 1,
+      bulk_inventory_adjustment: 5,
+      order_status_transition: 1,
+      bulk_price_update: 5,
     });
+  });
+
+  it("strictly normalizes and caps Phase 5B bulk inventory lines", () => {
+    const lines = [
+      {
+        sku: " TEA-500 ",
+        location: " Delhi ",
+        quantity_change: -2,
+        reason: "damaged",
+        note: " Counted twice. ",
+      },
+      {
+        sku: "COFFEE",
+        location: "Shop",
+        quantity_change: 10,
+        reason: "received",
+        note: "",
+      },
+    ];
+    const normalized = normalizeMinkDraftContent("bulk_inventory_adjustment", {
+      lines_json: JSON.stringify(lines),
+    });
+    expect(JSON.parse(normalized.lines_json)).toEqual([
+      {
+        ...lines[0],
+        sku: "TEA-500",
+        location: "Delhi",
+        note: "Counted twice.",
+      },
+      lines[1],
+    ]);
+    expect(() =>
+      normalizeMinkDraftContent("bulk_inventory_adjustment", {
+        lines_json: JSON.stringify([lines[0], lines[0]]),
+      }),
+    ).toThrow("duplicates the same SKU and location");
+    expect(() =>
+      normalizeMinkDraftContent("bulk_inventory_adjustment", {
+        lines_json: JSON.stringify(
+          Array.from({ length: 21 }, (_, index) => ({
+            ...lines[1],
+            sku: `SKU-${index}`,
+          })),
+        ),
+      }),
+    ).toThrow("1-20 lines");
+    expect(() =>
+      normalizeMinkDraftContent("bulk_inventory_adjustment", {
+        lines_json: JSON.stringify([{ ...lines[0], product_id: "forbidden" }]),
+      }),
+    ).toThrow("unsupported fields");
+  });
+
+  it("bounds single-SKU inventory proposals and requires accountable reasons", () => {
+    expect(
+      normalizeMinkDraftContent("inventory_adjustment", {
+        quantity_change: " -12 ",
+        reason: "damaged",
+        note: "Counted by the warehouse manager.",
+        product_id: "must be ignored",
+      }),
+    ).toEqual({
+      quantity_change: "-12",
+      reason: "damaged",
+      note: "Counted by the warehouse manager.",
+    });
+    for (const quantity_change of ["0", "1.5", "1000001", "-1000001"]) {
+      expect(() =>
+        normalizeMinkDraftContent("inventory_adjustment", {
+          quantity_change,
+          reason: "correction",
+        }),
+      ).toThrow("non-zero whole number");
+    }
+    expect(() =>
+      normalizeMinkDraftContent("inventory_adjustment", {
+        quantity_change: "2",
+        reason: "other",
+        note: "",
+      }),
+    ).toThrow("audit note is required");
   });
 
   it("normalizes only the fields allowed by each draft kind", () => {
@@ -39,6 +124,33 @@ describe("Mink draft contracts", () => {
       seo_title: "Summer shoes",
       seo_description: "Shop the collection.",
     });
+  });
+
+  it("allowlists only Phase 5C forward order targets and an internal note", () => {
+    expect(
+      normalizeMinkDraftContent("order_status_transition", {
+        target_status: " shipped ",
+        note: " Handed to local courier. ",
+        payment_status: "paid",
+        customer_email: "must-be-ignored@example.com",
+      }),
+    ).toEqual({
+      target_status: "shipped",
+      note: "Handed to local courier.",
+    });
+    for (const target_status of [
+      "pending",
+      "cancelled",
+      "completed",
+      "refunded",
+    ]) {
+      expect(() =>
+        normalizeMinkDraftContent("order_status_transition", {
+          target_status,
+          note: "",
+        }),
+      ).toThrow("processing, shipped, delivered");
+    }
   });
 
   it("rejects missing required fields and bounded overflows", () => {
@@ -76,6 +188,21 @@ describe("Mink draft contracts", () => {
       estimateMinkDraftIntent("Create a customer group for VIPs"),
     ).toMatchObject({
       kind: "customer_group_create",
+      expectedCredits: 1,
+    });
+    expect(
+      estimateMinkDraftIntent("Adjust stock for SKU TEA-500 by -2 in Delhi"),
+    ).toMatchObject({ kind: "inventory_adjustment", expectedCredits: 1 });
+    expect(
+      estimateMinkDraftIntent("Bulk update inventory for multiple SKUs"),
+    ).toMatchObject({
+      kind: "bulk_inventory_adjustment",
+      expectedCredits: 5,
+    });
+    expect(
+      estimateMinkDraftIntent("Mark order ORD-1001 as shipped"),
+    ).toMatchObject({
+      kind: "order_status_transition",
       expectedCredits: 1,
     });
   });

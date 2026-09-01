@@ -18,7 +18,8 @@ import { triggerEmailWorker } from "@/lib/email/trigger-worker";
 // reliable than two half-fed ones.
 //
 // Driven three ways:
-//   1. Vercel Cron (see vercel.json) as the reliable heartbeat.
+//   1. Cloud Scheduler once per minute as the reliable heartbeat. This cadence
+//      is required by Phase 5E scheduled campaigns; vercel.json is inert in prod.
 //   2. Self-chaining: if work remains after a run, kick another via after() so
 //      a large campaign (or a burst of notifications) drains in minutes rather
 //      than on the cron cadence.

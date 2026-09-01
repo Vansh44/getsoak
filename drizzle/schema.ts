@@ -1183,6 +1183,7 @@ export const blogs = pgTable(
       foreignColumns: [users.id],
       name: "blogs_submitted_by_fkey",
     }).onDelete("set null"),
+    unique("blogs_id_store_key").on(table.id, table.storeId),
     unique("blogs_store_slug_key").on(table.slug, table.storeId),
     pgPolicy("Update blogs", {
       as: "permissive",
@@ -1504,9 +1505,9 @@ export const emailCampaignRecipients = pgTable(
       table.storeId.asc().nullsLast().op("uuid_ops"),
     ),
     foreignKey({
-      columns: [table.campaignId],
-      foreignColumns: [emailCampaigns.id],
-      name: "email_campaign_recipients_campaign_id_fkey",
+      columns: [table.campaignId, table.storeId],
+      foreignColumns: [emailCampaigns.id, emailCampaigns.storeId],
+      name: "email_campaign_recipients_campaign_store_fkey",
     }).onDelete("cascade"),
     foreignKey({
       columns: [table.storeId],
@@ -1538,17 +1539,43 @@ export const emailCampaigns = pgTable(
       .defaultNow()
       .notNull(),
     storeId: uuid("store_id").notNull(),
+    scheduledFor: timestamp("scheduled_for", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    minkApprovalId: uuid("mink_approval_id"),
+    audienceMode: text("audience_mode"),
+    audienceLabel: text("audience_label"),
+    senderAddress: text("sender_address"),
+    brandSnapshot: jsonb("brand_snapshot"),
+    confirmedAt: timestamp("confirmed_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
   },
   (table) => [
+    unique("email_campaigns_id_store_key").on(table.id, table.storeId),
+    unique("email_campaigns_mink_approval_key").on(table.minkApprovalId),
     index("idx_email_campaigns_store_id").using(
       "btree",
       table.storeId.asc().nullsLast().op("uuid_ops"),
     ),
+    index("email_campaigns_due_idx")
+      .on(table.scheduledFor, table.createdAt)
+      .where(sql`${table.status} = 'scheduled'`),
     foreignKey({
       columns: [table.storeId],
       foreignColumns: [stores.id],
       name: "email_campaigns_store_id_fkey",
     }).onDelete("cascade"),
+    check(
+      "email_campaigns_status_check",
+      sql`status = ANY (ARRAY['pending'::text, 'sending'::text, 'done'::text, 'scheduled'::text])`,
+    ),
+    check(
+      "email_campaigns_mink_metadata_check",
+      sql`(mink_approval_id IS NULL AND scheduled_for IS NULL AND audience_mode IS NULL AND audience_label IS NULL AND sender_address IS NULL AND brand_snapshot IS NULL AND confirmed_at IS NULL AND status <> 'scheduled') OR (mink_approval_id IS NOT NULL AND audience_mode = ANY (ARRAY['all'::text, 'group'::text]) AND length(btrim(audience_label)) BETWEEN 1 AND 200 AND length(btrim(sender_address)) BETWEEN 3 AND 320 AND jsonb_typeof(brand_snapshot) = 'object' AND confirmed_at IS NOT NULL AND (status <> 'scheduled' OR scheduled_for IS NOT NULL))`,
+    ),
   ],
 );
 
@@ -4700,10 +4727,12 @@ export const stores = pgTable(
 
 // ---------------------------------------------------------------------------
 // Mink dashboard agent — permission-aware reads, private draft proposals and
-// explicitly approved product-content actions
+// explicitly approved product/content/domain actions plus Phase 5A's exact
+// single-SKU, single-location inventory adjustment
 // (drizzle/migrations/sql/20260829_0035_mink_dashboard_alpha.sql,
 //  20260829_0039_mink_phase_2.sql, 20260830_0040_mink_phase_3.sql and
-//  20260830_0042_mink_phase_4a_product_actions.sql).
+//  20260830_0042_mink_phase_4a_product_actions.sql and
+//  20260831_0046_mink_phase_5a_inventory_actions.sql).
 // Service-role only: every application query must carry an explicit store id.
 // ---------------------------------------------------------------------------
 export const minkStoreAccess = pgTable(
@@ -4757,6 +4786,8 @@ export const minkDrafts = pgTable(
     status: text().default("proposed").notNull(),
     destinationType: text("destination_type").notNull(),
     destinationId: uuid("destination_id"),
+    locationId: uuid("location_id"),
+    variantId: uuid("variant_id"),
     destinationLabel: text("destination_label").notNull(),
     destinationPath: text("destination_path").notNull(),
     title: text().notNull(),
@@ -4789,7 +4820,7 @@ export const minkDrafts = pgTable(
     }).onDelete("cascade"),
     check(
       "mink_drafts_kind_check",
-      sql`kind = ANY (ARRAY['product_description'::text, 'product_seo'::text, 'blog'::text, 'coupon_email'::text, 'customer_message'::text, 'product_create'::text, 'coupon_create'::text, 'coupon_update'::text, 'customer_group_create'::text, 'customer_group_update'::text])`,
+      sql`kind = ANY (ARRAY['product_description'::text, 'product_seo'::text, 'blog'::text, 'coupon_email'::text, 'customer_message'::text, 'product_create'::text, 'coupon_create'::text, 'coupon_update'::text, 'customer_group_create'::text, 'customer_group_update'::text, 'inventory_adjustment'::text, 'bulk_inventory_adjustment'::text, 'order_status_transition'::text, 'bulk_price_update'::text])`,
     ),
     check(
       "mink_drafts_status_check",
@@ -4798,6 +4829,22 @@ export const minkDrafts = pgTable(
     check(
       "mink_drafts_destination_check",
       sql`btrim(destination_type) <> '' AND btrim(destination_label) <> '' AND destination_path LIKE '/dashboard%' AND char_length(destination_path) <= 500`,
+    ),
+    check(
+      "mink_drafts_inventory_target_check",
+      sql`kind <> 'inventory_adjustment' OR (destination_type = 'inventory' AND destination_id IS NOT NULL AND location_id IS NOT NULL)`,
+    ),
+    check(
+      "mink_drafts_bulk_inventory_target_check",
+      sql`kind <> 'bulk_inventory_adjustment' OR (destination_type = 'inventory_bulk' AND destination_id IS NULL AND location_id IS NULL AND variant_id IS NULL AND jsonb_typeof(content_json -> 'lines_json') = 'string')`,
+    ),
+    check(
+      "mink_drafts_order_status_target_check",
+      sql`kind <> 'order_status_transition' OR (destination_type = 'order' AND destination_id IS NOT NULL AND location_id IS NULL AND variant_id IS NULL)`,
+    ),
+    check(
+      "mink_drafts_bulk_price_target_check",
+      sql`kind <> 'bulk_price_update' OR (destination_type = 'price_bulk' AND destination_id IS NULL AND location_id IS NULL AND variant_id IS NULL AND jsonb_typeof(content_json -> 'lines_json') = 'string')`,
     ),
     check(
       "mink_drafts_title_check",
@@ -4937,7 +4984,7 @@ export const minkActionToolAccess = pgTable(
     }).onDelete("cascade"),
     check(
       "mink_action_tool_access_name_check",
-      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text, 'create_product'::text, 'create_coupon'::text, 'update_coupon'::text, 'create_customer_group'::text, 'update_customer_group'::text])`,
+      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text, 'create_product'::text, 'create_coupon'::text, 'update_coupon'::text, 'create_customer_group'::text, 'update_customer_group'::text, 'adjust_inventory'::text, 'bulk_adjust_inventory'::text, 'transition_order_status'::text, 'publish_blog'::text, 'send_campaign'::text, 'bulk_update_prices'::text])`,
     ),
     check(
       "mink_action_tool_access_enablement_check",
@@ -4961,6 +5008,8 @@ export const minkActionApprovals = pgTable(
       mode: "string",
     }),
     resourceLabel: text("resource_label"),
+    locationId: uuid("location_id"),
+    variantId: uuid("variant_id"),
     resultId: uuid("result_id"),
     resultVersion: timestamp("result_version", {
       withTimezone: true,
@@ -5028,6 +5077,30 @@ export const minkActionApprovals = pgTable(
       table.resourceId,
       table.createdAt,
     ),
+    index("mink_action_approvals_inventory_idx")
+      .on(
+        table.storeId,
+        table.locationId,
+        table.resourceId,
+        table.variantId,
+        table.createdAt,
+      )
+      .where(sql`${table.toolName} = 'adjust_inventory'`),
+    index("mink_action_approvals_inventory_bulk_idx")
+      .on(table.storeId, table.adminId, table.status, table.createdAt.desc())
+      .where(sql`${table.toolName} = 'bulk_adjust_inventory'`),
+    index("mink_action_approvals_order_status_idx")
+      .on(table.storeId, table.resourceId, table.status, table.createdAt.desc())
+      .where(sql`${table.toolName} = 'transition_order_status'`),
+    index("mink_action_approvals_blog_publish_idx")
+      .on(table.storeId, table.status, table.createdAt.desc())
+      .where(sql`${table.toolName} = 'publish_blog'`),
+    index("mink_action_approvals_campaign_send_idx")
+      .on(table.storeId, table.status, table.createdAt.desc())
+      .where(sql`${table.toolName} = 'send_campaign'`),
+    index("mink_action_approvals_bulk_price_idx")
+      .on(table.storeId, table.adminId, table.status, table.createdAt.desc())
+      .where(sql`${table.toolName} = 'bulk_update_prices'`),
     foreignKey({
       columns: [table.storeId],
       foreignColumns: [stores.id],
@@ -5050,11 +5123,11 @@ export const minkActionApprovals = pgTable(
     }).onDelete("cascade"),
     check(
       "mink_action_approvals_tool_check",
-      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text, 'create_product'::text, 'create_coupon'::text, 'update_coupon'::text, 'create_customer_group'::text, 'update_customer_group'::text])`,
+      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text, 'create_product'::text, 'create_coupon'::text, 'update_coupon'::text, 'create_customer_group'::text, 'update_customer_group'::text, 'adjust_inventory'::text, 'bulk_adjust_inventory'::text, 'transition_order_status'::text, 'publish_blog'::text, 'send_campaign'::text, 'bulk_update_prices'::text])`,
     ),
     check(
       "mink_action_approvals_resource_type_check",
-      sql`resource_type = ANY (ARRAY['product'::text, 'coupon'::text, 'customer_group'::text])`,
+      sql`resource_type = ANY (ARRAY['product'::text, 'coupon'::text, 'customer_group'::text, 'inventory'::text, 'inventory_bulk'::text, 'order'::text, 'blog'::text, 'campaign'::text, 'price_bulk'::text])`,
     ),
     check(
       "mink_action_approvals_operation_check",
@@ -5077,6 +5150,30 @@ export const minkActionApprovals = pgTable(
       "mink_action_approvals_execution_check",
       sql`(status = 'executed' AND approved_at IS NOT NULL AND executed_at IS NOT NULL) OR status <> 'executed'`,
     ),
+    check(
+      "mink_action_approvals_inventory_target_check",
+      sql`tool_name <> 'adjust_inventory' OR (resource_type = 'inventory' AND resource_id IS NOT NULL AND product_id IS NOT NULL AND product_id = resource_id AND location_id IS NOT NULL AND operation = 'apply' AND source_approval_id IS NULL)`,
+    ),
+    check(
+      "mink_action_approvals_bulk_inventory_target_check",
+      sql`tool_name <> 'bulk_adjust_inventory' OR (resource_type = 'inventory_bulk' AND resource_id IS NULL AND product_id IS NULL AND location_id IS NULL AND variant_id IS NULL AND operation = 'apply' AND source_approval_id IS NULL AND jsonb_typeof(after_json -> 'lines') = 'array' AND jsonb_array_length(after_json -> 'lines') BETWEEN 1 AND 20)`,
+    ),
+    check(
+      "mink_action_approvals_order_status_target_check",
+      sql`tool_name <> 'transition_order_status' OR (resource_type = 'order' AND resource_id IS NOT NULL AND product_id IS NULL AND location_id IS NULL AND variant_id IS NULL AND operation = 'apply' AND source_approval_id IS NULL)`,
+    ),
+    check(
+      "mink_action_approvals_blog_publish_target_check",
+      sql`tool_name <> 'publish_blog' OR (resource_type = 'blog' AND resource_id IS NULL AND product_id IS NULL AND location_id IS NULL AND variant_id IS NULL AND operation = 'apply' AND source_approval_id IS NULL AND ((status = 'executed' AND result_id IS NOT NULL) OR (status <> 'executed' AND result_id IS NULL)))`,
+    ),
+    check(
+      "mink_action_approvals_campaign_send_target_check",
+      sql`tool_name <> 'send_campaign' OR (resource_type = 'campaign' AND resource_id IS NOT NULL AND product_id IS NULL AND location_id IS NULL AND variant_id IS NULL AND operation = 'apply' AND source_approval_id IS NULL AND ((status = 'executed' AND result_id IS NOT NULL) OR (status <> 'executed' AND result_id IS NULL)))`,
+    ),
+    check(
+      "mink_action_approvals_bulk_price_target_check",
+      sql`tool_name <> 'bulk_update_prices' OR (resource_type = 'price_bulk' AND resource_id IS NULL AND product_id IS NULL AND location_id IS NULL AND variant_id IS NULL AND result_id IS NULL AND operation = 'apply' AND source_approval_id IS NULL AND jsonb_typeof(after_json -> 'lines') = 'array' AND jsonb_array_length(after_json -> 'lines') BETWEEN 1 AND 20)`,
+    ),
   ],
 );
 
@@ -5091,6 +5188,8 @@ export const minkActionAudit = pgTable(
     productId: uuid("product_id"),
     resourceType: text("resource_type").default("product").notNull(),
     resourceId: uuid("resource_id"),
+    locationId: uuid("location_id"),
+    variantId: uuid("variant_id"),
     resourceVersionBefore: timestamp("resource_version_before", {
       withTimezone: true,
       mode: "string",
@@ -5129,6 +5228,30 @@ export const minkActionAudit = pgTable(
       table.storeId,
       table.createdAt,
     ),
+    index("mink_action_audit_inventory_idx")
+      .on(
+        table.storeId,
+        table.locationId,
+        table.resourceId,
+        table.variantId,
+        table.createdAt,
+      )
+      .where(sql`${table.toolName} = 'adjust_inventory'`),
+    index("mink_action_audit_inventory_bulk_idx")
+      .on(table.storeId, table.createdAt.desc())
+      .where(sql`${table.toolName} = 'bulk_adjust_inventory'`),
+    index("mink_action_audit_order_status_idx")
+      .on(table.storeId, table.resourceId, table.createdAt.desc())
+      .where(sql`${table.toolName} = 'transition_order_status'`),
+    index("mink_action_audit_blog_publish_idx")
+      .on(table.storeId, table.resultId, table.createdAt.desc())
+      .where(sql`${table.toolName} = 'publish_blog'`),
+    index("mink_action_audit_campaign_send_idx")
+      .on(table.storeId, table.resultId, table.createdAt.desc())
+      .where(sql`${table.toolName} = 'send_campaign'`),
+    index("mink_action_audit_bulk_price_idx")
+      .on(table.storeId, table.createdAt.desc())
+      .where(sql`${table.toolName} = 'bulk_update_prices'`),
     foreignKey({
       columns: [table.approvalId, table.storeId],
       foreignColumns: [minkActionApprovals.id, minkActionApprovals.storeId],
@@ -5136,11 +5259,11 @@ export const minkActionAudit = pgTable(
     }).onDelete("restrict"),
     check(
       "mink_action_audit_tool_check",
-      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text, 'create_product'::text, 'create_coupon'::text, 'update_coupon'::text, 'create_customer_group'::text, 'update_customer_group'::text])`,
+      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text, 'create_product'::text, 'create_coupon'::text, 'update_coupon'::text, 'create_customer_group'::text, 'update_customer_group'::text, 'adjust_inventory'::text, 'bulk_adjust_inventory'::text, 'transition_order_status'::text, 'publish_blog'::text, 'send_campaign'::text, 'bulk_update_prices'::text])`,
     ),
     check(
       "mink_action_audit_resource_type_check",
-      sql`resource_type = ANY (ARRAY['product'::text, 'coupon'::text, 'customer_group'::text])`,
+      sql`resource_type = ANY (ARRAY['product'::text, 'coupon'::text, 'customer_group'::text, 'inventory'::text, 'inventory_bulk'::text, 'order'::text, 'blog'::text, 'campaign'::text, 'price_bulk'::text])`,
     ),
     check(
       "mink_action_audit_operation_check",
@@ -5155,6 +5278,107 @@ export const minkActionAudit = pgTable(
       sql`jsonb_typeof(before_json) = 'object' AND jsonb_typeof(after_json) = 'object'`,
     ),
     check("mink_action_audit_tool_version_check", sql`tool_version > 0`),
+    check(
+      "mink_action_audit_inventory_target_check",
+      sql`tool_name <> 'adjust_inventory' OR (resource_type = 'inventory' AND resource_id IS NOT NULL AND product_id IS NOT NULL AND product_id = resource_id AND location_id IS NOT NULL AND operation = 'apply')`,
+    ),
+    check(
+      "mink_action_audit_bulk_inventory_target_check",
+      sql`tool_name <> 'bulk_adjust_inventory' OR (resource_type = 'inventory_bulk' AND resource_id IS NULL AND product_id IS NULL AND location_id IS NULL AND variant_id IS NULL AND operation = 'apply' AND jsonb_typeof(after_json -> 'lines') = 'array' AND jsonb_array_length(after_json -> 'lines') BETWEEN 1 AND 20)`,
+    ),
+    check(
+      "mink_action_audit_order_status_target_check",
+      sql`tool_name <> 'transition_order_status' OR (resource_type = 'order' AND resource_id IS NOT NULL AND product_id IS NULL AND location_id IS NULL AND variant_id IS NULL AND operation = 'apply')`,
+    ),
+    check(
+      "mink_action_audit_blog_publish_target_check",
+      sql`tool_name <> 'publish_blog' OR (resource_type = 'blog' AND resource_id IS NULL AND product_id IS NULL AND location_id IS NULL AND variant_id IS NULL AND operation = 'apply' AND ((outcome = 'executed' AND result_id IS NOT NULL) OR (outcome <> 'executed' AND result_id IS NULL)))`,
+    ),
+    check(
+      "mink_action_audit_campaign_send_target_check",
+      sql`tool_name <> 'send_campaign' OR (resource_type = 'campaign' AND resource_id IS NOT NULL AND product_id IS NULL AND location_id IS NULL AND variant_id IS NULL AND operation = 'apply' AND ((outcome = 'executed' AND result_id IS NOT NULL) OR (outcome <> 'executed' AND result_id IS NULL)))`,
+    ),
+    check(
+      "mink_action_audit_bulk_price_target_check",
+      sql`tool_name <> 'bulk_update_prices' OR (resource_type = 'price_bulk' AND resource_id IS NULL AND product_id IS NULL AND location_id IS NULL AND variant_id IS NULL AND result_id IS NULL AND operation = 'apply' AND jsonb_typeof(after_json -> 'lines') = 'array' AND jsonb_array_length(after_json -> 'lines') BETWEEN 1 AND 20)`,
+    ),
+  ],
+);
+
+export const minkBlogPublications = pgTable(
+  "mink_blog_publications",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    adminId: text("admin_id").notNull(),
+    draftId: uuid("draft_id").notNull(),
+    approvalId: uuid("approval_id").notNull(),
+    blogId: uuid("blog_id").notNull(),
+    mode: text().notNull(),
+    status: text().notNull(),
+    scheduledFor: timestamp("scheduled_for", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    blogVersion: timestamp("blog_version", {
+      withTimezone: true,
+      mode: "string",
+    }).notNull(),
+    publishedAt: timestamp("published_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    detail: text(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    unique("mink_blog_publications_approval_key").on(table.approvalId),
+    unique("mink_blog_publications_blog_key").on(table.blogId),
+    index("mink_blog_publications_due_idx")
+      .on(table.scheduledFor, table.createdAt)
+      .where(sql`${table.status} = 'scheduled'`),
+    index("mink_blog_publications_store_idx").on(
+      table.storeId,
+      table.status,
+      table.createdAt.desc(),
+    ),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "mink_blog_publications_store_id_fkey",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.draftId, table.storeId],
+      foreignColumns: [minkDrafts.id, minkDrafts.storeId],
+      name: "mink_blog_publications_draft_store_fkey",
+    }).onDelete("restrict"),
+    foreignKey({
+      columns: [table.approvalId, table.storeId],
+      foreignColumns: [minkActionApprovals.id, minkActionApprovals.storeId],
+      name: "mink_blog_publications_approval_store_fkey",
+    }).onDelete("restrict"),
+    foreignKey({
+      columns: [table.blogId, table.storeId],
+      foreignColumns: [blogs.id, blogs.storeId],
+      name: "mink_blog_publications_blog_store_fkey",
+    }).onDelete("cascade"),
+    check(
+      "mink_blog_publications_mode_check",
+      sql`mode = ANY (ARRAY['publish_now'::text, 'schedule'::text])`,
+    ),
+    check(
+      "mink_blog_publications_status_check",
+      sql`status = ANY (ARRAY['scheduled'::text, 'published'::text, 'conflicted'::text, 'cancelled'::text])`,
+    ),
+    check(
+      "mink_blog_publications_timing_check",
+      sql`(mode = 'publish_now' AND status = 'published' AND scheduled_for IS NULL AND published_at IS NOT NULL) OR (mode = 'schedule' AND scheduled_for IS NOT NULL AND ((status = 'published' AND published_at IS NOT NULL) OR (status <> 'published' AND published_at IS NULL)))`,
+    ),
   ],
 );
 

@@ -1,6 +1,13 @@
 "use client";
 
-import { Check, LoaderCircle, ThumbsDown, ThumbsUp, X } from "lucide-react";
+import {
+  Check,
+  Copy,
+  LoaderCircle,
+  ThumbsDown,
+  ThumbsUp,
+  X,
+} from "lucide-react";
 import { useState } from "react";
 import type { MinkFeedbackIssue, MinkFeedbackRating } from "@/lib/mink/types";
 import type { MinkMessage, MinkUiError } from "./mink-ai";
@@ -31,6 +38,7 @@ export function MinkFeedbackControls({
   const [issue, setIssue] = useState<MinkFeedbackIssue>("incorrect");
   const [details, setDetails] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
   if (!message.runId) return null;
   const selected = message.feedback?.rating;
 
@@ -55,6 +63,26 @@ export function MinkFeedbackControls({
   return (
     <div className="mt-1.5">
       <div className="flex items-center gap-1 text-[#8c9196]">
+        <button
+          type="button"
+          onClick={async () => {
+            try {
+              await navigator.clipboard.writeText(message.text);
+              setCopied(true);
+              window.setTimeout(() => setCopied(false), 1_500);
+            } catch {
+              setCopied(false);
+            }
+          }}
+          aria-label="Copy answer"
+          className="rounded-md p-1.5 hover:bg-[#f1f1f1]"
+        >
+          {copied ? (
+            <Check className="h-3 w-3 text-emerald-700" />
+          ) : (
+            <Copy className="h-3 w-3" />
+          )}
+        </button>
         <button
           type="button"
           disabled={submitting}

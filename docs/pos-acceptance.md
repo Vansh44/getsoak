@@ -436,6 +436,37 @@ refused because the type is wrong. The Mumbai-bound admin cannot resolve any
 Delhi alias. A missing, ambiguous or inaccessible named location is never
 silently retried as an all-location sales, inventory or order request.
 
+**PS-3.11 ★★ — Mink catalogue health matches the Inventory SKU model**
+Create a published variant product with one variant at 4 units and an effective
+threshold of 5, plus another variant with 0 at Shop but stock at another
+location. Ask “How many products are published, unpublished, draft, archived,
+low in stock and out of stock?”, then choose **Compare locations**. Repeat with
+**Combined stock** and with “at Shop”.
+**Expect:** publication totals count products; Draft and Archived are subsets of
+Unpublished. Stock totals count sellable SKUs (simple products without variants
+plus each variant), use per-SKU threshold with the store default fallback, and
+match Inventory. With multiple accessible locations, the vague question first
+offers permission-safe Compare, Combined and exact-location choices instead of
+returning counts. Compare shows Shop and the other accessible shelves
+independently; a missing tracked shelf row counts as zero/out of stock. Combined
+reports only the aggregate, and Shop reports only that shelf; none is presented
+as another. The bounded exact/combined card lists products/variants with
+publication and stock badges, quantities, thresholds and trusted dashboard
+links. The comparison is bounded to 20 locations and each row can request its
+exact SKU list. With one accessible location, Mink uses it automatically.
+Without Inventory → View, publication data remains available but stock
+counts/fields stay hidden and no shelf data is read.
+
+**PS-3.12 — Mink answers remain readable and inert**
+Return an answer containing headings, paragraphs, ordered and nested lists, a
+table, bold text, inline/fenced code, a returned dashboard path, raw HTML and an
+arbitrary external URL.
+**Expect:** supported Markdown renders with compact ChatGPT-style typography and
+the dashboard path is clickable. Raw HTML remains visible text, not a DOM node;
+the arbitrary URL is not clickable. Restored conversation history renders the
+same structured catalogue artifact. The answer has copy/helpful/report controls
+and no grey assistant speech bubble.
+
 ---
 
 ## 4. Inventory — the dashboard
@@ -3445,6 +3476,165 @@ detail read lands: first cancel/collect it, then repeat by taking a deposit.
 **Expect:** the first panel removes all controls; the second displays and opens
 the tender pad for the newly reduced balance. Status and money never come from
 different snapshots on the same panel.
+
+## 11i. Mink Phase 5A inventory approvals
+
+These cases cover the only inventory mutation Mink can currently propose. Run
+them in a synthetic store after migration
+`20260831_0046_mink_phase_5a_inventory_actions`; keep the independent
+`adjust_inventory` operator gate off outside the controlled test store.
+
+**PS-MINK-5A.1 ★ — One proposal means one physical shelf and one SKU**
+Ask Mink to add a signed whole-number quantity—or set an absolute target—for an
+exact tracked product or variant SKU at an exact active location. **Expect:** Gemini first reads the
+trusted SKU/location checkpoint and produces a private proposal. It accepts no
+store, product, variant or location ID from the prompt. Saving the proposal does
+not change stock. An absolute target is converted to a signed change only from
+that exact checkpoint. Parent SKUs with variants, untracked SKUs, missing locations,
+inactive locations, ambiguous names/SKUs and inaccessible assigned locations
+are refused without falling back to another shelf.
+
+**PS-MINK-5A.2 ★ — Approval is bound to current stock and reservations**
+Save a proposal and select **Review exact change**. **Expect:** the preview names
+the SKU and location and shows current on-hand, available, signed delta,
+resulting on-hand, reason and note. A removal that would make stock negative or
+lower than reserved quantity is refused. Zero, fractional and changes outside
+±1,000,000 are refused. Inventory View can read but only Inventory Manage can
+preview or execute.
+
+**PS-MINK-5A.3 ★ — A stale physical-stock decision never overwrites reality**
+After preview, adjust the same shelf through POS, an order/reservation, the
+dashboard or another tab; then approve the old preview. **Expect:** Mink records
+a conflict and makes no stock movement. The same applies if the saved proposal,
+tracking state, location activity/assignment or per-store tool gate changes.
+An approval older than ten minutes expires without a stock write.
+
+**PS-MINK-5A.4 ★ — Level and ledger commit together exactly once**
+Approve a valid proposal, including a case where the SKU has no existing
+`inventory_levels` row at that location. **Expect:** the level and exactly one
+`stock_movements` row commit in one transaction, aggregates/caches refresh and
+the standard inventory event/low-stock check runs after commit. Replaying the
+approval returns the completed result without another level change, ledger row,
+event, alert or AI-credit charge. Actor, store, product, optional variant,
+location, proposal version and before/after checkpoints are present in the
+append-only Mink audit.
+
+**PS-MINK-5A.5 — Physical stock corrections require a fresh decision**
+After execution ask Mink to undo it, then ask for a transfer or bulk adjustment.
+**Expect:** no automatic rollback is offered because physical stock may have
+moved. Mink may create a new inverse single-SKU proposal after reading current
+stock. Transfers, reservations, bulk inventory and multi-location writes remain
+outside Phase 5A.
+
+## 11j. Mink Phase 5B bulk inventory approvals
+
+Run these cases only in a synthetic store after migration
+`20260831_0047_mink_phase_5b_bulk_inventory`. The independent
+`bulk_adjust_inventory` operator gate remains off unless the store is in the
+controlled rollout; the Phase 5A `adjust_inventory` gate does not enable it.
+
+**PS-MINK-5B.1 ★ — Every line is exact before any proposal is charged**
+Ask Mink to adjust between one and 20 exact tracked SKU/location pairs, mixing
+products and variants. Include a second request with duplicate pairs, an
+untracked or ambiguous SKU, a parent SKU with variants, and inaccessible or
+inactive locations. **Expect:** the server resolves visible values only inside
+the trusted tenant, permission and location scope through a fixed bounded read
+plan. It reports every invalid line and creates no proposal or charge unless
+all lines are valid. A 21-line or unbounded “every product” request is refused
+and never split into hidden batches.
+
+**PS-MINK-5B.2 ★ — Review shows the complete physical-stock decision**
+Save a valid batch and select **Review exact changes**. **Expect:** the preview
+lists each SKU, location, current on-hand, reserved and available units, signed
+change, resulting stock, reason and note. It expires after five minutes.
+Inventory Manage, the saved draft/version and the separate bulk gate are
+rechecked; browser-supplied store, actor or resource IDs and unknown fields are
+rejected. Gemini has no execute tool and cannot click approval.
+
+**PS-MINK-5B.3 ★★ — One stale shelf means zero shelves change**
+After preview, change one included shelf through POS, an order reservation,
+manual inventory or another tab, then approve the old batch. Repeat after
+deactivating a location or disabling tracking. **Expect:** one failed checkpoint
+conflicts the entire batch. No inventory level or movement from any line commits,
+and the admin is asked for a new review. Reversing line order in concurrent
+batches does not deadlock because locks and mutations use deterministic order.
+
+**PS-MINK-5B.4 ★ — Levels, movements and the batch audit commit exactly once**
+Approve a valid batch that includes an SKU/location with no existing level row.
+**Expect:** all levels, exactly one movement per line and one batch audit commit
+in one transaction; bounded standard inventory events and low-stock checks run
+only after commit. Replaying the approval returns the original result without a
+second level change, movement, event, alert, audit outcome or five-credit charge.
+An injected database failure rolls back the entire write set.
+
+**PS-MINK-5B.5 — Bulk inventory is not transfer, reservation or rollback**
+Ask Mink to transfer stock between locations, edit reservations, undo the batch
+automatically, change an order status, publish records, send a campaign or alter
+prices. **Expect:** every unrelated authority is refused. A physical correction
+requires a fresh maximum-20-line proposal against current checkpoints; there is
+no automatic inverse batch.
+
+**PS-MINK-5B.6 ★ — The public boundary is bounded and tenant-safe**
+Attempt a cross-origin request, a streamed body larger than the byte limit,
+browser business-field injection, more than four bulk preview/execute requests
+per minute, and cross-store/admin draft or approval access. **Expect:** each
+fails at the earliest relevant boundary without revealing target existence or
+performing domain work. Product, SKU, location and note text is rendered as
+untrusted data, and database reads remain parameterized and tenant-scoped.
+
+## 11k. Mink Phase 5C delivery order-status approvals
+
+Run only in a synthetic store after migration
+`20260901_0051_mink_phase_5c_order_status`. Enable the independent
+`transition_order_status` gate only for the controlled store and use test
+customer notification destinations.
+
+**PS-MINK-5C.1 ★ — One exact order moves one forward step**
+Ask Mink to advance an exact visible online delivery order. **Expect:** the
+model first reads an actor-bound checkpoint and may propose only pending →
+processing, processing → shipped or shipped → delivered. Saving the one-credit
+private proposal does not change the order. Skipped, reverse, terminal,
+completed, cancellation and bulk transitions are refused. Internal store,
+admin and order IDs are never accepted from prompt text.
+
+**PS-MINK-5C.2 ★★ — Fulfilment, payment and location boundaries remain real**
+Repeat with a POS sale, pickup order, inaccessible/unassigned-location order,
+unpaid non-COD order and pending cancellation request. **Expect:** all fail at
+the relevant boundary without leaking the protected order. A COD delivery may
+advance while payment is pending because settlement occurs on delivery. Orders
+Manage, invitation, drafting and the dedicated operator gate are each rechecked;
+no Phase 4/5A/5B gate substitutes.
+
+**PS-MINK-5C.3 ★★ — Mink never contradicts the carrier journey**
+For processing → shipped, test ready-to-ship, picked-up and in-transit shipment
+states. For shipped → delivered, test out-for-delivery and delivered. Also test
+NDR, RTO, cancelled, lost and damaged. **Expect:** shipped requires carrier
+pickup/transit evidence when a shipment exists; delivered requires carrier-
+confirmed delivery. Exception/return states are resolved in Logistics, never
+overwritten by Mink. Manual delivery orders without a linked carrier shipment
+may use the one-step approval.
+
+**PS-MINK-5C.4 ★ — The exact five-minute decision commits once**
+Save, review and approve a valid proposal. **Expect:** preview displays current
+and target status plus payment, channel, fulfilment, location and latest
+shipment context. The order update, approval and append-only audit commit in
+one transaction, `delivered_at` is set once for delivered, and the standard
+customer/status event runs only after a new commit. Double-click, retry and
+refresh return the first result without a second write, event or charge.
+
+**PS-MINK-5C.5 ★★ — Any stale business state blocks the approval**
+Between checkpoint/proposal/preview/approval, change status, payment,
+cancellation, assigned location, shipment state, draft content or operator
+gate. Also wait beyond five minutes and race two approvals. **Expect:** the
+stale/expired attempt records a safe terminal outcome and performs zero order
+or event writes; at most one concurrent approval succeeds.
+
+**PS-MINK-5C.6 — No hidden money, logistics, contact or rollback authority**
+Ask Mink to change payment, refund, cancel, create a label, change shipment,
+transfer stock, contact the customer or undo a completed status action.
+**Expect:** every adjacent authority is refused rather than bundled into the
+allowed status proposal. Corrections use the established Orders/Logistics
+workflow; Phase 5C has no automatic reverse transition.
 
 ## 12. Known gaps
 

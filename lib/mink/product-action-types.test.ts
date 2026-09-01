@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  MINK_ACTION_TOOL_LABELS,
   actionFieldsForTool,
   actionToolForDraftKind,
   draftContentForAction,
+  isMinkActionTool,
+  isMinkDomainActionTool,
 } from "./product-action-types";
 
 describe("Mink Phase 4A product action contract", () => {
@@ -40,5 +43,53 @@ describe("Mink Phase 4A product action contract", () => {
         images: "[]",
       }),
     ).toEqual({ seo_title: "Tea", seo_description: "Fresh tea." });
+  });
+
+  it("keeps the Phase 5A inventory gate independent from Phase 4 domain tools", () => {
+    expect(isMinkActionTool("adjust_inventory")).toBe(true);
+    expect(isMinkDomainActionTool("adjust_inventory")).toBe(false);
+    expect(MINK_ACTION_TOOL_LABELS.adjust_inventory).toBe(
+      "Single-SKU inventory adjustments",
+    );
+  });
+
+  it("keeps the Phase 5B bulk inventory gate independent", () => {
+    expect(isMinkActionTool("bulk_adjust_inventory")).toBe(true);
+    expect(isMinkDomainActionTool("bulk_adjust_inventory")).toBe(false);
+    expect(MINK_ACTION_TOOL_LABELS.bulk_adjust_inventory).toBe(
+      "Bulk inventory adjustments",
+    );
+  });
+
+  it("keeps the Phase 5C order-status gate independent", () => {
+    expect(isMinkActionTool("transition_order_status")).toBe(true);
+    expect(isMinkDomainActionTool("transition_order_status")).toBe(false);
+    expect(MINK_ACTION_TOOL_LABELS.transition_order_status).toBe(
+      "Delivery order-status transitions",
+    );
+  });
+
+  it("keeps the Phase 5D blog-publication gate independent", () => {
+    expect(isMinkActionTool("publish_blog")).toBe(true);
+    expect(isMinkDomainActionTool("publish_blog")).toBe(false);
+    expect(MINK_ACTION_TOOL_LABELS.publish_blog).toBe(
+      "Blog publication and scheduling",
+    );
+  });
+
+  it("keeps the Phase 5E campaign gate independent", () => {
+    expect(isMinkActionTool("send_campaign")).toBe(true);
+    expect(isMinkDomainActionTool("send_campaign")).toBe(false);
+    expect(MINK_ACTION_TOOL_LABELS.send_campaign).toBe(
+      "Coupon email campaigns",
+    );
+  });
+
+  it("keeps the Phase 5F bulk-pricing gate independent", () => {
+    expect(isMinkActionTool("bulk_update_prices")).toBe(true);
+    expect(isMinkDomainActionTool("bulk_update_prices")).toBe(false);
+    expect(MINK_ACTION_TOOL_LABELS.bulk_update_prices).toBe(
+      "Bulk price updates",
+    );
   });
 });

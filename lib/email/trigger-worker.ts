@@ -10,10 +10,10 @@ import { logError, logWarn } from "@/lib/observability/logger";
  * channel) so the queue starts draining in seconds instead of waiting for the
  * next cron tick.
  *
- * THIS IS WHAT MAKES "INSTANT" INSTANT. The cron heartbeat is DAILY (Vercel
- * Hobby caps crons at one a day — see vercel.json), so if this kick doesn't
- * land, an order-confirmation email waits up to 24 hours. That failure is
- * silent: the mail is queued, nothing errors, it just sits there.
+ * THIS IS WHAT MAKES "INSTANT" INSTANT. Phase 5E requires Cloud Scheduler's
+ * production heartbeat once per minute so scheduled campaigns become due with
+ * minute resolution, but a successful kick still avoids waiting for that next
+ * tick. `vercel.json` is only documentation on Cloud Run.
  *
  * ORIGIN: THE CURRENT REQUEST'S HOST, not a configured one.
  *
