@@ -2135,7 +2135,10 @@
           "order_items_offer_discount_check",
           "order_item_offers_item_key"
         ],
-        "functions": ["reserve_offer_use", "release_offer_use"],
+        "functions": [
+          "reserve_offer_use(uuid,uuid,text,bigint)",
+          "release_offer_use(uuid,uuid,bigint)"
+        ],
         "rlsTables": [
           "offers",
           "offer_products",
@@ -2214,7 +2217,10 @@
           "order_items_offer_discount_check",
           "order_item_offers_item_key"
         ],
-        "functions": ["reserve_offer_use", "release_offer_use"],
+        "functions": [
+          "reserve_offer_use(uuid,uuid,text,bigint)",
+          "release_offer_use(uuid,uuid,bigint)"
+        ],
         "rlsTables": [
           "offers",
           "offer_products",
