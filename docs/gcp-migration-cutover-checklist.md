@@ -175,14 +175,19 @@ not separate instances or projects.
       `storemink_staging` DB on `storemink-prod-db`. Its `app` password IS
       `CLOUDSQL_PROD_APP_PW` (shared instance). Durable backup of the deleted
       instance: `~/storemink-backups/old_staging_storemink_2026-07-22.sql`.
-- [ ] Orphaned secret `CLOUDSQL_STAGING_APP_PW` (no instance uses it) — delete
-      whenever. ~~`CLOUDSQL_STAGING_POSTGRES_PW`~~ **DELETED 2026-09-02**: it
-      authenticated nothing (one instance, one `postgres` role, so
-      `CLOUDSQL_PROD_POSTGRES_PW` is the only working admin credential) and a
-      plausible dead credential sitting beside a live one had already cost a
-      failed migration run. Verified first that no Cloud Build trigger and no
-      Cloud Run service referenced it — all three of dev/staging/prod bind
-      `CLOUDSQL_PROD_APP_PW`.
+- [x] ~~Orphaned secrets `CLOUDSQL_STAGING_APP_PW` /
+      `CLOUDSQL_STAGING_POSTGRES_PW`~~ **BOTH DELETED 2026-09-02.** Neither
+      authenticated anything: staging and production are two databases in ONE
+      instance, so `CLOUDSQL_PROD_APP_PW` and `CLOUDSQL_PROD_POSTGRES_PW` are
+      the only working credentials. ⚠ Not cosmetic — the dead `postgres` secret
+      had already cost a failed migration run, because it looks exactly as
+      plausible as the live one. Verified before each delete (a secret delete is
+      permanent): no repo reference, no Cloud Build trigger substitution, and no
+      Cloud Run service binding — all three of dev/staging/prod bind
+      `CLOUDSQL_PROD_APP_PW`. Both credentials re-tested against both databases
+      afterwards.
+      **Only two CLOUDSQL secrets should now exist**; a third appearing is a
+      mistake, not a new environment.
 - [ ] Add the missing runtime secrets to `cloudbuild.yaml` `--set-secrets`:
       `RAZORPAY_KEY_ID`/`_KEY_SECRET`/`_WEBHOOK_SECRET`, `PAYMENT_CRED_KEY`
       (currently only `DB_PASSWORD`/`CRON_SECRET`/`RESEND_API_KEY` are set).
