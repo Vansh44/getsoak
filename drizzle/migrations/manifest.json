@@ -2022,6 +2022,83 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260902_0058_mink_phase_6a_durable_workflows",
+      "description": "Add restart-safe leased Mink workflow runs, idempotent steps/events and the read-only weekly trading report template",
+      "file": "sql/20260902_0058_mink_phase_6a_durable_workflows.sql",
+      "checksum": "da8e3059c71ba96c6631018912c251a92b561d6d2ef2f92aa0e790d3e142e989",
+      "transaction": true,
+      "requires": ["20260902_0057_mobile_pos_notification_help"],
+      "verify": {},
+      "applyVerify": {
+        "tables": [
+          "mink_workflow_runs",
+          "mink_workflow_steps",
+          "mink_workflow_events"
+        ],
+        "constraints": [
+          "mink_workflow_runs_owner_idempotency_key",
+          "mink_workflow_runs_lease_check",
+          "mink_workflow_runs_completion_check",
+          "mink_workflow_steps_run_store_fkey",
+          "mink_workflow_steps_completion_check",
+          "mink_workflow_events_run_store_fkey",
+          "mink_workflow_events_run_key"
+        ],
+        "rlsTables": [
+          "mink_workflow_runs",
+          "mink_workflow_steps",
+          "mink_workflow_events"
+        ],
+        "queries": [
+          {
+            "name": "workflow operational tables are unavailable to app_user",
+            "sql": "select count(*)::text from information_schema.role_table_grants where grantee = 'app_user' and table_schema = 'public' and table_name in ('mink_workflow_runs', 'mink_workflow_steps', 'mink_workflow_events')",
+            "equals": "0"
+          },
+          {
+            "name": "workflow completion notifications have a reconciliation key",
+            "sql": "select count(*)::text from pg_indexes where schemaname = 'public' and indexname = 'activity_events_mink_workflow_completion_key'",
+            "equals": "1"
+          },
+          {
+            "name": "the Mink guide documents restart-safe weekly reports",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%<h2>Create a durable weekly trading report</h2>%' and body like '%exact active locations accessible to you%' and body like '%re-checks Analytics access%' and body like '%reconciled and idempotent%' and body like '%anchored to the original request time%' and body like '%consume no additional Gemini tokens%' and body like '%Cancelled workflows cannot resume%' and body like '%Cloud Run restarts%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "tables": [
+          "mink_workflow_runs",
+          "mink_workflow_steps",
+          "mink_workflow_events"
+        ],
+        "constraints": [
+          "mink_workflow_runs_owner_idempotency_key",
+          "mink_workflow_runs_lease_check",
+          "mink_workflow_steps_run_store_fkey",
+          "mink_workflow_events_run_store_fkey"
+        ],
+        "rlsTables": [
+          "mink_workflow_runs",
+          "mink_workflow_steps",
+          "mink_workflow_events"
+        ],
+        "queries": [
+          {
+            "name": "workflow completion reconciliation key already exists",
+            "sql": "select count(*)::text from pg_indexes where schemaname = 'public' and indexname = 'activity_events_mink_workflow_completion_key'",
+            "equals": "1"
+          },
+          {
+            "name": "the Mink guide already documents restart-safe weekly reports",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%<h2>Create a durable weekly trading report</h2>%' and body like '%consume no additional Gemini tokens%'",
+            "equals": "1"
+          }
+        ]
+      }
     }
   ]
 }

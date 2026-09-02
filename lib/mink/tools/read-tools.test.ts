@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   readCatalog: vi.fn(),
   readByLocation: vi.fn(),
   resolveLocation: vi.fn(),
+  enqueueWorkflow: vi.fn(),
 }));
 vi.mock("../catalog-health-read", () => ({
   readMinkCatalogHealth: mocks.readCatalog,
@@ -12,6 +13,9 @@ vi.mock("../catalog-health-read", () => ({
 }));
 vi.mock("./location-scope", () => ({
   resolveMinkLocation: mocks.resolveLocation,
+}));
+vi.mock("../workflows", () => ({
+  enqueueWeeklyTradingReport: mocks.enqueueWorkflow,
 }));
 
 import { minkReadToolRegistry } from "./read-tools";
@@ -55,6 +59,13 @@ beforeEach(() => {
     items: [],
     truncated: false,
   });
+  mocks.enqueueWorkflow.mockResolvedValue({
+    id: "11111111-1111-4111-8111-111111111111",
+    template: "weekly_trading_report",
+    status: "queued",
+    currentStep: 0,
+    totalSteps: 3,
+  });
 });
 
 describe("Mink read-tool declarations", () => {
@@ -67,6 +78,7 @@ describe("Mink read-tool declarations", () => {
       "search_products",
       "get_sales_summary",
       "list_low_stock",
+      "start_weekly_trading_report",
       "list_orders",
       "search_help_centre",
     ]);
@@ -121,6 +133,7 @@ describe("Mink read-tool declarations", () => {
     expect(declared({ dashboard: ["view"], analytics: ["view"] })).toEqual([
       "get_store_profile",
       "get_sales_summary",
+      "start_weekly_trading_report",
       "search_help_centre",
     ]);
     expect(declared({ dashboard: ["view"], inventory: ["view"] })).toEqual([
@@ -133,6 +146,31 @@ describe("Mink read-tool declarations", () => {
       "list_orders",
       "search_help_centre",
     ]);
+  });
+
+  it("queues the durable report only through its Analytics-gated tool", async () => {
+    const actor = { ...ACTOR, runId: "run-1" };
+    const result = await minkReadToolRegistry.execute(actor, {
+      id: "call-workflow",
+      name: "start_weekly_trading_report",
+      args: {},
+    });
+
+    expect(mocks.enqueueWorkflow).toHaveBeenCalledWith(actor);
+    expect(result.response.output).toMatchObject({
+      workflow: { status: "queued", totalSteps: 3 },
+    });
+    expect(result.artifact).toEqual({
+      type: "workflow",
+      runId: "11111111-1111-4111-8111-111111111111",
+      template: "weekly_trading_report",
+      title: "Weekly trading report",
+      description:
+        "A durable 7-day sales report compared with the previous period.",
+      status: "queued",
+      currentStep: 0,
+      totalSteps: 3,
+    });
   });
 
   it("returns bounded scope choices instead of silently aggregating a vague multi-location stock request", async () => {
@@ -478,6 +516,7 @@ describe("Mink read-tool declarations", () => {
       "search_products",
       "get_sales_summary",
       "list_low_stock",
+      "start_weekly_trading_report",
       "list_orders",
     ]) {
       await expect(

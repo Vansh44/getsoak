@@ -4993,6 +4993,202 @@ export const minkActionToolAccess = pgTable(
   ],
 );
 
+// Durable Phase 6 workflow runtime. These are service-only operational rows:
+// the initiating request snapshots tenant/admin/location authority, workers
+// claim short leases, and every browser read still rechecks store + owner.
+export const minkWorkflowRuns = pgTable(
+  "mink_workflow_runs",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    adminId: text("admin_id").notNull(),
+    sourceRunId: uuid("source_run_id"),
+    template: text().notNull(),
+    status: text().default("queued").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    inputJson: jsonb("input_json").default({}).notNull(),
+    resultJson: jsonb("result_json"),
+    errorCode: text("error_code"),
+    errorDetail: text("error_detail"),
+    currentStep: integer("current_step").default(0).notNull(),
+    totalSteps: integer("total_steps").notNull(),
+    attemptCount: integer("attempt_count").default(0).notNull(),
+    maxAttempts: integer("max_attempts").default(6).notNull(),
+    runAfter: timestamp("run_after", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    leaseOwner: uuid("lease_owner"),
+    leaseExpiresAt: timestamp("lease_expires_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    cancelRequestedAt: timestamp("cancel_requested_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    completedAt: timestamp("completed_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    unique("mink_workflow_runs_id_store_key").on(table.id, table.storeId),
+    unique("mink_workflow_runs_owner_idempotency_key").on(
+      table.storeId,
+      table.adminId,
+      table.idempotencyKey,
+    ),
+    index("mink_workflow_runs_claim_idx").on(
+      table.status,
+      table.runAfter,
+      table.leaseExpiresAt,
+      table.createdAt,
+    ),
+    index("mink_workflow_runs_owner_idx").on(
+      table.storeId,
+      table.adminId,
+      table.createdAt,
+    ),
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "mink_workflow_runs_store_id_fkey",
+    }).onDelete("cascade"),
+    check(
+      "mink_workflow_runs_template_check",
+      sql`template = 'weekly_trading_report'`,
+    ),
+    check(
+      "mink_workflow_runs_status_check",
+      sql`status = ANY (ARRAY['queued'::text, 'running'::text, 'waiting_approval'::text, 'completed'::text, 'failed'::text, 'cancelled'::text])`,
+    ),
+    check(
+      "mink_workflow_runs_json_check",
+      sql`jsonb_typeof(input_json) = 'object' AND (result_json IS NULL OR jsonb_typeof(result_json) = 'object')`,
+    ),
+    check(
+      "mink_workflow_runs_progress_check",
+      sql`total_steps BETWEEN 1 AND 20 AND current_step BETWEEN 0 AND total_steps AND attempt_count >= 0 AND max_attempts BETWEEN total_steps AND 20`,
+    ),
+    check(
+      "mink_workflow_runs_lease_check",
+      sql`(status = 'running' AND lease_owner IS NOT NULL AND lease_expires_at IS NOT NULL) OR (status <> 'running' AND lease_owner IS NULL AND lease_expires_at IS NULL)`,
+    ),
+    check(
+      "mink_workflow_runs_completion_check",
+      sql`(status = 'completed' AND result_json IS NOT NULL AND completed_at IS NOT NULL) OR (status IN ('failed', 'cancelled') AND completed_at IS NOT NULL) OR (status IN ('queued', 'running', 'waiting_approval') AND completed_at IS NULL)`,
+    ),
+    check(
+      "mink_workflow_runs_idempotency_check",
+      sql`char_length(btrim(idempotency_key)) BETWEEN 1 AND 200`,
+    ),
+  ],
+);
+
+export const minkWorkflowSteps = pgTable(
+  "mink_workflow_steps",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    runId: uuid("run_id").notNull(),
+    storeId: uuid("store_id").notNull(),
+    stepKey: text("step_key").notNull(),
+    position: integer().notNull(),
+    status: text().default("queued").notNull(),
+    attemptCount: integer("attempt_count").default(0).notNull(),
+    inputJson: jsonb("input_json").default({}).notNull(),
+    outputJson: jsonb("output_json"),
+    errorCode: text("error_code"),
+    startedAt: timestamp("started_at", { withTimezone: true, mode: "string" }),
+    completedAt: timestamp("completed_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    unique("mink_workflow_steps_run_key").on(table.runId, table.stepKey),
+    unique("mink_workflow_steps_run_position_key").on(
+      table.runId,
+      table.position,
+    ),
+    index("mink_workflow_steps_store_run_idx").on(
+      table.storeId,
+      table.runId,
+      table.position,
+    ),
+    foreignKey({
+      columns: [table.runId, table.storeId],
+      foreignColumns: [minkWorkflowRuns.id, minkWorkflowRuns.storeId],
+      name: "mink_workflow_steps_run_store_fkey",
+    }).onDelete("cascade"),
+    check(
+      "mink_workflow_steps_status_check",
+      sql`status = ANY (ARRAY['queued'::text, 'running'::text, 'waiting_approval'::text, 'completed'::text, 'failed'::text, 'cancelled'::text])`,
+    ),
+    check(
+      "mink_workflow_steps_json_check",
+      sql`jsonb_typeof(input_json) = 'object' AND (output_json IS NULL OR jsonb_typeof(output_json) = 'object')`,
+    ),
+    check(
+      "mink_workflow_steps_progress_check",
+      sql`position >= 0 AND attempt_count >= 0`,
+    ),
+    check(
+      "mink_workflow_steps_completion_check",
+      sql`(status = 'completed' AND output_json IS NOT NULL AND completed_at IS NOT NULL) OR (status IN ('failed', 'cancelled') AND completed_at IS NOT NULL) OR (status IN ('queued', 'running', 'waiting_approval') AND completed_at IS NULL)`,
+    ),
+  ],
+);
+
+export const minkWorkflowEvents = pgTable(
+  "mink_workflow_events",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    runId: uuid("run_id").notNull(),
+    storeId: uuid("store_id").notNull(),
+    eventKey: text("event_key").notNull(),
+    eventType: text("event_type").notNull(),
+    stepKey: text("step_key"),
+    detailJson: jsonb("detail_json").default({}).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    unique("mink_workflow_events_run_key").on(table.runId, table.eventKey),
+    index("mink_workflow_events_store_run_idx").on(
+      table.storeId,
+      table.runId,
+      table.createdAt,
+      table.id,
+    ),
+    foreignKey({
+      columns: [table.runId, table.storeId],
+      foreignColumns: [minkWorkflowRuns.id, minkWorkflowRuns.storeId],
+      name: "mink_workflow_events_run_store_fkey",
+    }).onDelete("cascade"),
+    check(
+      "mink_workflow_events_type_check",
+      sql`event_type = ANY (ARRAY['queued'::text, 'claimed'::text, 'step_started'::text, 'step_completed'::text, 'retry_scheduled'::text, 'waiting_approval'::text, 'resumed'::text, 'cancel_requested'::text, 'cancelled'::text, 'completed'::text, 'failed'::text])`,
+    ),
+    check(
+      "mink_workflow_events_detail_check",
+      sql`jsonb_typeof(detail_json) = 'object' AND char_length(btrim(event_key)) BETWEEN 1 AND 200`,
+    ),
+  ],
+);
+
 export const minkActionApprovals = pgTable(
   "mink_action_approvals",
   {
@@ -6376,6 +6572,9 @@ export const activityEvents = pgTable(
       table.createdAt,
     ),
     index("activity_events_created_idx").on(table.createdAt),
+    uniqueIndex("activity_events_mink_workflow_completion_key")
+      .on(table.storeId, table.type, table.subjectId)
+      .where(sql`type = 'mink.workflow_completed' AND subject_id IS NOT NULL`),
     foreignKey({
       columns: [table.storeId],
       foreignColumns: [stores.id],

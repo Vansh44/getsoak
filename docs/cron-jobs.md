@@ -59,6 +59,7 @@ each job is a landmine the moment it does:
 | `storemink-billing`                 | `20 * * * *`   | `https://storemink.com/api/cron/billing`                 |
 | `storemink-help-embeddings`         | `50 * * * *`   | `https://storemink.com/api/cron/help-embeddings`         |
 | `storemink-mink-publications`       | `* * * * *`    | `https://storemink.com/api/cron/mink-publications`       |
+| `storemink-mink-workflows`          | `* * * * *`    | `https://storemink.com/api/cron/mink-workflows`          |
 
 ⚠ **`billing` must stay HOURLY.** The cycle boundary and the 48-hour grace
 deadline are wall-clock instants, so the interval IS the resolution of the whole
@@ -76,6 +77,12 @@ then it would 404 or query an incomplete table.** Also,
 until migration `20260901_0052_mink_phase_5d_blog_publication` and the matching
 route are deployed. Create it with the same CRON_SECRET bearer contract only
 after both application and database verification pass.** Also,
+**`storemink-mink-workflows` is new in Phase 6A and must stay absent/paused
+until migration `20260902_0058_mink_phase_6a_durable_workflows` and the matching
+route are deployed. Create it with the shared CRON_SECRET bearer contract only
+after the three workflow tables, constraints and service-only grants verify. A
+missing heartbeat leaves reports queued safely; it must never be worked around
+by opening the worker to unauthenticated traffic.** Also,
 **the `storemink-send-emails` change from daily to once per minute belongs to
 Phase 5E. Apply it only after migration
 `20260901_0053_mink_phase_5e_campaigns` and the matching application are live;

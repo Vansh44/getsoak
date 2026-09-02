@@ -1,6 +1,6 @@
 # Mink AI Dashboard Agent — Architecture and Delivery Plan
 
-> **Status:** Phases 0–4 and Phases 5A–5F are implemented in code. Phase 2
+> **Status:** Phases 0–4, Phases 5A–5F and Phase 6A are implemented in code. Phase 2
 > remains the invited read-only merchant beta. Phase 3 adds a separate,
 > fail-closed operator opt-in
 > for private versioned drafts and atomic weighted credits through migration
@@ -34,6 +34,10 @@
 > Migration `20260901_0054_mink_phase_5f_bulk_prices` adds a separately gated,
 > maximum-20-line exact-SKU price proposal, impact review and atomic human
 > confirmation with full target/version/price checkpoints.
+> Migration `20260902_0058_mink_phase_6a_durable_workflows` adds service-only
+> leased workflow runs, idempotent step/event checkpoints, cancellation,
+> approval-resume state, completion notifications and the first deterministic
+> read-only weekly trading report template.
 > No transfer,
 > cancellation, refund, payment/shipment/pickup/POS lifecycle, product/page/
 > storefront or bulk publication, arbitrary-recipient or direct customer
@@ -1072,6 +1076,11 @@ Exit criteria:
 
 **Duration:** 5–7 weeks
 
+**Implementation split:** Phase 6A is now built. It establishes the durable
+runtime and weekly trading report without exposing live mutation authority.
+Phases 6B–6E will add the remaining templates one at a time after restart,
+lease-expiry, cancellation, owner/tenant and Scheduler acceptance passes.
+
 Deliver:
 
 - durable queued runs with lease/claim semantics;
@@ -1086,6 +1095,29 @@ Deliver:
   - review delayed pickup orders and prepare communications;
   - create a weekly trading report;
 - one planner with specialist tools, not a premature multi-agent network.
+
+Phase 6A delivered:
+
+- service-only `mink_workflow_runs`, `mink_workflow_steps` and
+  `mink_workflow_events` with tenant-composite foreign keys, strict state/
+  lease/completion constraints and an origin-run idempotency key;
+- `FOR UPDATE SKIP LOCKED` claims with a two-minute lease, reclaim after worker
+  death, bounded retries, terminal cleanup for an expired final attempt,
+  persisted current step and duplicate-safe events;
+- authenticated owner/store status, strict same-origin cancellation and a
+  generic human-approval resume boundary; cancelled workflows never resume;
+- a model-visible queue tool only for an explicit weekly-report command and
+  Analytics View permission; model/browser input cannot supply tenant,
+  location, date or report-data authority;
+- an exact snapshot of the initiating admin's accessible active locations,
+  execution-time rechecks that narrow removed Analytics/location authority,
+  request-time-anchored seven-day versus prior-period recognized sales, top
+  products/channels,
+  structured progress/result UI and a reconciled idempotent in-dashboard
+  completion notification;
+- deterministic background reads with no additional Gemini calls or tokens;
+- the CRON_SECRET-only `/api/cron/mink-workflows` heartbeat, capped at 15 claims
+  per invocation, plus explicit Cloud Scheduler rollout documentation.
 
 Evaluate managed Agent Runtime only here. Move a workflow only if it improves
 reliability, isolation or operations enough to justify a second deployment
@@ -1353,35 +1385,33 @@ would move risk into production rather than remove work.
 
 ## 21. Immediate next sprint
 
-The next sprint should validate and safely roll out Phase 5F before starting
-Phase 6 durable workflows:
+The next sprint should validate and safely roll out Phase 6A before Phase 6B:
 
-1. Apply migration `20260901_0054_mink_phase_5f_bulk_prices` after 0053 in
-   controlled staging, deploy matching application code and leave
-   `bulk_update_prices` disabled for every merchant store.
-2. On one synthetic store, enable beta, drafting and only the bulk-price gate.
-   Prove global, invitation, drafting, Products Manage and tool gates each stop
-   checkpoint, proposal, preview or execution at the correct boundary.
-3. Exercise product and variant SKUs, parent-SKU rejection, duplicates,
-   ambiguity, missing SKUs, 1/20/21-line limits, decimal/range bypasses,
-   special-price keep/clear/set and every ordering invariant.
-4. Compare the one-unit-each impact math against paise calculations for price
-   increases, decreases and effective-price-neutral tuple changes. Confirm the
-   UI never presents it as projected revenue and clearly marks published lines.
-5. Race manual product/variant price, publication, identity and version edits
-   between preview and confirmation. Every drift must conflict with zero price
-   writes; a forced failure on any line must roll back the whole batch.
-6. Retry preview and confirmation concurrently. Exactly one executed approval
-   and audit may exist, product events must fire once, and storefront caches
-   must reflect the new live prices while existing order snapshots stay fixed.
-7. Inspect the variant parent-version trigger, bounded tenant query plans,
-   target locks, constraints and service boundaries on a large synthetic
-   catalogue. Verify no browser or model input can select tenant/resource IDs.
-8. Run the complete `P5F` pack and inspect run telemetry. The model manifest may
-   expose only the exact price checkpoint and private proposal—never
-   `bulk_update_prices` or the browser endpoint. After a stable controlled
-   rollout, begin Phase 6 design. Transfers, cancellations, refunds, arbitrary
-   customer contact and unbounded catalogue mutations remain unavailable.
+1. Apply `20260902_0058_mink_phase_6a_durable_workflows` after 0057 in a
+   controlled environment and verify all three tables, constraints, RLS and
+   app_user revocations before deploying the application.
+2. Keep `storemink-mink-workflows` absent/paused until both DB and route are
+   live. Then create the one-minute CRON_SECRET job and prove missing/wrong
+   bearer credentials return 401 before any claim.
+3. Queue the same report twice through one forced provider/tool retry. Exactly
+   one run and three steps may exist for that origin run; a fresh user request
+   may create a separate report.
+4. Kill Cloud Run after each claim and after each expensive read, let the lease
+   expire, then restart. The run must resume without duplicate completion,
+   event or notification.
+5. Race two worker requests and multiple browser polls/cancels. SKIP LOCKED must
+   isolate claims; cancellation must stop before the next step; cancelled runs
+   must reject resume.
+6. Compare report range, timezone, exact captured locations, online/unassigned
+   inclusion, refunds, sales metrics, top products and channels with Analytics.
+   Add a new location after queueing and prove it does not enter that report;
+   remove an assigned location and prove the next read narrows to current scope.
+7. Remove Analytics permission, suspend/revoke the requester and test foreign
+   admin/store workflow IDs. Worker and browser reads must fail closed without
+   disclosing existence or report data.
+8. Run the complete P6A pack and inspect query plans, retry latency, queue age,
+   event reconstruction and notification fan-out. Only after this is stable,
+   begin Phase 6B's read-only revenue-decline investigation template.
 
 The intended outcome is not “Gemini 3.7 answered impressively.” It is:
 

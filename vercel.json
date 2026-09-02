@@ -49,6 +49,10 @@
     {
       "path": "/api/cron/mink-publications",
       "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/cron/mink-workflows",
+      "schedule": "* * * * *"
     }
   ]
 }

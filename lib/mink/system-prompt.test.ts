@@ -40,6 +40,10 @@ describe("Mink system prompt document", () => {
       "structured artifact already contains the full record list",
     );
     expect(template).toContain("There is no model tool to approve");
+    expect(template).toContain(
+      "Use start_weekly_trading_report only when the user explicitly asks",
+    );
+    expect(template).toContain("a cancelled workflow cannot resume");
   });
 
   it("renders only trusted actor fields and permission-filtered tool names", () => {
