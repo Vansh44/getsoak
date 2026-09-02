@@ -1,0 +1,227 @@
+// ---------------------------------------------------------------------------
+// The offer registry — pure, client-safe, no imports with a runtime.
+//
+// `docs/offers-plan.md` §3: an offer is TRIGGER × REWARD × SCOPE, and the
+// merchant-facing "types" (§7) are presets over that. So the catalogue of
+// trigger and reward types lives HERE, in code, exhaustive and validated — the
+// same trade `lib/settings/registry.ts` and `lib/notifications/events.ts` make.
+//
+// ★ THE TYPE IS A COLUMN; ITS PAYLOAD IS JSON. Every query filters on the type
+// and every validation switches on it, so burying it in jsonb means no index
+// and no constraint. The payload varies per type and is checked here.
+//
+// ★ CLIENT-SAFE ON PURPOSE. The offer editor, the storefront badge and the
+// engine all need this vocabulary; `lib/offers/apply.ts` is pure too, but the
+// DB-touching resolver is not, and it must never end up imported by a client
+// component. Same split as `lib/logs/failure-types.ts` and `lib/themes/meta.ts`.
+// ---------------------------------------------------------------------------
+
+export const OFFER_CHANNELS = ["storefront", "pos"] as const;
+export type OfferChannel = (typeof OFFER_CHANNELS)[number];
+
+/** How the offer reaches a customer. A code is a DELIVERY METHOD, not a kind
+ *  of offer (plan §2) — the same rule applies automatically or on a code. */
+export const OFFER_DELIVERIES = ["automatic", "code", "link"] as const;
+export type OfferDelivery = (typeof OFFER_DELIVERIES)[number];
+
+export const OFFER_STATUSES = ["active", "disabled"] as const;
+export type OfferStatus = (typeof OFFER_STATUSES)[number];
+
+// --- Triggers --------------------------------------------------------------
+
+export const OFFER_TRIGGERS = ["always", "min_subtotal"] as const;
+export type OfferTriggerType = (typeof OFFER_TRIGGERS)[number];
+
+export interface OfferTrigger {
+  type: OfferTriggerType;
+  /** `min_subtotal` only: rupees. ★ Tested against the UNDISCOUNTED
+   *  merchandise subtotal — see `apply.ts` for why that is not negotiable. */
+  minSubtotal?: number;
+}
+
+// --- Rewards ---------------------------------------------------------------
+
+export const OFFER_REWARDS = [
+  "percent_off",
+  "amount_off",
+  "percent_off_items",
+] as const;
+export type OfferRewardType = (typeof OFFER_REWARDS)[number];
+
+export interface OfferReward {
+  type: OfferRewardType;
+  /** `percent_off` / `percent_off_items`: 0–100. */
+  percent?: number;
+  /** `amount_off`: rupees. */
+  amount?: number;
+}
+
+/**
+ * Which level a reward acts on.
+ *
+ * ★ THE LEVEL IS DERIVED FROM THE TYPE, never stored. Storing both invites a
+ * row where they disagree, and the engine's exclusivity rule (one offer per
+ * line) is expressed in terms of the level — so a wrong level silently changes
+ * which offers can coexist.
+ */
+export function rewardLevel(type: OfferRewardType): "order" | "line" {
+  return type === "percent_off_items" ? "line" : "order";
+}
+
+/** Is this reward a percentage of the line, rather than a lump sum? Percentage
+ *  rewards are per-line separable, which is what lets `onSalePrice: "best"`
+ *  compare an offer price against a special price (see `apply.ts`). */
+export function isPercentReward(type: OfferRewardType): boolean {
+  return type === "percent_off" || type === "percent_off_items";
+}
+
+// --- How an offer treats a line already on a special price ------------------
+// `offers.onSalePrice`, plan §14. The option list IS the validation.
+
+export const ON_SALE_PRICE_MODES = ["best", "skip", "stack"] as const;
+export type OnSalePriceMode = (typeof ON_SALE_PRICE_MODES)[number];
+
+export function normalizeOnSalePriceMode(v: unknown): OnSalePriceMode {
+  return (ON_SALE_PRICE_MODES as readonly string[]).includes(v as string)
+    ? (v as OnSalePriceMode)
+    : "best";
+}
+
+// --- The offer, as the engine receives it -----------------------------------
+
+export interface Offer {
+  id: string;
+  /** Internal name. Snapshotted onto the order line when it applies, so a
+   *  later rename cannot change what an issued invoice says (plan §8). */
+  name: string;
+  status: OfferStatus;
+  delivery: OfferDelivery;
+  /** Uppercased, for `code` and `link` delivery. */
+  code: string | null;
+  /** Higher wins ties. ★ Under best-offer-wins this is a TIE-BREAK only — it
+   *  no longer selects (plan §10). */
+  priority: number;
+  /** ISO. The second tie-break, so equal savings at equal priority still
+   *  resolve to one deterministic answer. */
+  createdAt: string;
+  validFrom: string | null;
+  validUntil: string | null;
+  /** Empty = every channel. */
+  channels: readonly OfferChannel[];
+  /** Empty = every location. */
+  locationIds: readonly string[];
+  /** Empty = every customer. Non-empty = members of these groups only. */
+  groupIds: readonly string[];
+  trigger: OfferTrigger;
+  reward: OfferReward;
+  /** Line scoping for a line-level reward. All three empty = every line. */
+  productIds: readonly string[];
+  variantIds: readonly string[];
+  categoryIds: readonly string[];
+  /** A redemption cap has been reached — resolved by the caller against the
+   *  database, because the engine is pure. */
+  exhausted?: boolean;
+  /** Rupees left in this offer's budget cap; `null`/undefined = uncapped.
+   *  ★ The engine CAPS an offer's contribution at this, rather than treating
+   *  it as a yes/no. An offer with ₹40 left must give ₹40, not ₹200 — the
+   *  alternative is a cap that overshoots by up to one order every time. */
+  remainingBudget?: number | null;
+}
+
+// --- Validation -------------------------------------------------------------
+
+export interface OfferValidationIssue {
+  field: string;
+  message: string;
+}
+
+const MAX_PERCENT = 100;
+const MAX_AMOUNT = 10_000_000; // ₹1 crore — a sanity bound, not a business rule
+
+/**
+ * Validate a trigger/reward pair before it is stored.
+ *
+ * Pure and exhaustive: adding a type to `OFFER_TRIGGERS`/`OFFER_REWARDS`
+ * without handling it here is a compile error, which is the point of the
+ * switch being on a union rather than a string.
+ */
+export function validateOfferRule(
+  trigger: OfferTrigger,
+  reward: OfferReward,
+): OfferValidationIssue[] {
+  const issues: OfferValidationIssue[] = [];
+
+  switch (trigger.type) {
+    case "always":
+      break;
+    case "min_subtotal": {
+      const v = trigger.minSubtotal;
+      if (typeof v !== "number" || !Number.isFinite(v) || v < 0) {
+        issues.push({
+          field: "trigger.minSubtotal",
+          message: "Enter the minimum order value.",
+        });
+      } else if (v > MAX_AMOUNT) {
+        issues.push({
+          field: "trigger.minSubtotal",
+          message: "That minimum is too large.",
+        });
+      }
+      break;
+    }
+    default: {
+      const never: never = trigger.type;
+      issues.push({
+        field: "trigger.type",
+        message: `Unknown trigger ${never}`,
+      });
+    }
+  }
+
+  switch (reward.type) {
+    case "percent_off":
+    case "percent_off_items": {
+      const p = reward.percent;
+      if (typeof p !== "number" || !Number.isFinite(p) || p <= 0) {
+        issues.push({
+          field: "reward.percent",
+          message: "Enter a discount percentage above zero.",
+        });
+      } else if (p > MAX_PERCENT) {
+        issues.push({
+          field: "reward.percent",
+          message: "A discount cannot exceed 100%.",
+        });
+      }
+      break;
+    }
+    case "amount_off": {
+      const a = reward.amount;
+      if (typeof a !== "number" || !Number.isFinite(a) || a <= 0) {
+        issues.push({
+          field: "reward.amount",
+          message: "Enter a discount amount above zero.",
+        });
+      } else if (a > MAX_AMOUNT) {
+        issues.push({
+          field: "reward.amount",
+          message: "That discount is too large.",
+        });
+      }
+      break;
+    }
+    default: {
+      const never: never = reward.type;
+      issues.push({ field: "reward.type", message: `Unknown reward ${never}` });
+    }
+  }
+
+  return issues;
+}
+
+/** Offer codes are matched case-insensitively, stored uppercase with no
+ *  spaces — the exact `normalizeCode` contract coupons already use, so a
+ *  migrated coupon code keeps working verbatim. */
+export function normalizeOfferCode(code: string): string {
+  return code.trim().toUpperCase().replace(/\s+/g, "");
+}

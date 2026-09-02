@@ -901,7 +901,7 @@
         "queries": [
           {
             "name": "plan guide contains exact product tiers and no-data-loss downgrade contract",
-            "sql": "select count(*)::text from public.help_articles where slug = 'manage-your-storemink-plan-and-subscription' and status = 'published' and body like '%<td>5</td><td>50</td><td>Unlimited</td>%' and body like '%does not delete store data because a plan becomes lower%' and body like '%Custom domain</td><td>—</td><td>—</td><td>Included%'",
+            "sql": "select count(*)::text from public.help_articles where slug = 'manage-your-storemink-plan-and-subscription' and status = 'published' and body like '%<td>5</td><td>50</td><td>Unlimited</td>%' and body like '%does not delete store data because a plan becomes lower%' and body like '%Custom domain</td><td>\u2014</td><td>\u2014</td><td>Included%'",
             "equals": "1"
           },
           {
@@ -915,7 +915,7 @@
         "queries": [
           {
             "name": "plan guide contains exact product tiers and no-data-loss downgrade contract",
-            "sql": "select count(*)::text from public.help_articles where slug = 'manage-your-storemink-plan-and-subscription' and status = 'published' and body like '%<td>5</td><td>50</td><td>Unlimited</td>%' and body like '%does not delete store data because a plan becomes lower%' and body like '%Custom domain</td><td>—</td><td>—</td><td>Included%'",
+            "sql": "select count(*)::text from public.help_articles where slug = 'manage-your-storemink-plan-and-subscription' and status = 'published' and body like '%<td>5</td><td>50</td><td>Unlimited</td>%' and body like '%does not delete store data because a plan becomes lower%' and body like '%Custom domain</td><td>\u2014</td><td>\u2014</td><td>Included%'",
             "equals": "1"
           },
           {
@@ -1188,7 +1188,7 @@
         "queries": [
           {
             "name": "the dashboard Mink AI alpha guide is published with limits and permissions",
-            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%This alpha is read only.%' and body like '%Products → View%' and body like '%does not debit AI credits%'",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%This alpha is read only.%' and body like '%Products \u2192 View%' and body like '%does not debit AI credits%'",
             "equals": "1"
           }
         ]
@@ -1298,7 +1298,7 @@
         "queries": [
           {
             "name": "the Mink dashboard guide documents Phase 1B tools permissions and reliability",
-            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%Analytics → View%' and body like '%Inventory → View%' and body like '%retries a transient model failure at most once%' and body like '%never displays prompts, answers, tool arguments, tool results or model reasoning%'",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%Analytics \u2192 View%' and body like '%Inventory \u2192 View%' and body like '%retries a transient model failure at most once%' and body like '%never displays prompts, answers, tool arguments, tool results or model reasoning%'",
             "equals": "1"
           }
         ]
@@ -1307,7 +1307,7 @@
         "queries": [
           {
             "name": "the Mink dashboard guide includes sales and low-stock permissions",
-            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%Analytics → View%' and body like '%Inventory → View%'",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%Analytics \u2192 View%' and body like '%Inventory \u2192 View%'",
             "equals": "1"
           }
         ]
@@ -1344,7 +1344,7 @@
         "queries": [
           {
             "name": "the Mink dashboard guide documents the invited beta cards privacy compaction feedback and shadow metering",
-            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%Cards, filters and dashboard context%' and body like '%Customers → View%' and body like '%bounded extractive summary%' and body like '%Shadow credits%'",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%Cards, filters and dashboard context%' and body like '%Customers \u2192 View%' and body like '%bounded extractive summary%' and body like '%Shadow credits%'",
             "equals": "1"
           }
         ]
@@ -1762,7 +1762,7 @@
           },
           {
             "name": "the Mink guide documents guarded delivery order-status transitions",
-            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%<h2>Advance one delivery order</h2>%' and body like '%pending → processing%' and body like '%Delivery order-status transitions%' and body like '%Pending or approved cancellation states and any refund activity block advancement%'",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%<h2>Advance one delivery order</h2>%' and body like '%pending \u2192 processing%' and body like '%Delivery order-status transitions%' and body like '%Pending or approved cancellation states and any refund activity block advancement%'",
             "equals": "1"
           }
         ]
@@ -2095,6 +2095,148 @@
           {
             "name": "the Mink guide already documents restart-safe weekly reports",
             "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%<h2>Create a durable weekly trading report</h2>%' and body like '%consume no additional Gemini tokens%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260902_0059_offers_phase_a",
+      "description": "Add the offers spine: offer rules, scoping, redemptions, per-line allocation and atomic caps; migrate coupons into offers",
+      "file": "sql/20260902_0059_offers_phase_a.sql",
+      "checksum": "766c2a9d2eab426db7b06ceb0d1ae1746809130e17dc4f56775fb0ce024f742a",
+      "transaction": true,
+      "requires": ["20260902_0058_mink_phase_6a_durable_workflows"],
+      "verify": {},
+      "applyVerify": {
+        "tables": [
+          "offers",
+          "offer_products",
+          "offer_locations",
+          "offer_user_groups",
+          "offer_redemptions",
+          "order_item_offers"
+        ],
+        "columns": [
+          "order_items.offer_discount",
+          "offers.budget_paise",
+          "offers.max_per_customer"
+        ],
+        "constraints": [
+          "offers_store_code_key",
+          "offers_code_present_check",
+          "offers_reward_type_check",
+          "offers_trigger_type_check",
+          "offers_limits_check",
+          "offers_channels_check",
+          "offer_products_one_target_check",
+          "offer_products_offer_store_fkey",
+          "offer_redemptions_offer_store_fkey",
+          "order_items_offer_discount_check",
+          "order_item_offers_item_key"
+        ],
+        "functions": ["reserve_offer_use", "release_offer_use"],
+        "rlsTables": [
+          "offers",
+          "offer_products",
+          "offer_locations",
+          "offer_user_groups",
+          "offer_redemptions",
+          "order_item_offers"
+        ],
+        "queries": [
+          {
+            "name": "offer redemptions and per-line offer records are never anon-readable",
+            "sql": "select count(*)::text from information_schema.role_table_grants where grantee = 'anon' and table_schema = 'public' and table_name in ('offer_redemptions', 'order_item_offers')",
+            "equals": "0"
+          },
+          {
+            "name": "anon cannot read an offer's budget, spend or redemption counts",
+            "sql": "select count(*)::text from information_schema.column_privileges where grantee = 'anon' and table_schema = 'public' and table_name = 'offers' and column_name in ('budget_paise', 'spent_paise', 'redemption_count', 'max_redemptions', 'max_per_customer')",
+            "equals": "0"
+          },
+          {
+            "name": "anon can still read the columns the storefront renders",
+            "sql": "select count(*)::text from information_schema.column_privileges where grantee = 'anon' and table_schema = 'public' and table_name = 'offers' and column_name in ('reward_type', 'reward_config', 'trigger_type', 'trigger_config')",
+            "equals": "4"
+          },
+          {
+            "name": "the offers guide is published under a category",
+            "sql": "select count(*)::text from public.help_articles where slug = 'create-and-manage-offers' and status = 'published' and category_id is not null and body like '%Best offer wins%' and body like '%A total budget%' and body like '%Stack on sale prices%' and body like '%never happens for an offer that needs a code%' and body like '%any code you have advertised keeps working%'",
+            "equals": "1"
+          },
+          {
+            "name": "every redeemable coupon became an offer",
+            "sql": "select count(*)::text from public.coupons c where c.code = regexp_replace(upper(c.code), '\\s', '', 'g') and char_length(c.code) between 1 and 200 and not exists (select 1 from public.offers o where o.id = c.id)",
+            "equals": "0"
+          },
+          {
+            "name": "an unlimited coupon did not migrate as a cap of zero",
+            "sql": "select count(*)::text from public.offers o join public.coupons c on c.id = o.id where c.max_uses = 0 and o.max_redemptions is not null",
+            "equals": "0"
+          },
+          {
+            "name": "migrated coupons are storefront-only, not switched on at every till",
+            "sql": "select count(*)::text from public.offers o join public.coupons c on c.id = o.id where o.channels <> array['storefront']::text[]",
+            "equals": "0"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "tables": [
+          "offers",
+          "offer_products",
+          "offer_locations",
+          "offer_user_groups",
+          "offer_redemptions",
+          "order_item_offers"
+        ],
+        "columns": [
+          "order_items.offer_discount",
+          "offers.budget_paise",
+          "offers.max_per_customer"
+        ],
+        "constraints": [
+          "offers_store_code_key",
+          "offers_code_present_check",
+          "offers_reward_type_check",
+          "offers_trigger_type_check",
+          "offers_limits_check",
+          "offers_channels_check",
+          "offer_products_one_target_check",
+          "offer_products_offer_store_fkey",
+          "offer_redemptions_offer_store_fkey",
+          "order_items_offer_discount_check",
+          "order_item_offers_item_key"
+        ],
+        "functions": ["reserve_offer_use", "release_offer_use"],
+        "rlsTables": [
+          "offers",
+          "offer_products",
+          "offer_locations",
+          "offer_user_groups",
+          "offer_redemptions",
+          "order_item_offers"
+        ],
+        "queries": [
+          {
+            "name": "offer redemptions and per-line offer records are never anon-readable",
+            "sql": "select count(*)::text from information_schema.role_table_grants where grantee = 'anon' and table_schema = 'public' and table_name in ('offer_redemptions', 'order_item_offers')",
+            "equals": "0"
+          },
+          {
+            "name": "anon cannot read an offer's budget, spend or redemption counts",
+            "sql": "select count(*)::text from information_schema.column_privileges where grantee = 'anon' and table_schema = 'public' and table_name = 'offers' and column_name in ('budget_paise', 'spent_paise', 'redemption_count', 'max_redemptions', 'max_per_customer')",
+            "equals": "0"
+          },
+          {
+            "name": "anon can still read the columns the storefront renders",
+            "sql": "select count(*)::text from information_schema.column_privileges where grantee = 'anon' and table_schema = 'public' and table_name = 'offers' and column_name in ('reward_type', 'reward_config', 'trigger_type', 'trigger_config')",
+            "equals": "4"
+          },
+          {
+            "name": "the offers guide is published under a category",
+            "sql": "select count(*)::text from public.help_articles where slug = 'create-and-manage-offers' and status = 'published' and category_id is not null and body like '%Best offer wins%' and body like '%A total budget%' and body like '%Stack on sale prices%' and body like '%never happens for an offer that needs a code%' and body like '%any code you have advertised keeps working%'",
             "equals": "1"
           }
         ]

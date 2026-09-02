@@ -321,9 +321,15 @@ export const SECTIONS: DashboardSection[] = [
     ],
   },
   {
+    // ★ THE KEY STAYS `promotions` THOUGH THE SECTION IS NOW "Offers". Roles
+    // store the KEY, so renaming it to `offers` silently revokes the grant on
+    // every saved role — the precedent is `navigation`, which kept its key
+    // when it folded into the builder. Change the label and the href; leave
+    // the key alone. (The old `/dashboard/promotions` href had no route behind
+    // it at all, so every merchant granted this section saw a link that 404'd.)
     key: "promotions",
-    label: "Promotions",
-    href: "/dashboard/promotions",
+    label: "Offers",
+    href: "/dashboard/offers",
     icon: "promotions",
     group: "Marketing",
     actions: ["view", "manage"],

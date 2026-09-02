@@ -256,3 +256,164 @@ describe("★ a line with no quantity", () => {
     expect(r.total).toBe(220);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Offer-allocated line discounts (`docs/offers-plan.md` §8).
+// ---------------------------------------------------------------------------
+
+describe("refundBreakdown — offer discounts", () => {
+  it("★ a Buy-1-Get-1 free line refunds NOTHING, not full price", () => {
+    // Two ₹1,000 shirts, the second free via an offer allocated entirely to it.
+    // Returning only the free one must hand back ₹0 — otherwise the customer
+    // keeps a free shirt and takes ₹1,000.
+    const lines = [
+      { id: "paid", quantity: 1, lineTotal: 1000, taxAmount: 0 },
+      {
+        id: "free",
+        quantity: 1,
+        lineTotal: 1000,
+        taxAmount: 0,
+        offerDiscount: 1000,
+      },
+    ];
+    const r = refundBreakdown({
+      lines,
+      request: [{ id: "free", quantity: 1 }],
+    });
+    expect(r.total).toBe(0);
+  });
+
+  it("refunds the paid line in full when the other was the free one", () => {
+    const lines = [
+      { id: "paid", quantity: 1, lineTotal: 1000, taxAmount: 0 },
+      {
+        id: "free",
+        quantity: 1,
+        lineTotal: 1000,
+        taxAmount: 0,
+        offerDiscount: 1000,
+      },
+    ];
+    const r = refundBreakdown({
+      lines,
+      request: [{ id: "paid", quantity: 1 }],
+    });
+    expect(r.total).toBe(1000);
+  });
+
+  it("★ does NOT spread a scoped offer across untouched lines", () => {
+    // ₹200 off the shirt only. Returning the book must refund its full ₹1,000 —
+    // proportional re-allocation would refund ₹900 for goods paid at ₹1,000.
+    const lines = [
+      {
+        id: "shirt",
+        quantity: 1,
+        lineTotal: 1000,
+        taxAmount: 0,
+        offerDiscount: 200,
+      },
+      { id: "book", quantity: 1, lineTotal: 1000, taxAmount: 0 },
+    ];
+    const book = refundBreakdown({
+      lines,
+      request: [{ id: "book", quantity: 1 }],
+    });
+    expect(book.total).toBe(1000);
+
+    const shirt = refundBreakdown({
+      lines,
+      request: [{ id: "shirt", quantity: 1 }],
+    });
+    expect(shirt.total).toBe(800);
+  });
+
+  it("splits an offer share across the units of one line", () => {
+    // 3 units at ₹100, ₹30 off the line → ₹10 off each unit.
+    const lines = [
+      { id: "l", quantity: 3, lineTotal: 300, taxAmount: 0, offerDiscount: 30 },
+    ];
+    const r = refundBreakdown({ lines, request: [{ id: "l", quantity: 1 }] });
+    expect(r.total).toBe(90);
+  });
+
+  it("composes an offer share with an order-level remainder", () => {
+    // ₹100 off line A by an offer, then ₹90 of manual order discount across
+    // the remaining ₹500 + ₹400.
+    const lines = [
+      {
+        id: "a",
+        quantity: 1,
+        lineTotal: 600,
+        taxAmount: 0,
+        offerDiscount: 100,
+      },
+      { id: "b", quantity: 1, lineTotal: 400, taxAmount: 0 },
+    ];
+    const r = refundBreakdown({
+      lines,
+      orderDiscount: 90,
+      request: [
+        { id: "a", quantity: 1 },
+        { id: "b", quantity: 1 },
+      ],
+    });
+    expect(r.total).toBe(810); // 1000 − 100 − 90
+  });
+
+  it("★ a full return always hands back exactly what was paid", () => {
+    const lines = [
+      {
+        id: "a",
+        quantity: 2,
+        lineTotal: 333,
+        taxAmount: 33.3,
+        offerDiscount: 77,
+      },
+      {
+        id: "b",
+        quantity: 1,
+        lineTotal: 667,
+        taxAmount: 66.7,
+        offerDiscount: 13,
+      },
+    ];
+    const r = refundBreakdown({
+      lines,
+      orderDiscount: 41,
+      request: [
+        { id: "a", quantity: 2 },
+        { id: "b", quantity: 1 },
+      ],
+    });
+    // Goods paid = 333 + 667 − 77 − 13 − 41 = 869, plus the stored tax.
+    expect(r.amount).toBeCloseTo(869, 2);
+    expect(r.tax).toBeCloseTo(100, 2);
+  });
+
+  it("clamps an offer share to the line's own value", () => {
+    const lines = [
+      {
+        id: "l",
+        quantity: 1,
+        lineTotal: 100,
+        taxAmount: 0,
+        offerDiscount: 9999,
+      },
+    ];
+    const r = refundBreakdown({ lines, request: [{ id: "l", quantity: 1 }] });
+    expect(r.total).toBe(0);
+  });
+
+  it("is unchanged for a sale with no offers", () => {
+    const lines = [{ id: "l", quantity: 1, lineTotal: 500, taxAmount: 25 }];
+    const withField = refundBreakdown({
+      lines: [{ ...lines[0], offerDiscount: 0 }],
+      request: [{ id: "l", quantity: 1 }],
+    });
+    const without = refundBreakdown({
+      lines,
+      request: [{ id: "l", quantity: 1 }],
+    });
+    expect(withField).toEqual(without);
+  });
+});

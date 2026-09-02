@@ -1738,6 +1738,19 @@ export const orderItems = pgTable(
     })
       .default(0)
       .notNull(),
+    // This line's share of an OFFER, allocated by lib/offers/apply.ts
+    // (20260902_0059). Kept SEPARATE from lineDiscount: that one is a human
+    // markdown and refundBreakdown/the receipt already read it as such, while
+    // this is machine-allocated and per-offer detail lives in
+    // order_item_offers. `total` is NOT net of this — orders.discount is the
+    // sum, exactly as it is for the order-level discount.
+    offerDiscount: numeric("offer_discount", {
+      precision: 12,
+      scale: 2,
+      mode: "number",
+    })
+      .default(0)
+      .notNull(),
     // India GST split (pos_06). tax_amount stays the TOTAL for this line;
     // these three are how it divides — cgst+sgst (intra-state) XOR igst.
     taxCgst: numeric("tax_cgst", { precision: 12, scale: 2, mode: "number" })
@@ -7465,3 +7478,173 @@ export const posParkedSales = pgTable("pos_parked_sales", {
     .defaultNow()
     .notNull(),
 });
+
+// ---------------------------------------------------------------------------
+// Offers (docs/offers-plan.md). Hand-added: 20260902_0059_offers_phase_a.sql is
+// not applied yet, so drizzle-kit has nothing to introspect.
+//
+// ★ `coupons` is deliberately still here. Phase A migrates its rows into
+// `offers` and repoints readers; the table stays until nothing references it,
+// the way homepage_sections and store_subscriptions were kept.
+// ---------------------------------------------------------------------------
+
+export const offers = pgTable(
+  "offers",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    name: text().notNull(),
+    description: text(),
+    status: text().default("disabled").notNull(),
+    delivery: text().default("automatic").notNull(),
+    /** Uppercased with no whitespace, or null for an automatic offer. */
+    code: text(),
+    priority: integer().default(0).notNull(),
+    triggerType: text("trigger_type").default("always").notNull(),
+    triggerConfig: jsonb("trigger_config").default({}).notNull(),
+    rewardType: text("reward_type").notNull(),
+    rewardConfig: jsonb("reward_config").default({}).notNull(),
+    /** Empty = every channel. */
+    channels: text().array().default([]).notNull(),
+    validFrom: timestamp("valid_from", { withTimezone: true, mode: "string" }),
+    validUntil: timestamp("valid_until", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    maxRedemptions: integer("max_redemptions"),
+    maxPerCustomer: integer("max_per_customer"),
+    /** ★ PAISE, not rupees — a budget is compared against allocated discount
+     *  and a float rupee comparison is how a cap overshoots by a paisa. */
+    budgetPaise: bigint("budget_paise", { mode: "number" }),
+    redemptionCount: integer("redemption_count").default(0).notNull(),
+    spentPaise: bigint("spent_paise", { mode: "number" }).default(0).notNull(),
+    createdBy: text("created_by"),
+    updatedBy: text("updated_by"),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.storeId],
+      foreignColumns: [stores.id],
+      name: "offers_store_id_fkey",
+    }).onDelete("cascade"),
+    unique("offers_id_store_key").on(table.id, table.storeId),
+    unique("offers_store_code_key").on(table.storeId, table.code),
+  ],
+);
+
+export const offerProducts = pgTable(
+  "offer_products",
+  {
+    offerId: uuid("offer_id").notNull(),
+    storeId: uuid("store_id").notNull(),
+    productId: uuid("product_id"),
+    variantId: uuid("variant_id"),
+    categoryId: uuid("category_id"),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.offerId, table.storeId],
+      foreignColumns: [offers.id, offers.storeId],
+      name: "offer_products_offer_store_fkey",
+    }).onDelete("cascade"),
+  ],
+);
+
+export const offerLocations = pgTable(
+  "offer_locations",
+  {
+    offerId: uuid("offer_id").notNull(),
+    storeId: uuid("store_id").notNull(),
+    locationId: uuid("location_id").notNull(),
+  },
+  (table) => [
+    primaryKey({
+      columns: [table.offerId, table.locationId],
+      name: "offer_locations_pkey",
+    }),
+    foreignKey({
+      columns: [table.offerId, table.storeId],
+      foreignColumns: [offers.id, offers.storeId],
+      name: "offer_locations_offer_store_fkey",
+    }).onDelete("cascade"),
+  ],
+);
+
+export const offerUserGroups = pgTable(
+  "offer_user_groups",
+  {
+    offerId: uuid("offer_id").notNull(),
+    storeId: uuid("store_id").notNull(),
+    groupId: uuid("group_id").notNull(),
+  },
+  (table) => [
+    primaryKey({
+      columns: [table.offerId, table.groupId],
+      name: "offer_user_groups_pkey",
+    }),
+    foreignKey({
+      columns: [table.offerId, table.storeId],
+      foreignColumns: [offers.id, offers.storeId],
+      name: "offer_user_groups_offer_store_fkey",
+    }).onDelete("cascade"),
+  ],
+);
+
+/** ★ A TABLE, NOT A COUNTER. `coupons.used_count` knows how many times a code
+ *  was used, never by whom — so "once per customer" is structurally
+ *  unanswerable from it. This is also the report of who redeemed what. */
+export const offerRedemptions = pgTable(
+  "offer_redemptions",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    offerId: uuid("offer_id").notNull(),
+    storeId: uuid("store_id").notNull(),
+    orderId: uuid("order_id"),
+    customerId: text("customer_id"),
+    amountPaise: bigint("amount_paise", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.offerId, table.storeId],
+      foreignColumns: [offers.id, offers.storeId],
+      name: "offer_redemptions_offer_store_fkey",
+    }).onDelete("cascade"),
+  ],
+);
+
+/** Which offer discounted which line, and by how much. ★ `offerName` is a
+ *  SNAPSHOT: a rename next month must not change what last month's invoice
+ *  says, and a deleted offer must still be explainable. */
+export const orderItemOffers = pgTable(
+  "order_item_offers",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    orderItemId: uuid("order_item_id").notNull(),
+    orderId: uuid("order_id").notNull(),
+    storeId: uuid("store_id").notNull(),
+    offerId: uuid("offer_id"),
+    offerName: text("offer_name").notNull(),
+    rewardType: text("reward_type").notNull(),
+    amount: numeric({ precision: 12, scale: 2, mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.orderItemId],
+      foreignColumns: [orderItems.id],
+      name: "order_item_offers_order_item_id_fkey",
+    }).onDelete("cascade"),
+    unique("order_item_offers_item_key").on(table.orderItemId, table.offerId),
+  ],
+);

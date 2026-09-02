@@ -1,7 +1,7 @@
 import "server-only";
 
 import { and, count, eq, ne, sql } from "drizzle-orm";
-import { admins, coupons, products, stores } from "@/drizzle/schema";
+import { admins, coupons, offers, products, stores } from "@/drizzle/schema";
 import { withService, type Db } from "@/lib/db/client";
 import {
   effectivePlan,
@@ -153,6 +153,40 @@ export async function assertCanActivateCoupon(
   if ((row?.n ?? 0) >= limits.maxActiveCoupons) {
     throw new PlanEntitlementError(
       `${plan === "free" ? "Free" : "Basic"} includes up to ${limits.maxActiveCoupons} active coupons. Disable one or upgrade; existing coupons remain safe.`,
+    );
+  }
+}
+
+/**
+ * Run inside the same transaction as an offer activation.
+ *
+ * ★ COUNTS THE MERGED POOL. Coupons became offers (docs/offers-plan.md §2), so
+ * counting `coupons` and `offers` separately would hand a free store three of
+ * each — which is the bypass the single cap exists to close.
+ *
+ * Soft downgrade follows the platform contract: an over-cap offer is never
+ * deleted, only prevented from being newly activated, and the same stored
+ * offer becomes available again on re-upgrade.
+ */
+export async function assertCanActivateOffer(
+  db: Db,
+  storeId: string,
+  excludeOfferId?: string,
+) {
+  await lockLimit(db, storeId, "active-offers");
+  const { plan, limits } = await planContextWithDb(db, storeId);
+  if (limits.maxActiveOffers === null) return;
+  const condition = excludeOfferId
+    ? and(
+        eq(offers.storeId, storeId),
+        eq(offers.status, "active"),
+        ne(offers.id, excludeOfferId),
+      )
+    : and(eq(offers.storeId, storeId), eq(offers.status, "active"));
+  const [row] = await db.select({ n: count() }).from(offers).where(condition);
+  if ((row?.n ?? 0) >= limits.maxActiveOffers) {
+    throw new PlanEntitlementError(
+      `${plan === "free" ? "Free" : "Basic"} includes up to ${limits.maxActiveOffers} active offers. Disable one or upgrade; existing offers remain safe.`,
     );
   }
 }
