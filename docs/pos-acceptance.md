@@ -3726,9 +3726,16 @@ charges the re-priced total.
 With `offers.onSalePrice` at its default (`best`), ring a variant that has a
 `special_price` under a percentage offer. **Expect:** the customer pays
 whichever is lower, never both. Switch the setting to `stack` and re-ring: the
-offer now applies on top. ⚠ This works at the till and NOT online, because
-`placeOrder` does not charge `special_price` at all — a pre-existing bug, not a
-POS limitation.
+offer now applies on top, and to `skip`: the line is left alone entirely.
+
+**PS-OF.8b ★★ — And the website agrees, basket for basket**
+Repeat PS-OF.8 online with the same variant, the same offer and the same
+setting. **Expect:** the same final price in both channels for each of the
+three modes. ⚠ Run this one deliberately rather than assuming it: when Phase A
+shipped, `placeOrder` selected only `product_variants.selling_price`, so there
+was no sale price online for an offer to interact with and `skip` silently
+skipped nothing — the setting read as store-wide and was POS-only. Fixed
+separately (CODEBASE §12, §39); this case is what proves it stays fixed.
 
 **PS-OF.9 — A location-scoped offer applies only there**
 On a multi-location store, scope an offer to one location. **Expect:** it
@@ -3756,7 +3763,7 @@ Real and deliberate, so nobody files them as bugs:
 | Gap                                                                     | Status                                                                                                                                                                                                                                                                                                                                                                                                         |
 | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **An open register keeps quoting a changed offer until reopened**       | By design: offers arrive with `RegisterConfig` (like tax rates) so the till prices without the network. Reopen the register after editing an offer. PS-OF.5                                                                                                                                                                                                                                                    |
-| **`offers.onSalePrice` is inert on the website**                        | Not an offers limitation — `placeOrder` never charges `product_variants.special_price` while the storefront advertises it, so there is no sale price online for an offer to interact with. Fix that first; the till already handles it. PS-OF.8                                                                                                                                                                |
+| ~~**`offers.onSalePrice` is inert on the website**~~                    | **FIXED** (PS-OF.8b). `placeOrder` selected only `product_variants.selling_price`, so no sale price reached the engine online and "Skip sale items" skipped nothing. Both counters now charge the sale price and pass the regular one as the engine's baseline, so the setting is the store-wide choice it always claimed to be                                                                                |
 | **Cancel doesn't offer a refund**                                       | Refunds themselves are BUILT (dashboard order drawer, gateway + manual — CODEBASE §26). What's left is wiring the prompt into cancel and pickup expiry; by decision it must prompt, never auto-pay                                                                                                                                                                                                             |
 | ~~**Checkout queried customers while the cashier typed**~~              | **FIXED** (PS-C.25–C.29, C.44–C.47). Charge now accepts one 10-digit mobile locally; only OK performs an exact lookup, creates a phone-only customer when absent, and advances directly to payment                                                                                                                                                                                                             |
 | ~~**A stale checkout could still create a Walk-in sale**~~              | **FIXED** (PS-C.48). Customer capture is enforced by `placePosSale` before all pricing, stock and money work; historical anonymous receipts remain readable but no new register sale can omit its customer                                                                                                                                                                                                     |

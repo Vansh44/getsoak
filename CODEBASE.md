@@ -8114,15 +8114,24 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       `getManagerIdentity("promotions")`, the `store_pages` draft pattern.
       Reading them with `withUser` returns nothing for the merchant who owns
       them.
-    - **★ `offers.onSalePrice` WORKS AT THE TILL AND IS INERT ONLINE**
+    - **★ `offers.onSalePrice` APPLIES IN BOTH CHANNELS**
       (`best` | `skip` | `stack`, default `best` — the only value that cannot
       give away more than intended, which matters because the engine seeks out
-      compounding). `placePosSale` charges `special_price` so it passes
-      `regularUnitPrice`; `placeOrder` never reads `special_price` and
-      deliberately passes none. **⚠ That asymmetry is a pre-existing bug, not a
-      design choice: the storefront ADVERTISES a variant's sale price and
-      online checkout bills the regular one.** Fix that before promising the
-      setting works online.
+      compounding). Both `placePosSale` and `placeOrder` charge a variant's
+      `special_price` and pass `listed_price` as the engine's
+      `regularUnitPrice`, so the same basket is priced the same way at either
+      counter. ⚠ NOT `base_price`: MRP is a struck-through list price, not a
+      sale price, and treating it as one would let `best` mode discount from a
+      much higher base. For a line that is not on sale the two are equal, which
+      the engine reads as "no sale" and every mode collapses to the same
+      arithmetic.
+      **★★ IT WAS INERT ONLINE WHEN PHASE A SHIPPED, and the cause is worth
+      keeping.** `placeOrder` re-read prices faithfully and still charged the
+      wrong amount, because it selected only `product_variants.selling_price` —
+      so there was no sale price online for an offer to interact with, and
+      "Skip sale items" silently skipped nothing. Fixed separately (§12), which
+      is what made this setting a truthful store-wide choice rather than a
+      POS-only one.
     - **★ THE NEAR-MISS NUDGE COMES FROM THE ENGINE.** "Add ₹200 more for free
       delivery" is a claim about what happens if the shopper adds something,
       and under best-offer-wins only the engine knows whether the offer would
