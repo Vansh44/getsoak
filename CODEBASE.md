@@ -8161,13 +8161,40 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       1–200 characters because `coupons.code` never had a length rule; a
       friendlier 3-char minimum for NEW offers lives in the action, where it can
       change without a migration.
-    - **Not built (Phases B–I):** product/category scoping UI, Buy X get Y,
+    - **★ PHASE B (shipped): scope means TWO different things, and the reward
+      level decides which.** `percent_off_items` / `fixed_price` are line-level
+      — the scope says what gets DISCOUNTED. `percent_off` / `amount_off` with a
+      `contains_product` / `contains_category` condition are order-level — the
+      scope says what QUALIFIES, and the whole basket is discounted once it
+      does. Collapsing them would make "10% off your order when it includes a
+      shake" impossible to express, so `claimOrderOffer` deliberately does NOT
+      filter by scope. ⚠ A no-op for anything Phase A created, since an empty
+      scope matches every line.
+      **★ A contents condition qualifies off the offer's OWN scope** — one list,
+      so "10% off shakes if the cart holds shoes" cannot be built by accident —
+      and it respects `onSalePrice`: under `skip` a cart of only on-sale
+      matching lines does not qualify, because the reward would apply to
+      nothing. **★ A `fixed_price` never marks an item UP**, is worth a
+      different amount on every product it covers, and is refused at ₹0 (a free
+      item must go through Phase G, which reserves stock).
+      **★ The card badge IS the engine's answer**, priced through `applyOffers`
+      on a one-line cart, so it cannot promise a saving the cart declines —
+      which a naive "the offer says 20%" badge would do under `skip`, under
+      `best` against a deeper special price, and for every `fixed_price`.
+      Line-level rewards only: an order-level offer is not a fact about one
+      product. Stock badges outrank it. The cart's category comes from
+      `getCartTaxRates`, NOT from `CartItem` (which holds a category NAME and
+      no id) — otherwise every persisted cart would mis-price a scoped offer
+      until the shopper re-added the item.
+      Migration `20260902_0061` widens the two allowlists and adds a DEFERRED
+      constraint trigger, so a contents condition cannot be saved without a
+      scope even by a direct write; deferral is what lets the scope rows arrive
+      after the offer row in the same transaction.
+    - **Not built (Phases C–I):** Buy X get Y,
       tiers and volume breaks, payment-method / fulfilment / time-window
       conditions, free shipping, gift with purchase, bundles, cashback, and Mink
-      offer authority. The engine already honours line-level rewards and
-      `offer_products`, which is why `PosCatalogItem` carries `categoryId`
-      (cache SCHEMA_VERSION v4) — a client that could not see it would quote a
-      different total the moment such an offer exists by any route.
+      offer authority. `PosCatalogItem` carries `categoryId` (cache
+      SCHEMA_VERSION v4) so the till prices a scoped offer identically.
 
 39. **The operator console — one screen per job.** `app/platform/dashboard/(console)`
     - `lib/platform/`. Full IA + rationale: **`docs/operator-console.md`**.

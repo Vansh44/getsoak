@@ -32,6 +32,23 @@ interface Bundle {
 export function useCartOffers(
   items: CartItem[],
   hydrated: boolean,
+  /**
+   * Authoritative per-line data from `getCartTaxRates`, which the cart already
+   * fetches once per product-set change.
+   *
+   * ★ THE CATEGORY COMES FROM HERE, NOT FROM THE CART ITEM. `CartItem` holds a
+   * category NAME for display and no id, and adding one would be correct only
+   * for lines added after the change — every persisted cart would mis-price a
+   * category-scoped offer until the shopper re-added the item. Passing the
+   * server's answer means a stale cart is priced correctly on its first render.
+   */
+  rates?:
+    | {
+        productId: string;
+        variantId: string | null;
+        categoryId: string | null;
+      }[]
+    | null,
 ): OfferResult | null {
   const [bundle, setBundle] = useState<Bundle | null>(null);
 
@@ -52,6 +69,14 @@ export function useCartOffers(
     // cart, and re-fetching per edit is the round trip this design avoids.
   }, [hydrated]);
 
+  const categoryByLine = useMemo(() => {
+    const map = new Map<string, string | null>();
+    for (const r of rates ?? []) {
+      map.set(lineKey(r.productId, r.variantId), r.categoryId);
+    }
+    return map;
+  }, [rates]);
+
   return useMemo(() => {
     if (!bundle || items.length === 0) return null;
     const result = applyOffers({
@@ -59,10 +84,8 @@ export function useCartOffers(
         id: lineKey(i.productId, i.variantId),
         productId: i.productId,
         variantId: i.variantId ?? null,
-        // The cart does not carry a category, so a category-scoped offer is
-        // priced by the server only. Phase A ships no UI for one; Phase B adds
-        // the category to the cart line at the same time as that UI.
-        categoryId: null,
+        categoryId:
+          categoryByLine.get(lineKey(i.productId, i.variantId ?? null)) ?? null,
         quantity: i.quantity,
         unitPrice: i.price,
       })),
@@ -85,5 +108,5 @@ export function useCartOffers(
     // engine always computes near misses (the pricing path needs the same
     // loop), so this is where the setting actually takes effect.
     return bundle.showNearMiss ? result : { ...result, nearMiss: [] };
-  }, [bundle, items]);
+  }, [bundle, items, categoryByLine]);
 }

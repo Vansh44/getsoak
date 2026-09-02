@@ -51,6 +51,8 @@
 
 import { allocateProportional, toPaise, toRupees } from "@/lib/money/allocate";
 import {
+  isContentsTrigger,
+  isFixedPriceReward,
   isPercentReward,
   normalizeOfferCode,
   rewardLevel,
@@ -287,6 +289,38 @@ function percentRewardPaise(
   }
 }
 
+/**
+ * What a FIXED PRICE reward is worth on one line, in paise.
+ *
+ * "Any tee ₹499" names the price each UNIT is charged, so the discount is the
+ * gap between what the line costs now and `unitPrice × quantity` — and it is
+ * ZERO on a line already at or below that price. ★ It never goes negative: a
+ * fixed price makes things cheaper or does nothing, it does not mark an item
+ * UP to meet the offer.
+ *
+ * `onSalePrice` reads naturally here because the reward produces a price:
+ * `best` charges whichever of the special price and the fixed price is lower
+ * (so the offer contributes only what it beats the special price by), `stack`
+ * is meaningless for a target price and behaves as `best` — discounting a
+ * fixed price again would produce a number the merchant never named — and
+ * `skip` declines the line.
+ */
+function fixedPriceRewardPaise(
+  unitPrice: number,
+  pl: PricedLine,
+  mode: OnSalePriceMode,
+): number {
+  const target = toPaise(unitPrice);
+  if (!Number.isFinite(target) || target <= 0) return 0;
+  const qty = Math.max(0, Math.trunc(Number(pl.line.quantity) || 0));
+  if (qty <= 0) return 0;
+  if (pl.onSale && mode === "skip") return 0;
+  // The line's charge at the offer's price. Compared against what is actually
+  // being charged now, which already reflects any special price.
+  const offerLinePaise = target * qty;
+  return Math.max(0, pl.netPaise - offerLinePaise);
+}
+
 /** Is this line available to an offer at all under the current mode? */
 function lineEligible(pl: PricedLine, mode: OnSalePriceMode): boolean {
   if (pl.netPaise <= 0) return false;
@@ -346,7 +380,9 @@ function claimLineOffers(
 
     for (const offer of candidates) {
       if (!offerCoversLine(offer, pl)) continue;
-      const raw = percentRewardPaise(offer.reward.percent ?? 0, pl, mode);
+      const raw = isFixedPriceReward(offer.reward.type)
+        ? fixedPriceRewardPaise(offer.reward.unitPrice ?? 0, pl, mode)
+        : percentRewardPaise(offer.reward.percent ?? 0, pl, mode);
       if (raw <= 0) continue;
       const left = budgetCapPaise(offer) - (spent.get(offer.id) ?? 0);
       const value = Math.min(raw, Math.max(0, left), pl.netPaise);
@@ -390,11 +426,27 @@ function claimOrderOffer(
   excluded: readonly (string | null)[],
 ): Claim {
   const claim = emptyClaim(priced.length);
+  // ★ AN ORDER-LEVEL REWARD IS NOT NARROWED BY THE OFFER'S SCOPE, and the
+  // distinction is the merchant's mental model rather than a technicality.
+  // The REWARD TYPE already says which they meant:
+  //
+  //   percent_off_items / fixed_price  →  "20% off shakes"          (line-level:
+  //                                        scope decides what is discounted)
+  //   percent_off / amount_off         →  "10% off your order when it
+  //                                        contains a shake"        (order-level:
+  //                                        scope decides what QUALIFIES, via a
+  //                                        contents trigger, and the discount
+  //                                        applies to the whole order)
+  //
+  // Filtering here would collapse the two into the same thing and quietly make
+  // the second impossible to express — a merchant who set "contains a shake"
+  // would find only the shake discounted.
+  //
+  // ⚠ This is a no-op for every offer Phase A could create: `offerCoversLine`
+  // returns true when all three scope lists are empty, and there was no UI to
+  // set them. So nothing already live changes behaviour.
   const eligible = priced.filter(
-    (pl) =>
-      lineEligible(pl, mode) &&
-      excluded[pl.index] === null &&
-      offerCoversLine(offer, pl),
+    (pl) => lineEligible(pl, mode) && excluded[pl.index] === null,
   );
   if (eligible.length === 0) return claim;
 
@@ -497,12 +549,21 @@ export function applyOffers({
   if (priced.length === 0 || subtotalPaise <= 0) return empty();
 
   const enteredCode = context.code ? normalizeOfferCode(context.code) : null;
+  const policyMode = context.onSalePrice;
   const now = context.now.getTime();
 
   // 1. Scope and eligibility. Every rejection is recorded with its reason.
   const eligible: Offer[] = [];
   for (const offer of Array.isArray(offers) ? offers : []) {
-    const reason = disqualify(offer, context, enteredCode, now, subtotalPaise);
+    const reason = disqualify(
+      offer,
+      context,
+      enteredCode,
+      now,
+      subtotalPaise,
+      priced,
+      policyMode,
+    );
     if (reason) {
       skipped.push({ offerId: offer.id, reason });
       // A near miss is an offer the shopper would GET if the cart were bigger,
@@ -672,6 +733,8 @@ function disqualify(
   enteredCode: string | null,
   now: number,
   subtotalPaise: number,
+  priced: readonly PricedLine[],
+  mode: OnSalePriceMode,
 ): SkipReason | null {
   if (offer.status !== "active") return "disabled";
   if (offer.exhausted) return "exhausted";
@@ -716,6 +779,23 @@ function disqualify(
   } else {
     if (!offer.code) return "code_required";
     if (enteredCode !== normalizeOfferCode(offer.code)) return "code_required";
+  }
+
+  // ★ A CONTENTS TRIGGER QUALIFIES OFF THE OFFER'S OWN SCOPE, so the merchant
+  // names the products once and that single list decides both what qualifies
+  // and what gets discounted. Keeping a second list on the trigger would let
+  // the two disagree — "10% off shakes, if the cart contains shoes" is a rule
+  // nobody wants and everybody would eventually create by accident.
+  //
+  // ★ AND IT RESPECTS `onSalePrice`. Under `skip`, a cart holding only on-sale
+  // matching lines does NOT qualify: every line the offer could act on has
+  // been declined, so qualifying would apply the reward to nothing while the
+  // storefront had already promised it.
+  if (isContentsTrigger(offer.trigger.type)) {
+    const matches = priced.some(
+      (pl) => lineEligible(pl, mode) && offerCoversLine(offer, pl),
+    );
+    if (!matches) return "trigger_unmet";
   }
 
   if (offer.trigger.type === "min_subtotal") {

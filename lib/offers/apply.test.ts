@@ -742,3 +742,363 @@ describe("applyOffers — robustness", () => {
     expect(sum).toBeCloseTo(r.discount, 10);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase B: line-scoped rewards and contents triggers.
+// ---------------------------------------------------------------------------
+
+describe("applyOffers — scoping a reward to products", () => {
+  const shake = line({
+    id: "shake",
+    productId: "p-shake",
+    categoryId: "cat-shake",
+    unitPrice: 100,
+  });
+  const shoe = line({
+    id: "shoe",
+    productId: "p-shoe",
+    categoryId: "cat-shoe",
+    unitPrice: 900,
+  });
+
+  it("discounts only the lines it covers", () => {
+    const r = applyOffers({
+      lines: [shake, shoe],
+      offers: [
+        offer({
+          reward: { type: "percent_off_items", percent: 20 },
+          categoryIds: ["cat-shake"],
+        }),
+      ],
+      context: ctx(),
+    });
+    expect(r.discount).toBe(20);
+    expect(r.lines.find((l) => l.id === "shake")?.offerDiscount).toBe(20);
+    expect(r.lines.find((l) => l.id === "shoe")?.offerDiscount).toBe(0);
+  });
+
+  it("matches a specific product, and a specific variant", () => {
+    const withVariant = line({
+      id: "v",
+      productId: "p1",
+      variantId: "var-9",
+      unitPrice: 500,
+    });
+    const byProduct = applyOffers({
+      lines: [withVariant],
+      offers: [
+        offer({
+          reward: { type: "percent_off_items", percent: 10 },
+          productIds: ["p1"],
+        }),
+      ],
+      context: ctx(),
+    });
+    expect(byProduct.discount).toBe(50);
+
+    const byVariant = applyOffers({
+      lines: [withVariant],
+      offers: [
+        offer({
+          reward: { type: "percent_off_items", percent: 10 },
+          variantIds: ["var-9"],
+        }),
+      ],
+      context: ctx(),
+    });
+    expect(byVariant.discount).toBe(50);
+  });
+
+  it("covers everything when no scope is set", () => {
+    const r = applyOffers({
+      lines: [shake, shoe],
+      offers: [offer({ reward: { type: "percent_off_items", percent: 10 } })],
+      context: ctx(),
+    });
+    expect(r.discount).toBe(100);
+  });
+
+  it("applies nothing when the scope matches no line", () => {
+    const r = applyOffers({
+      lines: [shake],
+      offers: [
+        offer({
+          reward: { type: "percent_off_items", percent: 50 },
+          categoryIds: ["cat-nope"],
+        }),
+      ],
+      context: ctx(),
+    });
+    expect(r.discount).toBe(0);
+  });
+});
+
+describe("applyOffers — fixed price", () => {
+  it("charges the named price per unit", () => {
+    // 2 tees at ₹800 each, "any tee ₹499" → ₹602 off.
+    const r = applyOffers({
+      lines: [line({ quantity: 2, unitPrice: 800 })],
+      offers: [offer({ reward: { type: "fixed_price", unitPrice: 499 } })],
+      context: ctx(),
+    });
+    expect(r.discount).toBe(602);
+  });
+
+  it("★ never marks an item UP to meet the offer", () => {
+    // The line is already cheaper than the fixed price.
+    const r = applyOffers({
+      lines: [line({ unitPrice: 300 })],
+      offers: [offer({ reward: { type: "fixed_price", unitPrice: 499 } })],
+      context: ctx(),
+    });
+    expect(r.discount).toBe(0);
+  });
+
+  it("is worth zero on a line already at that exact price", () => {
+    const r = applyOffers({
+      lines: [line({ unitPrice: 499 })],
+      offers: [offer({ reward: { type: "fixed_price", unitPrice: 499 } })],
+      context: ctx(),
+    });
+    expect(r.discount).toBe(0);
+  });
+
+  it("works on the amount left after a manual markdown", () => {
+    // ₹1,000 line, ₹100 knocked off at the till → charged ₹900; target ₹499.
+    const r = applyOffers({
+      lines: [line({ unitPrice: 1000, lineDiscount: 100 })],
+      offers: [offer({ reward: { type: "fixed_price", unitPrice: 499 } })],
+      context: ctx(),
+    });
+    expect(r.discount).toBe(401);
+  });
+
+  it("is scoped like any other line reward", () => {
+    const r = applyOffers({
+      lines: [
+        line({ id: "tee", productId: "p-tee", unitPrice: 800 }),
+        line({ id: "bag", productId: "p-bag", unitPrice: 800 }),
+      ],
+      offers: [
+        offer({
+          reward: { type: "fixed_price", unitPrice: 499 },
+          productIds: ["p-tee"],
+        }),
+      ],
+      context: ctx(),
+    });
+    expect(r.lines.find((l) => l.id === "tee")?.offerDiscount).toBe(301);
+    expect(r.lines.find((l) => l.id === "bag")?.offerDiscount).toBe(0);
+  });
+
+  it("★ skip leaves an on-sale line alone; best takes only the difference", () => {
+    // ₹1,000 regular, ₹600 special, fixed price ₹499.
+    const onSale = line({ unitPrice: 600, regularUnitPrice: 1000 });
+    const reward = offer({
+      reward: { type: "fixed_price" as const, unitPrice: 499 },
+    });
+
+    expect(
+      applyOffers({
+        lines: [onSale],
+        offers: [reward],
+        context: ctx({ onSalePrice: "skip" }),
+      }).discount,
+    ).toBe(0);
+    // best: charge ₹499 instead of ₹600 → ₹101 off.
+    expect(
+      applyOffers({
+        lines: [onSale],
+        offers: [reward],
+        context: ctx({ onSalePrice: "best" }),
+      }).discount,
+    ).toBe(101);
+    // ★ stack behaves as best for a TARGET price — discounting a fixed price
+    // again would charge a number the merchant never named.
+    expect(
+      applyOffers({
+        lines: [onSale],
+        offers: [reward],
+        context: ctx({ onSalePrice: "stack" }),
+      }).discount,
+    ).toBe(101);
+  });
+
+  it("competes with other rewards on value, like anything else", () => {
+    // ₹1,000 line: fixed ₹499 saves ₹501; 20% off saves ₹200.
+    const r = applyOffers({
+      lines: [line({ unitPrice: 1000 })],
+      offers: [
+        offer({ id: "fixed", reward: { type: "fixed_price", unitPrice: 499 } }),
+        offer({
+          id: "pct",
+          reward: { type: "percent_off_items", percent: 20 },
+        }),
+      ],
+      context: ctx(),
+    });
+    expect(r.applied[0].offerId).toBe("fixed");
+    expect(r.discount).toBe(501);
+  });
+});
+
+describe("applyOffers — contents triggers", () => {
+  const shake = line({
+    id: "shake",
+    productId: "p-shake",
+    categoryId: "cat-shake",
+    unitPrice: 100,
+  });
+  const shoe = line({
+    id: "shoe",
+    productId: "p-shoe",
+    categoryId: "cat-shoe",
+    unitPrice: 900,
+  });
+
+  const containsShakes = offer({
+    trigger: { type: "contains_category" },
+    reward: { type: "percent_off", percent: 10 },
+    categoryIds: ["cat-shake"],
+  });
+
+  it("★ qualifies off the offer's OWN scope — one list, not two", () => {
+    const withShake = applyOffers({
+      lines: [shake, shoe],
+      offers: [containsShakes],
+      context: ctx(),
+    });
+    // Qualifies, and being an ORDER-level reward it discounts the whole cart.
+    expect(withShake.discount).toBe(100);
+
+    const withoutShake = applyOffers({
+      lines: [shoe],
+      offers: [containsShakes],
+      context: ctx(),
+    });
+    expect(withoutShake.discount).toBe(0);
+    expect(withoutShake.skipped).toEqual([
+      { offerId: "o1", reason: "trigger_unmet" },
+    ]);
+  });
+
+  it("qualifies on a specific product too", () => {
+    const r = applyOffers({
+      lines: [shoe],
+      offers: [
+        offer({
+          trigger: { type: "contains_product" },
+          reward: { type: "amount_off", amount: 50 },
+          productIds: ["p-shoe"],
+        }),
+      ],
+      context: ctx(),
+    });
+    expect(r.discount).toBe(50);
+  });
+
+  it("★ does NOT qualify when skip has declined every matching line", () => {
+    // The only shake is on a special price and the store skips those, so the
+    // reward would apply to nothing — promising it would be a lie.
+    const onSaleShake = line({
+      id: "shake",
+      productId: "p-shake",
+      categoryId: "cat-shake",
+      unitPrice: 60,
+      regularUnitPrice: 100,
+    });
+    const r = applyOffers({
+      lines: [onSaleShake, shoe],
+      offers: [
+        offer({
+          trigger: { type: "contains_category" },
+          reward: { type: "percent_off_items", percent: 10 },
+          categoryIds: ["cat-shake"],
+        }),
+      ],
+      context: ctx({ onSalePrice: "skip" }),
+    });
+    expect(r.discount).toBe(0);
+    expect(r.skipped[0].reason).toBe("trigger_unmet");
+  });
+
+  it("an unscoped contents trigger behaves as 'any order'", () => {
+    // Validation refuses to CREATE this, but the engine must still be sane if
+    // one exists — it matches every line, so it qualifies.
+    const r = applyOffers({
+      lines: [shoe],
+      offers: [offer({ trigger: { type: "contains_product" } })],
+      context: ctx(),
+    });
+    expect(r.discount).toBe(90);
+  });
+});
+
+describe("applyOffers — scope means different things per reward level", () => {
+  const shake = line({
+    id: "shake",
+    productId: "p-shake",
+    categoryId: "cat-shake",
+    unitPrice: 100,
+  });
+  const shoe = line({
+    id: "shoe",
+    productId: "p-shoe",
+    categoryId: "cat-shoe",
+    unitPrice: 900,
+  });
+
+  it("★ a LINE reward discounts only the scope", () => {
+    const r = applyOffers({
+      lines: [shake, shoe],
+      offers: [
+        offer({
+          reward: { type: "percent_off_items", percent: 10 },
+          categoryIds: ["cat-shake"],
+        }),
+      ],
+      context: ctx(),
+    });
+    expect(r.discount).toBe(10); // 10% of the ₹100 shake only
+  });
+
+  it("★ an ORDER reward discounts the whole cart, scope only qualifies it", () => {
+    const r = applyOffers({
+      lines: [shake, shoe],
+      offers: [
+        offer({
+          trigger: { type: "contains_category" },
+          reward: { type: "percent_off", percent: 10 },
+          categoryIds: ["cat-shake"],
+        }),
+      ],
+      context: ctx(),
+    });
+    expect(r.discount).toBe(100); // 10% of the full ₹1,000
+  });
+
+  it("and both are spendable on the same cart, best offer winning", () => {
+    const r = applyOffers({
+      lines: [shake, shoe],
+      offers: [
+        offer({
+          id: "items",
+          reward: { type: "percent_off_items", percent: 50 },
+          categoryIds: ["cat-shake"],
+        }),
+        offer({
+          id: "order",
+          trigger: { type: "contains_category" },
+          reward: { type: "percent_off", percent: 10 },
+          categoryIds: ["cat-shake"],
+        }),
+      ],
+      context: ctx(),
+    });
+    // order_only = ₹100 beats line_and_order = ₹50 + 10%×₹900 = ₹140? No:
+    // line_and_order wins at ₹140, because the claimed shake leaves the
+    // order offer only the ₹900 shoe.
+    expect(r.discount).toBe(140);
+    expect(r.scenario.chosen).toBe("line_and_order");
+  });
+});

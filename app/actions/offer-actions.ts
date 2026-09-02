@@ -33,6 +33,7 @@ import { withService, type Db, type UserIdentity } from "@/lib/db/client";
 import { dbErrorMessage, isUniqueViolation } from "@/lib/db/errors";
 import {
   offerLocations,
+  offerProducts,
   offerRedemptions,
   offerUserGroups,
   offers,
@@ -49,7 +50,9 @@ import {
   storeAllowsPlanFeature,
 } from "@/lib/plans/entitlements";
 import {
+  isPercentReward,
   normalizeOfferCode,
+  rewardLevel,
   validateOfferRule,
   type OfferChannel,
   type OfferDelivery,
@@ -70,6 +73,8 @@ export interface OfferFormData {
   rewardType: OfferRewardType;
   percent: number;
   amount: number;
+  /** `fixed_price`: the per-unit price matching items are charged. */
+  unitPrice: number;
   /** Empty = every channel. */
   channels: OfferChannel[];
   validFrom: string;
@@ -80,6 +85,10 @@ export interface OfferFormData {
   budget: number;
   locationIds: string[];
   groupIds: string[];
+  /** Which lines the offer covers. All three empty = every line. */
+  productIds: string[];
+  variantIds: string[];
+  categoryIds: string[];
 }
 
 export interface OfferRow {
@@ -95,6 +104,7 @@ export interface OfferRow {
   rewardType: OfferRewardType;
   percent: number | null;
   amount: number | null;
+  unitPrice: number | null;
   channels: OfferChannel[];
   validFrom: string | null;
   validUntil: string | null;
@@ -164,6 +174,12 @@ function validateForm(form: OfferFormData): string | null {
     if (code.length > 200) return "That code is too long.";
   }
 
+  const hasScope =
+    (form.productIds?.length ?? 0) +
+      (form.variantIds?.length ?? 0) +
+      (form.categoryIds?.length ?? 0) >
+    0;
+
   const issues = validateOfferRule(
     {
       type: form.triggerType,
@@ -172,13 +188,25 @@ function validateForm(form: OfferFormData): string | null {
     },
     {
       type: form.rewardType,
-      percent:
-        form.rewardType === "amount_off" ? undefined : Number(form.percent),
+      percent: isPercentReward(form.rewardType)
+        ? Number(form.percent)
+        : undefined,
       amount:
         form.rewardType === "amount_off" ? Number(form.amount) : undefined,
+      unitPrice:
+        form.rewardType === "fixed_price" ? Number(form.unitPrice) : undefined,
     },
+    hasScope,
   );
   if (issues.length > 0) return issues[0].message;
+
+  // ★ A LINE-LEVEL REWARD WITHOUT A SCOPE IS "20% OFF EVERYTHING", which is a
+  // real offer but almost never the one a merchant reaching for "off products"
+  // meant. Refused rather than silently applied to the whole catalogue: the
+  // order-level reward beside it already expresses the store-wide version.
+  if (rewardLevel(form.rewardType) === "line" && !hasScope) {
+    return "Choose the products or categories this offer applies to. To discount every order, use an offer that takes money off the order instead.";
+  }
 
   const from = toTimestamp(form.validFrom);
   const until = toTimestamp(form.validUntil);
@@ -225,7 +253,9 @@ function buildRow(form: OfferFormData, userId: string, creating: boolean) {
     rewardConfig:
       form.rewardType === "amount_off"
         ? { amount: Number(form.amount) }
-        : { percent: Number(form.percent) },
+        : form.rewardType === "fixed_price"
+          ? { unitPrice: Number(form.unitPrice) }
+          : { percent: Number(form.percent) },
     channels: form.channels ?? [],
     validFrom: toTimestamp(form.validFrom),
     validUntil: toTimestamp(form.validUntil),
@@ -256,7 +286,18 @@ async function syncScopes(
   offerId: string,
   locationIds: string[],
   groupIds: string[],
+  productIds: string[] = [],
+  variantIds: string[] = [],
+  categoryIds: string[] = [],
 ): Promise<void> {
+  await db
+    .delete(offerProducts)
+    .where(
+      and(
+        eq(offerProducts.offerId, offerId),
+        eq(offerProducts.storeId, storeId),
+      ),
+    );
   await db
     .delete(offerLocations)
     .where(
@@ -273,6 +314,18 @@ async function syncScopes(
         eq(offerUserGroups.storeId, storeId),
       ),
     );
+
+  // ★ ONE ROW PER TARGET, and the CHECK enforces exactly one of the three
+  // columns per row — so a row can never mean "this product AND that
+  // category", which would be ambiguous about what the offer covers.
+  const scopeRows = [
+    ...productIds.map((productId) => ({ offerId, storeId, productId })),
+    ...variantIds.map((variantId) => ({ offerId, storeId, variantId })),
+    ...categoryIds.map((categoryId) => ({ offerId, storeId, categoryId })),
+  ];
+  if (scopeRows.length > 0) {
+    await db.insert(offerProducts).values(scopeRows);
+  }
 
   if (locationIds.length > 0) {
     await db
@@ -335,11 +388,21 @@ export async function getOffer(id: string): Promise<{
   offer?: OfferRow;
   locationIds: string[];
   groupIds: string[];
+  productIds: string[];
+  variantIds: string[];
+  categoryIds: string[];
   error?: string;
 }> {
   const admin = await getAdminIdentity();
   if (!admin)
-    return { locationIds: [], groupIds: [], error: "Not authenticated" };
+    return {
+      locationIds: [],
+      groupIds: [],
+      productIds: [],
+      variantIds: [],
+      categoryIds: [],
+      error: "Not authenticated",
+    };
   const storeId = await getActingStoreId();
 
   try {
@@ -350,8 +413,15 @@ export async function getOffer(id: string): Promise<{
         .where(and(eq(offers.id, id), eq(offers.storeId, storeId)))
         .limit(1);
       if (!row)
-        return { locationIds: [], groupIds: [], error: "Offer not found." };
-      const [locs, groups] = await Promise.all([
+        return {
+          locationIds: [],
+          groupIds: [],
+          productIds: [],
+          variantIds: [],
+          categoryIds: [],
+          error: "Offer not found.",
+        };
+      const [locs, groups, scopes] = await Promise.all([
         db
           .select({ locationId: offerLocations.locationId })
           .from(offerLocations)
@@ -370,11 +440,33 @@ export async function getOffer(id: string): Promise<{
               eq(offerUserGroups.storeId, storeId),
             ),
           ),
+        db
+          .select({
+            productId: offerProducts.productId,
+            variantId: offerProducts.variantId,
+            categoryId: offerProducts.categoryId,
+          })
+          .from(offerProducts)
+          .where(
+            and(
+              eq(offerProducts.offerId, id),
+              eq(offerProducts.storeId, storeId),
+            ),
+          ),
       ]);
       return {
         offer: mapRow(row),
         locationIds: locs.map((l) => l.locationId),
         groupIds: groups.map((g) => g.groupId),
+        productIds: scopes
+          .map((x) => x.productId)
+          .filter((x): x is string => !!x),
+        variantIds: scopes
+          .map((x) => x.variantId)
+          .filter((x): x is string => !!x),
+        categoryIds: scopes
+          .map((x) => x.categoryId)
+          .filter((x): x is string => !!x),
       };
     });
   } catch (err) {
@@ -382,6 +474,9 @@ export async function getOffer(id: string): Promise<{
     return {
       locationIds: [],
       groupIds: [],
+      productIds: [],
+      variantIds: [],
+      categoryIds: [],
       error: dbErrorMessage(err, "Couldn't load that offer."),
     };
   }
@@ -447,6 +542,7 @@ function mapRow(row: typeof offers.$inferSelect): OfferRow {
     rewardType: row.rewardType as OfferRewardType,
     percent: numOrNull(reward.percent),
     amount: numOrNull(reward.amount),
+    unitPrice: numOrNull(reward.unitPrice),
     channels: (row.channels ?? []) as OfferChannel[],
     validFrom: row.validFrom,
     validUntil: row.validUntil,
@@ -490,6 +586,9 @@ export async function createOffer(form: OfferFormData): Promise<ActionResult> {
         row.id,
         form.locationIds ?? [],
         form.groupIds ?? [],
+        form.productIds ?? [],
+        form.variantIds ?? [],
+        form.categoryIds ?? [],
       );
       return mapRow(row);
     });
@@ -545,6 +644,9 @@ export async function updateOffer(
         id,
         form.locationIds ?? [],
         form.groupIds ?? [],
+        form.productIds ?? [],
+        form.variantIds ?? [],
+        form.categoryIds ?? [],
       );
       return true;
     });

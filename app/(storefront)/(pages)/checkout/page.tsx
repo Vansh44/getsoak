@@ -309,7 +309,7 @@ export default function CheckoutPage() {
   // Automatic offers, for the near-miss nudge. Display only — `placeOrder`
   // re-resolves and re-prices authoritatively, and the nudge's whole value is
   // that its gap comes from the engine rather than from arithmetic here.
-  const offerInfo = useCartOffers(cart.items, cart.hydrated);
+  const offerInfo = useCartOffers(cart.items, cart.hydrated, taxInfo?.lines);
 
   const selectedShippingOption =
     shippingOptions.find((option) => option.id === selectedShippingRateId) ??

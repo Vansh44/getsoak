@@ -14,12 +14,15 @@ export default async function EditOfferPage({
   const { id } = await params;
   const storeId = await getActingStoreId();
 
-  const [{ offer, locationIds, groupIds }, { limits }, { locations, groups }] =
-    await Promise.all([
-      getOffer(id),
-      getStorePlanContext(storeId),
-      loadOfferScopes(storeId),
-    ]);
+  const [
+    { offer, locationIds, groupIds, productIds, variantIds, categoryIds },
+    { limits },
+    { locations, groups, products, categories },
+  ] = await Promise.all([
+    getOffer(id),
+    getStorePlanContext(storeId),
+    loadOfferScopes(storeId),
+  ]);
 
   // `getOffer` is already store-scoped, so a missing row means it belongs to
   // another store or does not exist — both are a 404, never someone else's
@@ -31,8 +34,13 @@ export default async function EditOfferPage({
       offer={offer}
       locations={locations}
       groups={groups}
+      products={products}
+      categories={categories}
       initialLocationIds={locationIds}
       initialGroupIds={groupIds}
+      initialProductIds={productIds}
+      initialVariantIds={variantIds}
+      initialCategoryIds={categoryIds}
       allowsGroups={limits.customerGroups}
     />
   );

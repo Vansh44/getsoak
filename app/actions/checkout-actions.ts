@@ -390,6 +390,17 @@ export interface CartTaxResult {
   inclusive: boolean;
   tax: number;
   byRate: Array<{ rate: number; label: string; tax: number }>;
+  /**
+   * The authoritative per-line data this result was computed from, passed
+   * through so a sibling consumer does not have to fetch it again.
+   *
+   * ★ ONE ROUND TRIP, TWO CONSUMERS. `useCartOffers` needs each line's
+   * category to price a category-scoped offer the same way the server will,
+   * and that resolution is already being done here. Fetching it separately
+   * would double the cart's server calls to answer a question one of them has
+   * already answered.
+   */
+  lines?: CartTaxRateLine[];
 }
 
 export interface CartTaxRateLine {
@@ -401,6 +412,17 @@ export interface CartTaxRateLine {
   rate: number;
   /** Tax class name, for the per-rate breakdown label. */
   label?: string;
+  /**
+   * The product's category, for offer scoping.
+   *
+   * ★ RESOLVED SERVER-SIDE, NOT READ OFF THE CART. `CartItem` carries the
+   * category NAME for display and nothing carries its id — and adding one
+   * would only be correct for lines added AFTER the change, so every persisted
+   * cart would silently mis-price a category-scoped offer until the shopper
+   * re-added the item. The client is not the source of truth for scoping any
+   * more than it is for price, and this read already resolves the price.
+   */
+  categoryId: string | null;
 }
 
 /**
@@ -501,6 +523,7 @@ export async function getCartTaxRates(
         selling_price: products.sellingPrice,
         cost_price: products.costPrice,
         tax_class_id: products.taxClassId,
+        category_id: products.categoryId,
       })
       .from(products)
       .where(
@@ -530,7 +553,11 @@ export async function getCartTaxRates(
   const pMap = new Map(
     productRows.map((p) => [
       p.id as string,
-      p as { selling_price: number; tax_class_id: string | null },
+      p as {
+        selling_price: number;
+        tax_class_id: string | null;
+        category_id: string | null;
+      },
     ]),
   );
   const vMap = new Map(
@@ -546,6 +573,7 @@ export async function getCartTaxRates(
         variantId: l.variantId,
         price: 0,
         rate: 0,
+        categoryId: null,
       };
     }
     const v = l.variantId ? vMap.get(l.variantId) : null;
@@ -559,6 +587,7 @@ export async function getCartTaxRates(
       price,
       rate: cls?.rate ?? 0,
       label: cls?.name,
+      categoryId: p.category_id ?? null,
     };
   });
 

@@ -2284,6 +2284,73 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260902_0061_offers_phase_b",
+      "description": "Allow product/category-scoped offer rewards and cart-contents conditions; index the storefront badge lookup",
+      "file": "sql/20260902_0061_offers_phase_b.sql",
+      "checksum": "7c72d72443e0522a7cd5a13e8cdfd655342fa15911f25d23b7dcc8214b8d0715",
+      "transaction": true,
+      "requires": ["20260902_0060_variant_sale_price_help"],
+      "verify": {},
+      "applyVerify": {
+        "constraints": [
+          "offers_reward_type_check",
+          "offers_trigger_type_check"
+        ],
+        "functions": ["offers_contents_trigger_needs_scope()"],
+        "queries": [
+          {
+            "name": "the offers guide explains product scoping and the two shapes",
+            "sql": "select count(*)::text from public.help_articles where slug = 'create-and-manage-offers' and status = 'published' and body like '%<h2>Offers on particular products</h2>%' and body like '%never raises a price to meet the offer%' and body like '%discounts the <strong>whole</strong> basket once it qualifies%'",
+            "equals": "1"
+          },
+          {
+            "name": "line-scoped rewards and contents conditions are allowed",
+            "sql": "select count(*)::text from pg_constraint where conname = 'offers_reward_type_check' and pg_get_constraintdef(oid) like '%fixed_price%'",
+            "equals": "1"
+          },
+          {
+            "name": "a contents condition cannot be saved without a scope",
+            "sql": "select count(*)::text from pg_trigger where tgname = 'offers_contents_trigger_needs_scope' and tgdeferrable and tginitdeferred",
+            "equals": "1"
+          },
+          {
+            "name": "the storefront badge path can find offers by product",
+            "sql": "select count(*)::text from pg_indexes where schemaname = 'public' and indexname in ('offer_products_product_lookup_idx', 'offer_products_variant_lookup_idx', 'offer_products_category_lookup_idx')",
+            "equals": "3"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "constraints": [
+          "offers_reward_type_check",
+          "offers_trigger_type_check"
+        ],
+        "functions": ["offers_contents_trigger_needs_scope()"],
+        "queries": [
+          {
+            "name": "the offers guide explains product scoping and the two shapes",
+            "sql": "select count(*)::text from public.help_articles where slug = 'create-and-manage-offers' and status = 'published' and body like '%<h2>Offers on particular products</h2>%' and body like '%never raises a price to meet the offer%' and body like '%discounts the <strong>whole</strong> basket once it qualifies%'",
+            "equals": "1"
+          },
+          {
+            "name": "line-scoped rewards and contents conditions are allowed",
+            "sql": "select count(*)::text from pg_constraint where conname = 'offers_reward_type_check' and pg_get_constraintdef(oid) like '%fixed_price%'",
+            "equals": "1"
+          },
+          {
+            "name": "a contents condition cannot be saved without a scope",
+            "sql": "select count(*)::text from pg_trigger where tgname = 'offers_contents_trigger_needs_scope' and tgdeferrable and tginitdeferred",
+            "equals": "1"
+          },
+          {
+            "name": "the storefront badge path can find offers by product",
+            "sql": "select count(*)::text from pg_indexes where schemaname = 'public' and indexname in ('offer_products_product_lookup_idx', 'offer_products_variant_lookup_idx', 'offer_products_category_lookup_idx')",
+            "equals": "3"
+          }
+        ]
+      }
     }
   ]
 }

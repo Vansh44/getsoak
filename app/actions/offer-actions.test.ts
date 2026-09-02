@@ -55,6 +55,7 @@ const form = (over: Partial<OfferFormData> = {}): OfferFormData => ({
   rewardType: "percent_off",
   percent: 10,
   amount: 0,
+  unitPrice: 0,
   channels: [],
   validFrom: "",
   validUntil: "",
@@ -63,6 +64,9 @@ const form = (over: Partial<OfferFormData> = {}): OfferFormData => ({
   budget: 0,
   locationIds: [],
   groupIds: [],
+  productIds: [],
+  variantIds: [],
+  categoryIds: [],
   ...over,
 });
 

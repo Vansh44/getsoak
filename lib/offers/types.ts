@@ -29,7 +29,12 @@ export type OfferStatus = (typeof OFFER_STATUSES)[number];
 
 // --- Triggers --------------------------------------------------------------
 
-export const OFFER_TRIGGERS = ["always", "min_subtotal"] as const;
+export const OFFER_TRIGGERS = [
+  "always",
+  "min_subtotal",
+  "contains_product",
+  "contains_category",
+] as const;
 export type OfferTriggerType = (typeof OFFER_TRIGGERS)[number];
 
 export interface OfferTrigger {
@@ -39,12 +44,27 @@ export interface OfferTrigger {
   minSubtotal?: number;
 }
 
+/**
+ * Does this trigger qualify on the CART's CONTENTS rather than its value?
+ *
+ * ★ A CONTENTS TRIGGER NEEDS NO PAYLOAD OF ITS OWN, and that is the whole
+ * reason it is a separate predicate rather than a `productIds` field on the
+ * trigger. `contains_product` / `contains_category` qualify when the offer's
+ * EXISTING scope (`offer_products`) matches a line — so the merchant answers
+ * "which products?" exactly once and it drives both what qualifies and what
+ * gets discounted. Two lists would be a way for them to disagree.
+ */
+export function isContentsTrigger(type: OfferTriggerType): boolean {
+  return type === "contains_product" || type === "contains_category";
+}
+
 // --- Rewards ---------------------------------------------------------------
 
 export const OFFER_REWARDS = [
   "percent_off",
   "amount_off",
   "percent_off_items",
+  "fixed_price",
 ] as const;
 export type OfferRewardType = (typeof OFFER_REWARDS)[number];
 
@@ -54,6 +74,9 @@ export interface OfferReward {
   percent?: number;
   /** `amount_off`: rupees. */
   amount?: number;
+  /** `fixed_price`: the per-UNIT price every matching line is charged, in
+   *  rupees. "Any tee ₹499" — not ₹499 off, and not ₹499 for the line. */
+  unitPrice?: number;
 }
 
 /**
@@ -65,7 +88,9 @@ export interface OfferReward {
  * which offers can coexist.
  */
 export function rewardLevel(type: OfferRewardType): "order" | "line" {
-  return type === "percent_off_items" ? "line" : "order";
+  return type === "percent_off_items" || type === "fixed_price"
+    ? "line"
+    : "order";
 }
 
 /** Is this reward a percentage of the line, rather than a lump sum? Percentage
@@ -73,6 +98,18 @@ export function rewardLevel(type: OfferRewardType): "order" | "line" {
  *  compare an offer price against a special price (see `apply.ts`). */
 export function isPercentReward(type: OfferRewardType): boolean {
   return type === "percent_off" || type === "percent_off_items";
+}
+
+/**
+ * Does this reward name a TARGET PRICE rather than a reduction?
+ *
+ * ★ IT IS NOT A PERCENTAGE AND NOT A LUMP SUM, so it belongs to neither
+ * existing branch. A fixed price is worth *whatever the gap is* on each line —
+ * ₹0 on a line already cheaper — which also means it is the one reward whose
+ * value can be zero on a qualifying line without being a bug.
+ */
+export function isFixedPriceReward(type: OfferRewardType): boolean {
+  return type === "fixed_price";
 }
 
 // --- How an offer treats a line already on a special price ------------------
@@ -148,11 +185,30 @@ const MAX_AMOUNT = 10_000_000; // ₹1 crore — a sanity bound, not a business 
 export function validateOfferRule(
   trigger: OfferTrigger,
   reward: OfferReward,
+  /** Whether the offer scopes any product, variant or category. Only a
+   *  contents trigger cares; `undefined` skips that check for callers that
+   *  validate the rule alone. */
+  hasScope?: boolean,
 ): OfferValidationIssue[] {
   const issues: OfferValidationIssue[] = [];
 
   switch (trigger.type) {
     case "always":
+      break;
+    case "contains_product":
+    case "contains_category":
+      // ★ NO PAYLOAD, BUT IT DOES NEED A SCOPE. A contents trigger qualifies
+      // off `offer_products`, so without scoping it means "contains anything"
+      // — silently identical to `always`, on an offer the merchant built
+      // expressly to be selective. `hasScope` is passed by the caller because
+      // scoping lives in join tables, not in the rule.
+      if (hasScope === false) {
+        issues.push({
+          field: "scope",
+          message:
+            "Choose the products or categories this offer applies to, or set the condition to “Any order”.",
+        });
+      }
       break;
     case "min_subtotal": {
       const v = trigger.minSubtotal;
@@ -191,6 +247,25 @@ export function validateOfferRule(
         issues.push({
           field: "reward.percent",
           message: "A discount cannot exceed 100%.",
+        });
+      }
+      break;
+    }
+    case "fixed_price": {
+      const u = reward.unitPrice;
+      // ★ STRICTLY ABOVE ZERO. A ₹0 target price hands goods over for nothing
+      // and would do it WITHOUT reserving stock — which is the whole reason
+      // gift-with-purchase is its own phase (plan §12). A free item must go
+      // through that path, not through a price of zero here.
+      if (typeof u !== "number" || !Number.isFinite(u) || u <= 0) {
+        issues.push({
+          field: "reward.unitPrice",
+          message: "Enter the price each item should be, above zero.",
+        });
+      } else if (u > MAX_AMOUNT) {
+        issues.push({
+          field: "reward.unitPrice",
+          message: "That price is too large.",
         });
       }
       break;

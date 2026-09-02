@@ -27,6 +27,11 @@ const fieldClass =
 const labelClass =
   "mb-1.5 block text-xs font-medium uppercase tracking-wide text-[#6b7280]";
 const hintClass = "mt-1 block text-[11px] text-[#9ca3af]";
+/** ★ The list is CAPPED and filterable rather than paginated. A store on the
+ *  unlimited plan can have thousands of products, and rendering every checkbox
+ *  makes the page unusable long before it makes the offer better — scoping by
+ *  CATEGORY is the answer at that size, which the label says. */
+const PRODUCT_PICKER_LIMIT = 200;
 
 const dateValue = (iso: string | null) => (iso ? iso.slice(0, 10) : "");
 
@@ -36,6 +41,11 @@ export function OfferForm({
   groups,
   initialLocationIds,
   initialGroupIds,
+  initialProductIds,
+  initialVariantIds,
+  initialCategoryIds,
+  products,
+  categories,
   allowsGroups,
 }: {
   offer: OfferRow | null;
@@ -43,6 +53,11 @@ export function OfferForm({
   groups: { id: string; name: string }[];
   initialLocationIds: string[];
   initialGroupIds: string[];
+  initialProductIds: string[];
+  initialVariantIds: string[];
+  initialCategoryIds: string[];
+  products: { id: string; name: string }[];
+  categories: { id: string; name: string }[];
   allowsGroups: boolean;
 }) {
   const router = useRouter();
@@ -60,6 +75,7 @@ export function OfferForm({
     rewardType: offer?.rewardType ?? "percent_off",
     percent: offer?.percent ?? 10,
     amount: offer?.amount ?? 0,
+    unitPrice: offer?.unitPrice ?? 0,
     channels: offer?.channels ?? [],
     validFrom: dateValue(offer?.validFrom ?? null),
     validUntil: dateValue(offer?.validUntil ?? null),
@@ -68,6 +84,9 @@ export function OfferForm({
     budget: offer?.budget ?? 0,
     locationIds: initialLocationIds,
     groupIds: initialGroupIds,
+    productIds: initialProductIds,
+    variantIds: initialVariantIds,
+    categoryIds: initialCategoryIds,
   });
 
   const set = <K extends keyof OfferFormData>(k: K, v: OfferFormData[K]) =>
@@ -76,20 +95,52 @@ export function OfferForm({
   const toggle = (list: string[], id: string) =>
     list.includes(id) ? list.filter((x) => x !== id) : [...list, id];
 
+  const [productFilter, setProductFilter] = useState("");
+
+  // A line-level reward discounts the scope; a basket condition uses the scope
+  // to qualify. Either way the picker is required — an unscoped line reward is
+  // refused by the server, and an unscoped basket condition by the database.
+  const scopeIsReward =
+    form.rewardType === "percent_off_items" ||
+    form.rewardType === "fixed_price";
+  const scopeIsCondition =
+    form.triggerType === "contains_product" ||
+    form.triggerType === "contains_category";
+  const needsScope = scopeIsReward || scopeIsCondition;
+  const scopeSet =
+    form.productIds.length + form.variantIds.length + form.categoryIds.length >
+    0;
+
+  const shownProducts = useMemo(() => {
+    const q = productFilter.trim().toLowerCase();
+    const base = q
+      ? products.filter((pr) => pr.name.toLowerCase().includes(q))
+      : products;
+    return base.slice(0, PRODUCT_PICKER_LIMIT);
+  }, [products, productFilter]);
+
   // What this offer will do, in the merchant's own words, updated live. A
   // rule expressed as five separate inputs is hard to read back; one sentence
   // is how a merchant catches "₹1,000 off" when they meant "₹100".
   const summary = useMemo(() => {
+    const scopeCount =
+      form.productIds.length + form.variantIds.length + form.categoryIds.length;
+    const scoped = scopeCount > 0 ? ` (${scopeCount} selected)` : "";
     const gives =
       form.rewardType === "amount_off"
-        ? `₹${Number(form.amount || 0).toLocaleString("en-IN")} off`
-        : `${Number(form.percent || 0)}% off${
-            form.rewardType === "percent_off_items" ? " matching items" : ""
-          }`;
+        ? `₹${Number(form.amount || 0).toLocaleString("en-IN")} off the order`
+        : form.rewardType === "fixed_price"
+          ? `Chosen items${scoped} at ₹${Number(form.unitPrice || 0).toLocaleString("en-IN")} each`
+          : form.rewardType === "percent_off_items"
+            ? `${Number(form.percent || 0)}% off chosen items${scoped}`
+            : `${Number(form.percent || 0)}% off the order`;
     const when =
       form.triggerType === "min_subtotal"
         ? ` on orders over ₹${Number(form.minSubtotal || 0).toLocaleString("en-IN")}`
-        : " on any order";
+        : form.triggerType === "contains_product" ||
+            form.triggerType === "contains_category"
+          ? ` when the basket includes them${scoped}`
+          : " on any order";
     const how =
       form.delivery === "automatic"
         ? ", applied automatically"
@@ -166,9 +217,33 @@ export function OfferForm({
               >
                 <option value="percent_off">Percentage off the order</option>
                 <option value="amount_off">Amount off the order</option>
+                <option value="percent_off_items">
+                  Percentage off chosen items
+                </option>
+                <option value="fixed_price">
+                  A set price for each chosen item
+                </option>
               </select>
             </label>
-            {form.rewardType === "amount_off" ? (
+            {form.rewardType === "fixed_price" ? (
+              <label className="block">
+                <span className={hintClass}>Price per item (₹)</span>
+                <input
+                  className={fieldClass}
+                  inputMode="numeric"
+                  value={form.unitPrice || ""}
+                  onChange={(e) =>
+                    set(
+                      "unitPrice",
+                      Number(e.target.value.replace(/\D/g, "")) || 0,
+                    )
+                  }
+                />
+                <span className={hintClass}>
+                  Items already cheaper than this are left alone.
+                </span>
+              </label>
+            ) : form.rewardType === "amount_off" ? (
               <label className="block">
                 <span className={hintClass}>Amount (₹)</span>
                 <input
@@ -216,6 +291,12 @@ export function OfferForm({
               >
                 <option value="always">Any order</option>
                 <option value="min_subtotal">Orders over an amount</option>
+                <option value="contains_category">
+                  Baskets containing a chosen category
+                </option>
+                <option value="contains_product">
+                  Baskets containing a chosen product
+                </option>
               </select>
             </label>
             {form.triggerType === "min_subtotal" && (
@@ -376,6 +457,93 @@ export function OfferForm({
             </label>
           </div>
         </fieldset>
+
+        {(needsScope || scopeSet) && (
+          <fieldset className="mb-5">
+            <legend className={labelClass}>
+              {scopeIsReward
+                ? "Which items are discounted"
+                : "Which items qualify"}
+            </legend>
+            {/* ★ THE SAME PICKER MEANS TWO DIFFERENT THINGS, and saying which
+                is the difference between an offer that works and one that
+                surprises the merchant. The reward level decides it:
+                  · "% off chosen items" / "set price"  → these get discounted
+                  · "% off the order" + a basket condition → these QUALIFY the
+                    offer, and the whole basket is discounted once it does. */}
+            <p className={`${hintClass} mb-2`}>
+              {scopeIsReward
+                ? "Only these lines are discounted. The rest of the basket is charged as normal."
+                : "The basket has to include one of these. Once it does, the discount applies to the whole basket."}
+            </p>
+
+            {categories.length > 0 && (
+              <div className="mb-3">
+                <span className={hintClass}>Categories</span>
+                <div className="mt-1 flex flex-wrap gap-3">
+                  {categories.map((c) => (
+                    <label
+                      key={c.id}
+                      className="flex items-center gap-2 text-sm"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={form.categoryIds.includes(c.id)}
+                        onChange={() =>
+                          set("categoryIds", toggle(form.categoryIds, c.id))
+                        }
+                      />
+                      {c.name}
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {products.length > 0 && (
+              <div>
+                <span className={hintClass}>
+                  Products
+                  {products.length >= PRODUCT_PICKER_LIMIT &&
+                    ` (first ${PRODUCT_PICKER_LIMIT}; pick a category for a wider range)`}
+                </span>
+                <input
+                  className={`${fieldClass} mt-1`}
+                  placeholder="Filter products…"
+                  value={productFilter}
+                  onChange={(e) => setProductFilter(e.target.value)}
+                />
+                <div className="mt-2 max-h-56 overflow-y-auto rounded-md border border-[#e5e7eb] p-2">
+                  {shownProducts.length === 0 ? (
+                    <p className={hintClass}>Nothing matches that.</p>
+                  ) : (
+                    shownProducts.map((pr) => (
+                      <label
+                        key={pr.id}
+                        className="flex items-center gap-2 py-0.5 text-sm"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={form.productIds.includes(pr.id)}
+                          onChange={() =>
+                            set("productIds", toggle(form.productIds, pr.id))
+                          }
+                        />
+                        {pr.name}
+                      </label>
+                    ))
+                  )}
+                </div>
+              </div>
+            )}
+
+            {needsScope && !scopeSet && (
+              <p className="mt-2 text-[11px] text-amber-700">
+                Choose at least one, or this offer cannot be saved.
+              </p>
+            )}
+          </fieldset>
+        )}
 
         {locations.length > 1 && (
           <fieldset className="mb-5">
