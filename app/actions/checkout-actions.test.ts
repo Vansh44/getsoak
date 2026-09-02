@@ -1385,6 +1385,82 @@ describe("placeOrder — offers", () => {
     await placeOrder(validForm, [oneItem()]);
     expect(recordOfferRedemptions).not.toHaveBeenCalled();
     expect(reserveOfferUses).not.toHaveBeenCalled();
+  });
+
+  // -------------------------------------------------------------------------
+  // ★ THE ENGINE MUST BE TOLD WHAT A LINE IS ON SALE FROM, or
+  // `offers.onSalePrice` cannot work online. Its contract is that
+  // `unitPrice` is what will be charged and `regularUnitPrice` is the
+  // non-sale price, with "absent or equal" meaning not on sale — so sending
+  // only one of them does not fail loudly, it silently makes every sale line
+  // look full-price and a `skip` setting stop skipping. Pinned in both
+  // directions.
+  // -------------------------------------------------------------------------
+
+  const lineSentToEngine = () =>
+    vi.mocked(resolveOffersForCart).mock.calls.at(-1)?.[0]?.lines?.[0] as any;
+
+  it("★ sends the sale price and the price it is on sale from", async () => {
+    dbHolder.current = makeDbMock({
+      selectQueue: [
+        [productRow()],
+        [],
+        [],
+        [
+          {
+            id: "v1",
+            name: "pack of 4",
+            selling_price: 500,
+            special_price: 450,
+            cost_price: null,
+            track_inventory: false,
+            allow_backorder: false,
+            sku: "SKU1V01",
+            requires_shipping: false,
+            weight_grams: null,
+            length_cm: null,
+            width_cm: null,
+            height_cm: null,
+          },
+        ],
+      ],
+      executeQueue: [[{ reserved: true }]],
+      returning: [{ id: "order-1", order_ref: "ORD1" }],
+    });
+
+    await placeOrder(validForm, [
+      oneItem({ variantId: "v1", variantName: "pack of 4" }),
+    ]);
+
+    // Charged 450, on sale from 500 — the same pair placePosSale passes, so a
+    // basket prices identically in both channels.
+    expect(lineSentToEngine()).toMatchObject({
+      unitPrice: 450,
+      regularUnitPrice: 500,
+    });
+  });
+
+  it("★ reports a full-price line as not on sale", async () => {
+    // The engine treats equal prices as "no sale", so a simple product must
+    // send its own selling price as both rather than omitting one or reaching
+    // for base_price — MRP is a struck-through list price, and passing it
+    // would let `best` mode discount from a much higher base.
+    // Its own db mock: this describe's beforeEach deliberately does not set
+    // one, so borrowing the previous test's exhausted queue makes placeOrder
+    // fail before it ever reaches the engine.
+    dbHolder.current = makeDbMock({
+      selectQueue: [[productRow()], [], []],
+      executeQueue: [[{ reserved: true }]],
+      returning: [{ id: "order-1", order_ref: "ORD1" }],
+    });
+
+    await placeOrder(validForm, [oneItem()]);
+
+    const line = lineSentToEngine();
+    expect(line).toMatchObject({ unitPrice: 100, regularUnitPrice: 100 });
+    expect(line.regularUnitPrice).not.toBeGreaterThan(line.unitPrice);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // getCartTaxRates — the cart summary's tax BASIS

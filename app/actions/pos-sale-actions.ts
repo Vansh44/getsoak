@@ -1649,12 +1649,10 @@ export async function placePosSale(
       categoryId: l.category_id ?? null,
       quantity: l.quantity,
       unitPrice: l.unit_price,
-      // ★ `offers.onSalePrice` WORKS AT THE TILL, and does not online — an
-      // asymmetry worth knowing rather than discovering. `placePosSale`
-      // charges `special_price` when a variant has one (see the unit
-      // resolution above), so there is a real sale price for an offer to
-      // interact with. `placeOrder` charges `selling_price` and never reads
-      // `special_price`, so the setting is inert there until that is fixed.
+      // ★ The price this line is on sale FROM, so `offers.onSalePrice` can
+      // tell a discounted line from a full-price one. `placeOrder` passes the
+      // same pair online now that it charges `special_price` too, so the two
+      // counters price a basket identically.
       regularUnitPrice: l.listed_price,
       lineDiscount: l.line_discount,
     })),

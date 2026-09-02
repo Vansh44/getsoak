@@ -2160,6 +2160,17 @@ allow-popups"` + `srcDoc`, **never `allow-same-origin`**: the session cookie
       the db mock serves canned rows, so the price assertions alone stay green if
       someone drops it. Same class of defect `lib/pos/totals.ts` exists to
       prevent (§22).
+      **★ AND IT UNBLOCKED `offers.onSalePrice` ONLINE.** The offer engine reads
+      `unitPrice` (what will be charged) alongside `regularUnitPrice` (the
+      non-sale price), where **absent or equal means "not on sale"** — a default
+      that fails SILENTLY. `placePosSale` passed the pair; `placeOrder` passed
+      only `unitPrice`, so online every sale line looked full-price and `skip`
+      did not skip while `stack` did not stack, with no error anywhere. That was
+      correct while nothing online charged a sale price; both halves move
+      together, so `placeOrder` now passes `regularUnitPrice` = the variant's
+      `selling_price` — never `base_price`, which is a struck-through MRP and
+      would let `best` discount from a much higher base (docs/offers-plan.md
+      §14).
     - **Service-role writes**: `orders`/`order_items` have **no customer INSERT
       RLS policy** by design; the writes run with `createAdminClient()` (service
       role) _after_ all the above validation. Customers get RLS `SELECT` on their

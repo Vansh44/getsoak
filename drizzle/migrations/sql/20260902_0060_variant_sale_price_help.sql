@@ -37,6 +37,22 @@ WHERE slug = 'add-product-images-and-variants'
   AND status = 'published'
   AND body NOT LIKE '%<h2>Sale prices on variants</h2>%';
 
+-- The offers guide (migration 0059) already presents `offers.onSalePrice` as a
+-- store-wide choice, which was not true online: `placeOrder` sent the engine no
+-- regular price, so every sale line looked full-price and "Skip sale items"
+-- silently did not skip. It is true in both channels now, so say so.
+UPDATE public.help_articles
+SET body = replace(
+      body,
+      '<h2>What shoppers see</h2>',
+      $both$<p>Your choice applies both on your online store and at the register, so the same basket is priced the same way in either place.</p>
+<h2>What shoppers see</h2>$both$
+    ),
+    updated_at = now()
+WHERE slug = 'create-and-manage-offers'
+  AND status = 'published'
+  AND body NOT LIKE '%priced the same way in either place%';
+
 DO $$
 BEGIN
   IF NOT EXISTS (
@@ -60,5 +76,14 @@ BEGIN
       AND body LIKE '%Clear it to return the variant to its selling price%'
   ) THEN
     RAISE EXCEPTION 'variant sale-price variants guidance was not installed';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1
+    FROM public.help_articles
+    WHERE slug = 'create-and-manage-offers'
+      AND status = 'published'
+      AND body LIKE '%priced the same way in either place%'
+  ) THEN
+    RAISE EXCEPTION 'offers sale-price channel guidance was not installed';
   END IF;
 END $$;
