@@ -25,4 +25,21 @@ describe("dashboard Ask anything", () => {
 
     expect(startExpandedChat).toHaveBeenCalledWith("What is my plan?");
   });
+
+  it("tells the phone keyboard what this field is for", () => {
+    vi.mocked(useChat).mockReturnValue({
+      isChatOpen: false,
+      startExpandedChat: vi.fn(),
+    } as unknown as ReturnType<typeof useChat>);
+
+    render(<AskAnything />);
+    const input = screen.getByLabelText("Message Mink AI");
+
+    // Invisible on a desktop browser and therefore easy to delete by accident,
+    // but on iOS they are the difference between QuickType word suggestions and
+    // the password/card/address AutoFill bar sitting over a chat composer.
+    expect(input).toHaveAttribute("enterkeyhint", "send");
+    expect(input).toHaveAttribute("autocomplete", "off");
+    expect(input).toHaveAttribute("autocapitalize", "sentences");
+  });
 });
