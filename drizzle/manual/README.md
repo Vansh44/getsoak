@@ -125,6 +125,50 @@ DB_NAME=storemink npm run db:migrate -- apply --environment production \
   --confirm-production storemink --commit "$(git rev-parse HEAD)"
 ```
 
+## The `rebaseline:` source rows in production (2026-09-02)
+
+`public.schema_migrations.source` normally holds one of two values:
+`sql/<file>` for a migration the runner **executed**, and `adopt:sql/<file>`
+for one it **verified as already present**. Production also carries 56 rows
+whose source begins `rebaseline:`. They are the honest record of a one-off
+recovery, and the distinction matters — those rows were written in bulk
+**without** per-contract verification, so they do not carry the guarantee the
+other two sources do.
+
+**Why adoption could not be used.** Production's entire history had been applied
+by hand, out of ledger order. An `adoptVerify` contract describes the state
+immediately after its own migration, so once later migrations have also been
+hand-applied, earlier contracts stop being satisfiable. Four were, provably by
+supersession rather than by damage:
+
+| Migration | Asserts                                             | Superseded by                                                                               |
+| --------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `0015`    | POS Help category at `position = 4`                 | 0019–0024 renumbered it to 5                                                                |
+| `0023`    | a POS/Analytics Help sentence                       | a later guide rewrote it                                                                    |
+| `0031`    | "Continue as walk-in" in `process-an-in-store-sale` | **0032 deliberately removed it** when it corrected that guide to the submit-only phone flow |
+| `0036`    | specific Mink drawer wording                        | 0037 / 0050 / 0056 rewrote it                                                               |
+
+Staging adopted `0015` cleanly only because staging was adopted **in order**,
+while `position` was still 4. That is the whole difference between the two
+databases, and it is why `adopt` is the right tool for "the last few were
+hand-run" and the wrong one for "the entire history was".
+
+**What was NOT rebaselined.** A read-only classifier evaluated every pending
+contract and reported 52 present, 4 superseded (above), and **1 absent** —
+`0059`, whose six tables genuinely did not exist. That one plus the never-applied
+`0060` were left pending and **executed** by `apply`. ★ Recording an absent
+migration is how a ledger comes to report "clean" over a database that is
+missing tables; classify before recording, never the reverse.
+
+Afterwards both databases reported the same
+`schema_sha256=4c6fde48…` and `verify` passed on each.
+
+**Do not repeat this to skip an adoption.** The prohibition above stands: never
+weaken a postcondition or insert into the ledger to force adoption. This was an
+owner-directed recovery from a database whose ledger had never been used, on an
+environment with zero orders, and every row it wrote is marked so it can be
+told apart from a verified one.
+
 The first enrolled migration is `supabase/logistics_01_shiprocket.sql`. Although
 it retains its historical location, it is immutable now: editing it will make
 verification fail anywhere it has been applied. Every new schema change gets a
