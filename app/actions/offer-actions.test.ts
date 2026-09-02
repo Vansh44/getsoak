@@ -56,6 +56,10 @@ const form = (over: Partial<OfferFormData> = {}): OfferFormData => ({
   percent: 10,
   amount: 0,
   unitPrice: 0,
+  buyQuantity: 1,
+  getQuantity: 1,
+  getPercent: 100,
+  maxSets: 1,
   channels: [],
   validFrom: "",
   validUntil: "",
@@ -292,6 +296,110 @@ describe("offer actions", () => {
       const res = await createOffer(form({ delivery: "code", code: "DUPE" }));
       expect(res.error).toBeTruthy();
       expect(res.error).not.toMatch(/violates|constraint/i);
+    });
+  });
+
+  describe("buy X get Y (Phase C)", () => {
+    const bxgy = (over: Partial<OfferFormData> = {}) =>
+      form({
+        rewardType: "buy_x_get_y",
+        categoryIds: ["cat-1"],
+        buyQuantity: 1,
+        getQuantity: 1,
+        getPercent: 100,
+        maxSets: 1,
+        ...over,
+      });
+
+    it("stores the quantities and the discount on the free units", async () => {
+      await createOffer(
+        bxgy({ buyQuantity: 2, getQuantity: 1, getPercent: 50 }),
+      );
+      expect(written().rewardConfig).toEqual({
+        buyQuantity: 2,
+        getQuantity: 1,
+        getPercent: 50,
+        maxSets: 1,
+      });
+    });
+
+    it("★ maxSets of 0 means NO LIMIT and is stored absent, not as zero", async () => {
+      await createOffer(bxgy({ maxSets: 0 }));
+      const cfg = written().rewardConfig as Record<string, unknown>;
+      expect("maxSets" in cfg).toBe(false);
+    });
+
+    it("defaults the free units to 100% off when left blank", async () => {
+      await createOffer(bxgy({ getPercent: 0 }));
+      expect(
+        (written().rewardConfig as { getPercent: number }).getPercent,
+      ).toBe(100);
+    });
+
+    it("refuses a quantity below one", async () => {
+      expect((await createOffer(bxgy({ buyQuantity: 0 }))).error).toMatch(
+        /how many to buy/i,
+      );
+    });
+
+    it("refuses a discount above 100%", async () => {
+      expect((await createOffer(bxgy({ getPercent: 150 }))).error).toMatch(
+        /between 1% and 100%/i,
+      );
+    });
+
+    it("★ refuses one with no products chosen — it would cover the catalogue", async () => {
+      const res = await createOffer(bxgy({ categoryIds: [] }));
+      expect(res.error).toMatch(/Choose the products or categories/i);
+    });
+  });
+
+  describe("product scoping (Phase B)", () => {
+    it("stores one row per target", async () => {
+      await createOffer(
+        form({
+          rewardType: "percent_off_items",
+          productIds: ["p1", "p2"],
+          categoryIds: ["c1"],
+        }),
+      );
+      // offers insert first, then the scope rows.
+      const scopeInsert = dbHolder.current.calls.values[1];
+      expect(
+        Array.isArray(scopeInsert) ? scopeInsert : [scopeInsert],
+      ).toHaveLength(3);
+    });
+
+    it("★ refuses a line-level reward with no scope", async () => {
+      const res = await createOffer(form({ rewardType: "percent_off_items" }));
+      expect(res.error).toMatch(/Choose the products or categories/i);
+    });
+
+    it("refuses a basket condition with no scope", async () => {
+      const res = await createOffer(form({ triggerType: "contains_category" }));
+      expect(res.error).toMatch(/products or categories/i);
+    });
+
+    it("an order-level reward still needs no scope", async () => {
+      expect((await createOffer(form())).success).toBe(true);
+    });
+
+    it("stores a fixed price per unit", async () => {
+      await createOffer(
+        form({
+          rewardType: "fixed_price",
+          unitPrice: 499,
+          categoryIds: ["c1"],
+        }),
+      );
+      expect(written().rewardConfig).toEqual({ unitPrice: 499 });
+    });
+
+    it("refuses a fixed price of zero — a free item needs stock reserved", async () => {
+      const res = await createOffer(
+        form({ rewardType: "fixed_price", unitPrice: 0, categoryIds: ["c1"] }),
+      );
+      expect(res.error).toMatch(/above zero/i);
     });
   });
 });

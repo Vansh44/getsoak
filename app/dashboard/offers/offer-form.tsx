@@ -33,6 +33,14 @@ const hintClass = "mt-1 block text-[11px] text-[#9ca3af]";
  *  CATEGORY is the answer at that size, which the label says. */
 const PRODUCT_PICKER_LIMIT = 200;
 
+/** The four shapes merchants actually ask for, over one stored rule. */
+const BXGY_PRESETS = [
+  { label: "Buy 1 get 1 free", buy: 1, get: 1, pct: 100 },
+  { label: "Buy 2 get 1 free", buy: 2, get: 1, pct: 100 },
+  { label: "Buy 1 get 2 free", buy: 1, get: 2, pct: 100 },
+  { label: "Buy 1 get 1 half price", buy: 1, get: 1, pct: 50 },
+] as const;
+
 const dateValue = (iso: string | null) => (iso ? iso.slice(0, 10) : "");
 
 export function OfferForm({
@@ -76,6 +84,10 @@ export function OfferForm({
     percent: offer?.percent ?? 10,
     amount: offer?.amount ?? 0,
     unitPrice: offer?.unitPrice ?? 0,
+    buyQuantity: offer?.buyQuantity ?? 1,
+    getQuantity: offer?.getQuantity ?? 1,
+    getPercent: offer?.getPercent ?? 100,
+    maxSets: offer?.maxSets ?? 1,
     channels: offer?.channels ?? [],
     validFrom: dateValue(offer?.validFrom ?? null),
     validUntil: dateValue(offer?.validUntil ?? null),
@@ -102,7 +114,8 @@ export function OfferForm({
   // refused by the server, and an unscoped basket condition by the database.
   const scopeIsReward =
     form.rewardType === "percent_off_items" ||
-    form.rewardType === "fixed_price";
+    form.rewardType === "fixed_price" ||
+    form.rewardType === "buy_x_get_y";
   const scopeIsCondition =
     form.triggerType === "contains_product" ||
     form.triggerType === "contains_category";
@@ -131,9 +144,15 @@ export function OfferForm({
         ? `₹${Number(form.amount || 0).toLocaleString("en-IN")} off the order`
         : form.rewardType === "fixed_price"
           ? `Chosen items${scoped} at ₹${Number(form.unitPrice || 0).toLocaleString("en-IN")} each`
-          : form.rewardType === "percent_off_items"
-            ? `${Number(form.percent || 0)}% off chosen items${scoped}`
-            : `${Number(form.percent || 0)}% off the order`;
+          : form.rewardType === "buy_x_get_y"
+            ? `Buy ${form.buyQuantity || 0}, get ${form.getQuantity || 0}${
+                form.getPercent && form.getPercent < 100
+                  ? ` at ${form.getPercent}% off`
+                  : " free"
+              }${scoped}`
+            : form.rewardType === "percent_off_items"
+              ? `${Number(form.percent || 0)}% off chosen items${scoped}`
+              : `${Number(form.percent || 0)}% off the order`;
     const when =
       form.triggerType === "min_subtotal"
         ? ` on orders over ₹${Number(form.minSubtotal || 0).toLocaleString("en-IN")}`
@@ -223,9 +242,81 @@ export function OfferForm({
                 <option value="fixed_price">
                   A set price for each chosen item
                 </option>
+                <option value="buy_x_get_y">Buy X get Y</option>
               </select>
             </label>
-            {form.rewardType === "fixed_price" ? (
+            {form.rewardType === "buy_x_get_y" ? (
+              <div className="sm:col-span-2">
+                {/* ★ PRESETS OVER FOUR NUMBER BOXES. "Buy 1 get 1 free" is what
+                    a merchant is thinking; buy/get/percent is how it is
+                    stored. The boxes stay visible and editable underneath, so
+                    an unusual combination is still reachable — a preset is a
+                    shortcut, not a restriction. */}
+                <span className={hintClass}>Common offers</span>
+                <div className="mb-3 mt-1 flex flex-wrap gap-2">
+                  {BXGY_PRESETS.map((preset) => {
+                    const active =
+                      form.buyQuantity === preset.buy &&
+                      form.getQuantity === preset.get &&
+                      form.getPercent === preset.pct;
+                    return (
+                      <button
+                        key={preset.label}
+                        type="button"
+                        onClick={() =>
+                          setForm((f) => ({
+                            ...f,
+                            buyQuantity: preset.buy,
+                            getQuantity: preset.get,
+                            getPercent: preset.pct,
+                          }))
+                        }
+                        className={`rounded-full border px-3 py-1 text-xs ${
+                          active
+                            ? "border-[#4f46e5] bg-[#eef2ff] text-[#4f46e5]"
+                            : "border-[#e5e7eb] text-[#6b7280]"
+                        }`}
+                      >
+                        {preset.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="grid gap-4 sm:grid-cols-4">
+                  {(
+                    [
+                      ["buyQuantity", "Buy"],
+                      ["getQuantity", "Get"],
+                      ["getPercent", "% off the free ones"],
+                      ["maxSets", "Max sets per order"],
+                    ] as const
+                  ).map(([key, label]) => (
+                    <label key={key} className="block">
+                      <span className={hintClass}>{label}</span>
+                      <input
+                        className={fieldClass}
+                        inputMode="numeric"
+                        value={form[key] || ""}
+                        placeholder={key === "maxSets" ? "No limit" : ""}
+                        onChange={(e) =>
+                          set(
+                            key,
+                            Number(e.target.value.replace(/\D/g, "")) || 0,
+                          )
+                        }
+                      />
+                    </label>
+                  ))}
+                </div>
+                <span className={hintClass}>
+                  A set is {form.buyQuantity || 0} + {form.getQuantity || 0} ={" "}
+                  {(form.buyQuantity || 0) + (form.getQuantity || 0)} items. The
+                  cheapest qualifying items are the discounted ones, counted
+                  across the whole basket. Leave the limit blank only if you
+                  mean the offer to repeat without end.
+                </span>
+              </div>
+            ) : form.rewardType === "fixed_price" ? (
               <label className="block">
                 <span className={hintClass}>Price per item (₹)</span>
                 <input

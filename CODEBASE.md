@@ -8190,7 +8190,40 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       constraint trigger, so a contents condition cannot be saved without a
       scope even by a direct write; deferral is what lets the scope rows arrive
       after the offer row in the same transaction.
-    - **Not built (Phases C–I):** Buy X get Y,
+    - **★★ PHASE C (shipped): buy X get Y is the first reward valued across
+      MULTIPLE lines, and that is why it needed its own claim pass.** Every
+      earlier reward is separable — a percentage or a target price on one line
+      depends only on that line, so the best offer per line can be chosen
+      independently and the answer is exact. "Buy 2 get 1" over three lines of
+      one unit each is ONE set spanning three lines, which no per-line view can
+      see. So `claimGroupOffer` flattens every eligible line into UNITS, counts
+      sets over that flat list, and the **cheapest units are the discounted
+      ones** (the retail convention, the customer-favourable reading, and
+      deterministic because ties break on line index).
+      **★ A SET IS `buy + get` UNITS** — three items on buy-1-get-1 is one set
+      plus one ordinary paid item, not one and a half.
+      **★ A GROUP OFFER COMPETES ON VALUE**, taking its lines only when it
+      beats what those lines already had; otherwise it would override a deeper
+      per-line offer purely by being evaluated later. Best-offer-wins holds
+      across reward SHAPES, not only within one shape, and each line still
+      carries exactly one offer.
+      **★ `maxSets` EXISTS BECAUSE THE FIRST ONE A MERCHANT BUILDS IS
+      UNLIMITED** — a basket of 20 on buy-1-get-1 gives 10 away. 0 in the form
+      means no limit and is stored ABSENT, the `max_uses` rule again.
+      The near-miss gained a second shape: `kind: "units"` ("add 1 more and one
+      is free") beside `kind: "spend"`. ★ Two shapes rather than one number,
+      because a single `gap` would force the UI to guess which it held — and it
+      only fires when the cart ALREADY holds a qualifying item, since
+      suggesting a set to somebody with none is an advert, not a nudge.
+      Migration `20260902_0062` widens the allowlist, constrains the config
+      shape, and widens the deferred trigger so EVERY item-level reward must
+      name its items. ★★ Its CHECK coalesces each required key: a CHECK is
+      SATISFIED when it evaluates to NULL, and `(config ->> 'buyQuantity') ~ '…'`
+      is NULL when the key is ABSENT — so the obvious spelling accepted a
+      buy-X-get-Y row with no quantities at all, which the engine values at zero
+      while the merchant's list shows it active. Caught by running it against a
+      real Postgres, not by reading it.
+    - **Not built (Phases D–I):**
       tiers and volume breaks, payment-method / fulfilment / time-window
       conditions, free shipping, gift with purchase, bundles, cashback, and Mink
       offer authority. `PosCatalogItem` carries `categoryId` (cache

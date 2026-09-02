@@ -65,6 +65,7 @@ export const OFFER_REWARDS = [
   "amount_off",
   "percent_off_items",
   "fixed_price",
+  "buy_x_get_y",
 ] as const;
 export type OfferRewardType = (typeof OFFER_REWARDS)[number];
 
@@ -77,6 +78,22 @@ export interface OfferReward {
   /** `fixed_price`: the per-UNIT price every matching line is charged, in
    *  rupees. "Any tee ₹499" — not ₹499 off, and not ₹499 for the line. */
   unitPrice?: number;
+  /**
+   * `buy_x_get_y`: how many units must be bought before the reward triggers,
+   * and how many are then discounted.
+   *
+   * ★ THE SET IS `buyQuantity + getQuantity` UNITS, which is what makes "buy 1
+   * get 1" mean two items rather than three. Four units are two complete sets,
+   * three are one set plus one ordinary paid unit.
+   */
+  buyQuantity?: number;
+  getQuantity?: number;
+  /** How much off the "get" units: 100 is free, 50 is half price. Default 100. */
+  getPercent?: number;
+  /** Most sets one order may earn. `undefined` = unlimited. ★ A cart of 100
+   *  units on buy-1-get-1 otherwise gives away 50 items, which merchants
+   *  reliably do not mean the first time they build one. */
+  maxSets?: number;
 }
 
 /**
@@ -88,9 +105,27 @@ export interface OfferReward {
  * which offers can coexist.
  */
 export function rewardLevel(type: OfferRewardType): "order" | "line" {
-  return type === "percent_off_items" || type === "fixed_price"
+  return type === "percent_off_items" ||
+    type === "fixed_price" ||
+    type === "buy_x_get_y"
     ? "line"
     : "order";
+}
+
+/**
+ * Must this reward be valued across the WHOLE scoped set at once, rather than
+ * line by line?
+ *
+ * ★ THIS IS THE DISTINCTION THE ENGINE'S CLAIM LOOP TURNS ON. Every earlier
+ * reward is separable: a percentage or a target price on one line depends only
+ * on that line, so the best offer per line can be chosen independently and the
+ * result is exact. Buy-X-get-Y is not — "buy 2 get 1" over three lines of one
+ * unit each is one set spanning three lines, and no per-line view can see it.
+ * A group reward therefore gets its own claim pass (`claimGroupOffer`) which
+ * competes against the per-line winners on the lines it wants.
+ */
+export function isGroupReward(type: OfferRewardType): boolean {
+  return type === "buy_x_get_y";
 }
 
 /** Is this reward a percentage of the line, rather than a lump sum? Percentage
@@ -266,6 +301,39 @@ export function validateOfferRule(
         issues.push({
           field: "reward.unitPrice",
           message: "That price is too large.",
+        });
+      }
+      break;
+    }
+    case "buy_x_get_y": {
+      const buy = reward.buyQuantity;
+      const get = reward.getQuantity;
+      const pct = reward.getPercent ?? 100;
+      const cap = reward.maxSets;
+      const whole = (n: unknown) =>
+        typeof n === "number" && Number.isInteger(n) && n >= 1 && n <= 100;
+      if (!whole(buy) || !whole(get)) {
+        issues.push({
+          field: "reward.buyQuantity",
+          message: "Enter how many to buy and how many to get, from 1 to 100.",
+        });
+      }
+      if (
+        typeof pct !== "number" ||
+        !Number.isFinite(pct) ||
+        pct <= 0 ||
+        pct > 100
+      ) {
+        issues.push({
+          field: "reward.getPercent",
+          message:
+            "The discount on the free items must be between 1% and 100%.",
+        });
+      }
+      if (cap !== undefined && !whole(cap)) {
+        issues.push({
+          field: "reward.maxSets",
+          message: "Leave the limit blank for no limit, or enter 1 or more.",
         });
       }
       break;

@@ -34,6 +34,16 @@ function rewardPhrase(offer: NearMissOffer): string {
   return "a discount";
 }
 
+/** "one is free" / "two are half price" — what completing the set earns. */
+function setReward(offer: NearMissOffer): string {
+  const n = offer.getQuantity ?? 1;
+  const noun = n === 1 ? "one" : `${n}`;
+  const verb = n === 1 ? "is" : "are";
+  return offer.percent && offer.percent < 100
+    ? `${noun} ${verb} ${offer.percent}% off`
+    : `${noun} ${verb} free`;
+}
+
 export function OfferNudge({
   nearMiss,
   className = "",
@@ -47,6 +57,22 @@ export function OfferNudge({
   const offer = nearMiss?.[0];
   if (!offer || offer.gap <= 0) return null;
 
+  // ★ TWO SENTENCES, BECAUSE THE TWO GAPS ARE NOT THE SAME KIND OF THING.
+  // "Add ₹200 more" and "add 1 more" cannot share a template — a single one
+  // would have to render the unit gap as currency or the spend gap as a count,
+  // and either reads as a bug. The engine tags which it is rather than leaving
+  // the component to infer it from the number.
+  const body =
+    offer.kind === "units" ? (
+      <>
+        Add <strong>{offer.gap}</strong> more and {setReward(offer)}.
+      </>
+    ) : (
+      <>
+        Add <strong>{inr(offer.gap)}</strong> more to get {rewardPhrase(offer)}.
+      </>
+    );
+
   return (
     <p
       className={`sm-offer-nudge ${className}`.trim()}
@@ -54,7 +80,7 @@ export function OfferNudge({
       // that interrupts on every quantity tap is worse than silence.
       aria-live="polite"
     >
-      Add <strong>{inr(offer.gap)}</strong> more to get {rewardPhrase(offer)}.
+      {body}
     </p>
   );
 }

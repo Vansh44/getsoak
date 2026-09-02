@@ -2351,6 +2351,67 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260902_0062_offers_phase_c",
+      "description": "Allow buy-X-get-Y offer rewards, enforce their config shape, and require every item-level reward to name its items",
+      "file": "sql/20260902_0062_offers_phase_c.sql",
+      "checksum": "d603e7bade1f6d58a26b441e55b7d5280000b301fa789ad877e2d35d0de8945d",
+      "transaction": true,
+      "requires": ["20260902_0061_offers_phase_b"],
+      "verify": {},
+      "applyVerify": {
+        "constraints": ["offers_reward_type_check", "offers_bxgy_shape_check"],
+        "functions": ["offers_contents_trigger_needs_scope()"],
+        "queries": [
+          {
+            "name": "buy X get Y is an allowed reward",
+            "sql": "select count(*)::text from pg_constraint where conname = 'offers_reward_type_check' and pg_get_constraintdef(oid) like '%buy_x_get_y%'",
+            "equals": "1"
+          },
+          {
+            "name": "a buy X get Y config cannot omit its quantities",
+            "sql": "select count(*)::text from pg_constraint where conname = 'offers_bxgy_shape_check' and pg_get_constraintdef(oid) like '%coalesce%'",
+            "equals": "1"
+          },
+          {
+            "name": "every item-level reward is required to name its items",
+            "sql": "select count(*)::text from pg_proc where proname = 'offers_contents_trigger_needs_scope' and prosrc like '%buy_x_get_y%'",
+            "equals": "1"
+          },
+          {
+            "name": "the offers guide explains sets, cheapest-free and the per-order limit",
+            "sql": "select count(*)::text from public.help_articles where slug = 'create-and-manage-offers' and status = 'published' and body like '%<h2>Buy one get one, and similar</h2>%' and body like '%A set is the buy count plus the get count%' and body like '%cheapest qualifying items are the discounted ones%' and body like '%counted across the basket, not per line%' and body like '%gives ten away%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "constraints": ["offers_reward_type_check", "offers_bxgy_shape_check"],
+        "functions": ["offers_contents_trigger_needs_scope()"],
+        "queries": [
+          {
+            "name": "buy X get Y is an allowed reward",
+            "sql": "select count(*)::text from pg_constraint where conname = 'offers_reward_type_check' and pg_get_constraintdef(oid) like '%buy_x_get_y%'",
+            "equals": "1"
+          },
+          {
+            "name": "a buy X get Y config cannot omit its quantities",
+            "sql": "select count(*)::text from pg_constraint where conname = 'offers_bxgy_shape_check' and pg_get_constraintdef(oid) like '%coalesce%'",
+            "equals": "1"
+          },
+          {
+            "name": "every item-level reward is required to name its items",
+            "sql": "select count(*)::text from pg_proc where proname = 'offers_contents_trigger_needs_scope' and prosrc like '%buy_x_get_y%'",
+            "equals": "1"
+          },
+          {
+            "name": "the offers guide explains sets, cheapest-free and the per-order limit",
+            "sql": "select count(*)::text from public.help_articles where slug = 'create-and-manage-offers' and status = 'published' and body like '%<h2>Buy one get one, and similar</h2>%' and body like '%A set is the buy count plus the get count%' and body like '%cheapest qualifying items are the discounted ones%' and body like '%counted across the basket, not per line%' and body like '%gives ten away%'",
+            "equals": "1"
+          }
+        ]
+      }
     }
   ]
 }

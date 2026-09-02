@@ -75,6 +75,11 @@ export interface OfferFormData {
   amount: number;
   /** `fixed_price`: the per-unit price matching items are charged. */
   unitPrice: number;
+  /** `buy_x_get_y`. `maxSets` of 0 = no limit. */
+  buyQuantity: number;
+  getQuantity: number;
+  getPercent: number;
+  maxSets: number;
   /** Empty = every channel. */
   channels: OfferChannel[];
   validFrom: string;
@@ -105,6 +110,10 @@ export interface OfferRow {
   percent: number | null;
   amount: number | null;
   unitPrice: number | null;
+  buyQuantity: number | null;
+  getQuantity: number | null;
+  getPercent: number | null;
+  maxSets: number | null;
   channels: OfferChannel[];
   validFrom: string | null;
   validUntil: string | null;
@@ -195,6 +204,16 @@ function validateForm(form: OfferFormData): string | null {
         form.rewardType === "amount_off" ? Number(form.amount) : undefined,
       unitPrice:
         form.rewardType === "fixed_price" ? Number(form.unitPrice) : undefined,
+      ...(form.rewardType === "buy_x_get_y"
+        ? {
+            buyQuantity: Number(form.buyQuantity),
+            getQuantity: Number(form.getQuantity),
+            getPercent: Number(form.getPercent) || 100,
+            // 0 in the form means "no limit", which is absent in the config —
+            // the same rule the usage caps follow.
+            maxSets: form.maxSets > 0 ? Number(form.maxSets) : undefined,
+          }
+        : {}),
     },
     hasScope,
   );
@@ -255,7 +274,14 @@ function buildRow(form: OfferFormData, userId: string, creating: boolean) {
         ? { amount: Number(form.amount) }
         : form.rewardType === "fixed_price"
           ? { unitPrice: Number(form.unitPrice) }
-          : { percent: Number(form.percent) },
+          : form.rewardType === "buy_x_get_y"
+            ? {
+                buyQuantity: Number(form.buyQuantity),
+                getQuantity: Number(form.getQuantity),
+                getPercent: Number(form.getPercent) || 100,
+                ...(form.maxSets > 0 ? { maxSets: Number(form.maxSets) } : {}),
+              }
+            : { percent: Number(form.percent) },
     channels: form.channels ?? [],
     validFrom: toTimestamp(form.validFrom),
     validUntil: toTimestamp(form.validUntil),
@@ -543,6 +569,10 @@ function mapRow(row: typeof offers.$inferSelect): OfferRow {
     percent: numOrNull(reward.percent),
     amount: numOrNull(reward.amount),
     unitPrice: numOrNull(reward.unitPrice),
+    buyQuantity: numOrNull(reward.buyQuantity),
+    getQuantity: numOrNull(reward.getQuantity),
+    getPercent: numOrNull(reward.getPercent),
+    maxSets: numOrNull(reward.maxSets),
     channels: (row.channels ?? []) as OfferChannel[],
     validFrom: row.validFrom,
     validUntil: row.validUntil,

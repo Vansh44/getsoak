@@ -1102,3 +1102,311 @@ describe("applyOffers — scope means different things per reward level", () => 
     expect(r.scenario.chosen).toBe("line_and_order");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase C: buy X get Y — the first reward valued across MULTIPLE lines.
+// ---------------------------------------------------------------------------
+
+describe("applyOffers — buy X get Y", () => {
+  const bxgy = (
+    over: Partial<Offer["reward"]> = {},
+    rest: Partial<Offer> = {},
+  ) =>
+    offer({
+      reward: { type: "buy_x_get_y", buyQuantity: 1, getQuantity: 1, ...over },
+      ...rest,
+    });
+
+  it("buy 1 get 1 on a single line of two units", () => {
+    const r = applyOffers({
+      lines: [line({ quantity: 2, unitPrice: 500 })],
+      offers: [bxgy()],
+      context: ctx(),
+    });
+    expect(r.discount).toBe(500);
+  });
+
+  it("★ counts UNITS ACROSS LINES — one set can span three lines", () => {
+    // Buy 2 get 1, three separate lines of one unit each = one complete set.
+    const r = applyOffers({
+      lines: [
+        line({ id: "a", unitPrice: 300 }),
+        line({ id: "b", unitPrice: 200 }),
+        line({ id: "c", unitPrice: 100 }),
+      ],
+      offers: [bxgy({ buyQuantity: 2, getQuantity: 1 })],
+      context: ctx(),
+    });
+    // The CHEAPEST unit is the free one.
+    expect(r.discount).toBe(100);
+    expect(r.lines.find((l) => l.id === "c")?.offerDiscount).toBe(100);
+    expect(r.lines.find((l) => l.id === "a")?.offerDiscount).toBe(0);
+  });
+
+  it("★ the cheapest units are free — '3 for the price of 2'", () => {
+    const r = applyOffers({
+      lines: [
+        line({ id: "cheap", quantity: 2, unitPrice: 100 }),
+        line({ id: "dear", quantity: 1, unitPrice: 900 }),
+      ],
+      offers: [bxgy({ buyQuantity: 2, getQuantity: 1 })],
+      context: ctx(),
+    });
+    expect(r.discount).toBe(100);
+    expect(r.lines.find((l) => l.id === "cheap")?.offerDiscount).toBe(100);
+  });
+
+  it("★ three units on buy-1-get-1 is ONE set, not one and a half", () => {
+    const r = applyOffers({
+      lines: [line({ quantity: 3, unitPrice: 100 })],
+      offers: [bxgy()],
+      context: ctx(),
+    });
+    expect(r.discount).toBe(100);
+  });
+
+  it("four units on buy-1-get-1 is two sets", () => {
+    const r = applyOffers({
+      lines: [line({ quantity: 4, unitPrice: 100 })],
+      offers: [bxgy()],
+      context: ctx(),
+    });
+    expect(r.discount).toBe(200);
+  });
+
+  it("does nothing below one complete set", () => {
+    const r = applyOffers({
+      lines: [line({ quantity: 2, unitPrice: 100 })],
+      offers: [bxgy({ buyQuantity: 2, getQuantity: 1 })],
+      context: ctx(),
+    });
+    expect(r.discount).toBe(0);
+  });
+
+  it("buy 1 get 2 gives two units per three", () => {
+    const r = applyOffers({
+      lines: [line({ quantity: 3, unitPrice: 100 })],
+      offers: [bxgy({ buyQuantity: 1, getQuantity: 2 })],
+      context: ctx(),
+    });
+    expect(r.discount).toBe(200);
+  });
+
+  it("buy 1 get 1 at half price discounts the free unit by 50%", () => {
+    const r = applyOffers({
+      lines: [line({ quantity: 2, unitPrice: 500 })],
+      offers: [bxgy({ getPercent: 50 })],
+      context: ctx(),
+    });
+    expect(r.discount).toBe(250);
+  });
+
+  it("★ maxSets stops a bulk cart giving half the shop away", () => {
+    const r = applyOffers({
+      lines: [line({ quantity: 20, unitPrice: 100 })],
+      offers: [bxgy({ maxSets: 2 })],
+      context: ctx(),
+    });
+    expect(r.discount).toBe(200); // 2 sets, not 10
+  });
+
+  it("is scoped like any other line reward", () => {
+    const r = applyOffers({
+      lines: [
+        line({ id: "in", productId: "p-in", quantity: 2, unitPrice: 100 }),
+        line({ id: "out", productId: "p-out", quantity: 2, unitPrice: 100 }),
+      ],
+      offers: [bxgy({}, { productIds: ["p-in"] })],
+      context: ctx(),
+    });
+    expect(r.lines.find((l) => l.id === "in")?.offerDiscount).toBe(100);
+    expect(r.lines.find((l) => l.id === "out")?.offerDiscount).toBe(0);
+  });
+
+  it("respects its budget cap", () => {
+    const r = applyOffers({
+      lines: [line({ quantity: 4, unitPrice: 100 })],
+      offers: [bxgy({}, { remainingBudget: 150 })],
+      context: ctx(),
+    });
+    expect(r.discount).toBe(150);
+  });
+
+  it("never takes a line below zero", () => {
+    const r = applyOffers({
+      lines: [line({ quantity: 2, unitPrice: 1 })],
+      offers: [bxgy({ getQuantity: 1 })],
+      context: ctx(),
+    });
+    const l = r.lines[0];
+    expect(l.offerDiscount).toBeGreaterThanOrEqual(0);
+    expect(l.offerDiscount).toBeLessThanOrEqual(2);
+  });
+});
+
+describe("applyOffers — a group offer competes on value", () => {
+  it("★ loses to a deeper per-line offer on the same products", () => {
+    // B1G1 on 2×₹100 saves ₹100. 80% off items saves ₹160.
+    const r = applyOffers({
+      lines: [line({ quantity: 2, unitPrice: 100 })],
+      offers: [
+        offer({
+          id: "bxgy",
+          reward: { type: "buy_x_get_y", buyQuantity: 1, getQuantity: 1 },
+        }),
+        offer({
+          id: "deep",
+          reward: { type: "percent_off_items", percent: 80 },
+        }),
+      ],
+      context: ctx(),
+    });
+    expect(r.applied[0].offerId).toBe("deep");
+    expect(r.discount).toBe(160);
+  });
+
+  it("★ wins when it is worth more, replacing the per-line winner", () => {
+    // B1G1 on 2×₹100 saves ₹100. 10% off items saves ₹20.
+    const r = applyOffers({
+      lines: [line({ quantity: 2, unitPrice: 100 })],
+      offers: [
+        offer({
+          id: "bxgy",
+          reward: { type: "buy_x_get_y", buyQuantity: 1, getQuantity: 1 },
+        }),
+        offer({
+          id: "weak",
+          reward: { type: "percent_off_items", percent: 10 },
+        }),
+      ],
+      context: ctx(),
+    });
+    expect(r.applied[0].offerId).toBe("bxgy");
+    expect(r.discount).toBe(100);
+  });
+
+  it("★ still leaves exactly one offer per line", () => {
+    const r = applyOffers({
+      lines: [line({ id: "l", quantity: 2, unitPrice: 100 })],
+      offers: [
+        offer({
+          id: "bxgy",
+          reward: { type: "buy_x_get_y", buyQuantity: 1, getQuantity: 1 },
+        }),
+        offer({
+          id: "weak",
+          reward: { type: "percent_off_items", percent: 10 },
+        }),
+      ],
+      context: ctx(),
+    });
+    expect(r.allocations.filter((a) => a.lineId === "l")).toHaveLength(1);
+  });
+
+  it("does not depend on the order the offers arrive in", () => {
+    const a = offer({
+      id: "bxgy",
+      reward: { type: "buy_x_get_y" as const, buyQuantity: 1, getQuantity: 1 },
+    });
+    const b = offer({
+      id: "weak",
+      reward: { type: "percent_off_items" as const, percent: 10 },
+    });
+    const lines = [line({ quantity: 2, unitPrice: 100 })];
+    const fwd = applyOffers({ lines, offers: [a, b], context: ctx() });
+    const rev = applyOffers({ lines, offers: [b, a], context: ctx() });
+    expect(fwd.discount).toBe(rev.discount);
+    expect(fwd.applied[0].offerId).toBe(rev.applied[0].offerId);
+  });
+});
+
+describe("applyOffers — buy X get Y near miss", () => {
+  const bxgy = offer({
+    name: "Buy 1 get 1 on shakes",
+    reward: { type: "buy_x_get_y", buyQuantity: 1, getQuantity: 1 },
+    categoryIds: ["cat-shake"],
+  });
+  const shake = (q: number) =>
+    line({
+      id: "s",
+      productId: "p-shake",
+      categoryId: "cat-shake",
+      quantity: q,
+      unitPrice: 100,
+    });
+
+  it("★ says how many MORE units are needed, not a rupee gap", () => {
+    const r = applyOffers({
+      lines: [shake(1)],
+      offers: [bxgy],
+      context: ctx(),
+    });
+    expect(r.nearMiss[0]).toMatchObject({
+      kind: "units",
+      gap: 1,
+      getQuantity: 1,
+    });
+  });
+
+  it("says nothing once a set is complete", () => {
+    const r = applyOffers({
+      lines: [shake(2)],
+      offers: [bxgy],
+      context: ctx(),
+    });
+    expect(r.nearMiss).toEqual([]);
+  });
+
+  it("counts from the incomplete remainder, not from zero", () => {
+    // 3 units on buy-1-get-1: one complete set plus one unit → 1 short.
+    const r = applyOffers({
+      lines: [shake(3)],
+      offers: [bxgy],
+      context: ctx(),
+    });
+    expect(r.nearMiss[0]).toMatchObject({ kind: "units", gap: 1 });
+  });
+
+  it("★ says nothing to a cart holding none of the products — that is an advert", () => {
+    const other = line({
+      id: "o",
+      productId: "p-other",
+      categoryId: "cat-other",
+      unitPrice: 500,
+    });
+    const r = applyOffers({ lines: [other], offers: [bxgy], context: ctx() });
+    expect(r.nearMiss).toEqual([]);
+  });
+
+  it("★ never nudges a code or group-restricted group offer either", () => {
+    const coded = applyOffers({
+      lines: [shake(1)],
+      offers: [{ ...bxgy, delivery: "code" as const, code: "BOGO" }],
+      context: ctx(),
+    });
+    expect(coded.nearMiss).toEqual([]);
+
+    const restricted = applyOffers({
+      lines: [shake(1)],
+      offers: [{ ...bxgy, groupIds: ["g-vip"] }],
+      context: ctx({ groupIds: ["g-vip"] }),
+    });
+    expect(restricted.nearMiss).toEqual([]);
+  });
+
+  it("★ a unit gap is offered before a spend gap — a smaller ask", () => {
+    const r = applyOffers({
+      lines: [shake(1)],
+      offers: [
+        bxgy,
+        offer({
+          id: "spend",
+          trigger: { type: "min_subtotal", minSubtotal: 150 },
+        }),
+      ],
+      context: ctx(),
+    });
+    expect(r.nearMiss[0].kind).toBe("units");
+    expect(r.nearMiss.map((n) => n.kind)).toContain("spend");
+  });
+});

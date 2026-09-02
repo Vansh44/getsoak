@@ -53,6 +53,7 @@ import { allocateProportional, toPaise, toRupees } from "@/lib/money/allocate";
 import {
   isContentsTrigger,
   isFixedPriceReward,
+  isGroupReward,
   isPercentReward,
   normalizeOfferCode,
   rewardLevel,
@@ -159,11 +160,22 @@ export interface AppliedOffer {
 export interface NearMissOffer {
   offerId: string;
   offerName: string;
-  /** Rupees short of qualifying. */
+  /**
+   * What is missing. `spend` is rupees short of a threshold; `units` is items
+   * short of completing a buy-X-get-Y set.
+   *
+   * ★ TWO SHAPES, NOT ONE NUMBER. "Add ₹200 more" and "add 1 more shake" are
+   * different sentences, and a single `gap` field would force the UI to guess
+   * which it was holding — the exact ambiguity that makes a nudge say
+   * something false.
+   */
+  kind: "spend" | "units";
   gap: number;
   rewardType: OfferRewardType;
   percent?: number;
   amount?: number;
+  /** `units` only: how many the offer gives once the set completes. */
+  getQuantity?: number;
 }
 
 export interface OfferResult {
@@ -328,6 +340,87 @@ function lineEligible(pl: PricedLine, mode: OnSalePriceMode): boolean {
   return true;
 }
 
+/**
+ * Value a BUY-X-GET-Y offer across its whole scoped set.
+ *
+ * ★ IT WORKS IN UNITS, NOT LINES, and that is the whole reason it cannot live
+ * in the per-line loop. "Buy 2 get 1" over three separate lines of one unit
+ * each is ONE set spanning three lines; a line of quantity 4 is two sets inside
+ * one line. So every eligible line is flattened into its units, and the sets
+ * are counted over that flat list.
+ *
+ * ★ THE CHEAPEST UNITS ARE THE DISCOUNTED ONES. That is the universal retail
+ * convention ("3 for the price of 2" charges you for the dearest two), it is
+ * the customer-favourable reading of an ambiguous promise, and — because ties
+ * break on line index — it is deterministic, so the same basket always produces
+ * the same receipt.
+ */
+function claimGroupOffer(
+  priced: readonly PricedLine[],
+  offer: Offer,
+  mode: OnSalePriceMode,
+  excluded: readonly (string | null)[],
+): Claim {
+  const claim = emptyClaim(priced.length);
+  const buy = Math.trunc(offer.reward.buyQuantity ?? 0);
+  const get = Math.trunc(offer.reward.getQuantity ?? 0);
+  if (buy < 1 || get < 1) return claim;
+
+  const pct = Math.min(Math.max(0, offer.reward.getPercent ?? 100), 100);
+  if (pct <= 0) return claim;
+
+  // One entry per UNIT of every line the offer may touch, carrying that unit's
+  // own price so the cheapest can be found across lines.
+  const units: { index: number; unitPaise: number }[] = [];
+  for (const pl of priced) {
+    if (!lineEligible(pl, mode)) continue;
+    if (excluded[pl.index] !== null) continue;
+    if (!offerCoversLine(offer, pl)) continue;
+    const qty = Math.max(0, Math.trunc(Number(pl.line.quantity) || 0));
+    if (qty <= 0) continue;
+    // Integer division leaves the remainder unallocated rather than rounding a
+    // unit up: a unit must never be valued above its share of the line.
+    const unitPaise = Math.floor(pl.netPaise / qty);
+    for (let i = 0; i < qty; i += 1) units.push({ index: pl.index, unitPaise });
+  }
+
+  const setSize = buy + get;
+  if (units.length < setSize) return claim;
+
+  let sets = Math.floor(units.length / setSize);
+  const cap = offer.reward.maxSets;
+  if (typeof cap === "number" && Number.isFinite(cap)) {
+    sets = Math.min(sets, Math.max(0, Math.trunc(cap)));
+  }
+  if (sets < 1) return claim;
+
+  // Cheapest first, ties by line index so the outcome is reproducible.
+  const order = [...units].sort(
+    (a, b) => a.unitPaise - b.unitPaise || a.index - b.index,
+  );
+  const freeUnits = order.slice(0, sets * get);
+
+  const budget = budgetCapPaise(offer);
+  let spent = 0;
+  for (const u of freeUnits) {
+    const value = Math.round((u.unitPaise * pct) / 100);
+    const room = Math.min(
+      value,
+      Math.max(0, budget - spent),
+      // Never take a line below zero, even if rounding pushed a unit's share
+      // slightly above what the line has left.
+      Math.max(0, priced[u.index].netPaise - claim.byLine[u.index]),
+    );
+    if (room <= 0) continue;
+    claim.byLine[u.index] += room;
+    claim.offerByLine[u.index] = offer.id;
+    claim.total += room;
+    spent += room;
+  }
+
+  return claim;
+}
+
 interface Claim {
   /** paise of discount, per line index. */
   byLine: number[];
@@ -370,6 +463,11 @@ function claimLineOffers(
   const claim = emptyClaim(priced.length);
   if (candidates.length === 0) return claim;
 
+  // Separable rewards resolve per line and exactly; group rewards need the
+  // whole set and are folded in afterwards.
+  const perLine = candidates.filter((o) => !isGroupReward(o.reward.type));
+  const groups = candidates.filter((o) => isGroupReward(o.reward.type));
+
   const spent = new Map<string, number>();
 
   for (const pl of priced) {
@@ -378,7 +476,7 @@ function claimLineOffers(
     let bestOffer: Offer | null = null;
     let bestValue = 0;
 
-    for (const offer of candidates) {
+    for (const offer of perLine) {
       if (!offerCoversLine(offer, pl)) continue;
       const raw = isFixedPriceReward(offer.reward.type)
         ? fixedPriceRewardPaise(offer.reward.unitPrice ?? 0, pl, mode)
@@ -401,6 +499,37 @@ function claimLineOffers(
       claim.total += bestValue;
       spent.set(bestOffer.id, (spent.get(bestOffer.id) ?? 0) + bestValue);
     }
+  }
+
+  // ★ A GROUP OFFER COMPETES ON THE LINES IT WANTS, and only takes them if it
+  // beats what those same lines already had. Otherwise "buy 2 get 1" would
+  // override a deeper 50%-off on the same products purely by being evaluated
+  // later — best-offer-wins has to hold across reward SHAPES, not just within
+  // one shape.
+  //
+  // ★ EVALUATED IN CANDIDATE ORDER (priority, then age), and a line claimed by
+  // an earlier group is off limits to a later one, so each line still carries
+  // exactly one offer and the outcome does not depend on array order.
+  for (const group of groups) {
+    const taken = claim.offerByLine.map((id) =>
+      id !== null && groups.some((g) => g.id === id) ? id : null,
+    );
+    const candidate = claimGroupOffer(priced, group, mode, taken);
+    if (candidate.total <= 0) continue;
+
+    // What the per-line winners are currently worth on exactly those lines.
+    let displaced = 0;
+    candidate.byLine.forEach((amount, i) => {
+      if (amount > 0) displaced += claim.byLine[i];
+    });
+    if (candidate.total <= displaced) continue;
+
+    candidate.byLine.forEach((amount, i) => {
+      if (amount <= 0) return;
+      claim.byLine[i] = amount;
+      claim.offerByLine[i] = group.id;
+    });
+    claim.total = claim.byLine.reduce((sum, v) => sum + v, 0);
   }
 
   return claim;
@@ -532,7 +661,14 @@ export function applyOffers({
   // list unsorted, so the UI's "show the closest" took whichever offer the
   // merchant happened to create first.
   const finishNearMiss = (): NearMissOffer[] =>
-    [...nearMiss].sort((a, b) => a.gap - b.gap).slice(0, NEAR_MISS_LIMIT);
+    [...nearMiss]
+      // ★ UNITS BEFORE SPEND. "Add 1 more" is a smaller ask than "spend ₹200
+      // more" whatever the numbers say, and the two gaps are in different
+      // units so comparing them numerically is meaningless.
+      .sort((a, b) =>
+        a.kind === b.kind ? a.gap - b.gap : a.kind === "units" ? -1 : 1,
+      )
+      .slice(0, NEAR_MISS_LIMIT);
 
   const empty = (): OfferResult => ({
     subtotal: toRupees(subtotalPaise),
@@ -573,6 +709,13 @@ export function applyOffers({
       continue;
     }
     eligible.push(offer);
+  }
+
+  // A group offer with an incomplete set is ELIGIBLE (nothing disqualified it)
+  // and simply claims nothing — so unlike a threshold, its near miss is found
+  // among the candidates rather than among the refusals.
+  for (const offer of eligible) {
+    collectUnitNearMiss(offer, priced, policyMode, nearMiss);
   }
 
   eligible.sort(candidateOrder);
@@ -833,9 +976,61 @@ function collectNearMiss(
   out.push({
     offerId: offer.id,
     offerName: offer.name,
+    kind: "spend",
     gap: toRupees(gap),
     rewardType: offer.reward.type,
     percent: offer.reward.percent,
     amount: offer.reward.amount,
+  });
+}
+
+/**
+ * "Add 1 more shake and one is free" — a buy-X-get-Y set the cart has started
+ * but not completed.
+ *
+ * ★ ONLY WHEN THE CART ALREADY HOLDS A QUALIFYING ITEM. Suggesting a set to
+ * somebody with none of the products is an advert, not a nudge, and it would
+ * fire on every cart in the store. This is the same restraint the spend nudge
+ * shows by capping its gap.
+ *
+ * ★ AND ONLY FOR AN OFFER THE VIEWER WOULD ACTUALLY GET — the code and
+ * customer-group rules from `collectNearMiss` apply identically, because the
+ * leak they prevent has nothing to do with which shape the gap takes.
+ */
+function collectUnitNearMiss(
+  offer: Offer,
+  priced: readonly PricedLine[],
+  mode: OnSalePriceMode,
+  out: NearMissOffer[],
+): void {
+  if (!isGroupReward(offer.reward.type)) return;
+  if (offer.delivery === "code") return;
+  if (offer.groupIds.length > 0) return;
+
+  const buy = Math.trunc(offer.reward.buyQuantity ?? 0);
+  const get = Math.trunc(offer.reward.getQuantity ?? 0);
+  if (buy < 1 || get < 1) return;
+
+  let have = 0;
+  for (const pl of priced) {
+    if (!lineEligible(pl, mode)) continue;
+    if (!offerCoversLine(offer, pl)) continue;
+    have += Math.max(0, Math.trunc(Number(pl.line.quantity) || 0));
+  }
+  if (have <= 0) return;
+
+  const setSize = buy + get;
+  const short = setSize - (have % setSize);
+  // A complete set is not a near miss, and neither is a cart with none of the
+  // products.
+  if (short === setSize || short <= 0) return;
+
+  out.push({
+    offerId: offer.id,
+    offerName: offer.name,
+    kind: "units",
+    gap: short,
+    rewardType: offer.reward.type,
+    getQuantity: get,
   });
 }
