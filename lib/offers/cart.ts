@@ -35,6 +35,7 @@ import {
   loadLiveOffers,
   loadOfferPolicy,
 } from "./resolve";
+import { getStoreSettings } from "@/lib/settings/resolve";
 import type { Offer, OfferChannel } from "./types";
 
 export interface ResolveOffersInput {
@@ -326,7 +327,13 @@ export async function recordOfferRedemptions(
  * has used up, and the screen re-prices once they are identified;
  * `reserve_offer_use` is the atomic backstop either way.
  */
-export async function loadOffersForRegister(storeId: string): Promise<{
+export async function loadOffersForRegister(
+  storeId: string,
+  /** A register opens anonymous, so this is null there. The storefront loader
+   *  below passes a real customer, which lets per-customer caps resolve up
+   *  front rather than only at the atomic reservation. */
+  customerId: string | null = null,
+): Promise<{
   offers: Offer[];
   policy: Pick<
     OfferContext,
@@ -344,7 +351,7 @@ export async function loadOffersForRegister(storeId: string): Promise<{
   try {
     const [policy, offers] = await Promise.all([
       loadOfferPolicy(),
-      withService((db) => loadLiveOffers(db, storeId, null)),
+      withService((db) => loadLiveOffers(db, storeId, customerId)),
     ]);
     return { offers, policy };
   } catch (err) {
@@ -380,4 +387,61 @@ export async function loadExhaustedOfferIds(
     // failure here must never block attaching a customer to a sale.
     return [];
   }
+}
+
+/**
+ * The offers a STOREFRONT client may price with, plus the policy.
+ *
+ * ★ AUTOMATIC OFFERS ONLY. A code-delivery offer is deliberately withheld: the
+ * storefront never needs to READ a code — it validates one the shopper typed,
+ * server-side — and shipping the list would publish every active discount code
+ * to anyone who opened the network tab. The column grant on `offers` seals
+ * `code` from the API for the same reason; this is the second half of that
+ * decision, for the path that legitimately bypasses RLS.
+ *
+ * ★ AND ONLY OFFERS THIS VIEWER COULD ACTUALLY GET. A group-restricted offer
+ * is filtered out here rather than left for the client engine to decline,
+ * because the restriction is the point: its existence, name and terms are
+ * merchant targeting, not public information.
+ */
+export async function loadOffersForStorefront(
+  storeId: string,
+  customerId: string | null,
+  groupIds: readonly string[],
+): Promise<{
+  offers: Offer[];
+  showNearMiss: boolean;
+  policy: Pick<
+    OfferContext,
+    "onSalePrice" | "maxTotalDiscountPercent" | "autoApply"
+  >;
+}> {
+  const bundle = await loadOffersForRegister(storeId, customerId);
+  const settings = await getStoreSettings().catch(() => null);
+  // The nudge switch is RESOLVED here and travels with the bundle, so the
+  // client is told the answer rather than reading the setting itself — the
+  // rule the register follows for `canDiscount`.
+  //
+  // ⚠ It does not WITHHOLD anything, and it is not a security boundary. The
+  // offers still ship, because the cart needs them to price the discount it
+  // displays; the flag only decides whether a near-miss line is rendered.
+  // Nothing here is secret — these are the automatic offers any visitor would
+  // receive, with codes and group-restricted offers already filtered out
+  // above, which IS the boundary.
+  const showNearMiss = settings?.["offers.showNearMiss"] !== false;
+
+  return {
+    ...bundle,
+    showNearMiss,
+    offers: bundle.offers
+      .filter((o) => o.delivery === "automatic")
+      .filter(
+        (o) =>
+          o.groupIds.length === 0 ||
+          o.groupIds.some((g) => groupIds.includes(g)),
+      )
+      // Never ship a code even for an automatic offer, which has none — belt
+      // and braces, so a later `link` offer joining this list cannot leak one.
+      .map((o) => ({ ...o, code: null })),
+  };
 }

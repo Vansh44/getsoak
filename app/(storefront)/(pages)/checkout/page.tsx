@@ -28,6 +28,8 @@ import {
   paymentOptionsFor,
 } from "@/lib/fulfilment/payment-policy";
 import { useCartTax } from "@/app/(storefront)/components/cart/useCartTax";
+import { useCartOffers } from "@/app/(storefront)/components/cart/useCartOffers";
+import { OfferNudge } from "@/app/(storefront)/components/cart/offer-nudge";
 import {
   placeOrder,
   getCartStock,
@@ -303,6 +305,11 @@ export default function CheckoutPage() {
     cart.hydrated,
     cart.couponValid ? cart.couponDiscount : 0,
   );
+
+  // Automatic offers, for the near-miss nudge. Display only — `placeOrder`
+  // re-resolves and re-prices authoritatively, and the nudge's whole value is
+  // that its gap comes from the engine rather than from arithmetic here.
+  const offerInfo = useCartOffers(cart.items, cart.hydrated);
 
   const selectedShippingOption =
     shippingOptions.find((option) => option.id === selectedShippingRateId) ??
@@ -1458,6 +1465,8 @@ export default function CheckoutPage() {
                   </div>
                 )}
               </div>
+
+              <OfferNudge nearMiss={offerInfo?.nearMiss} />
 
               <div className={styles.totalRow}>
                 <span className={styles.totalLabel}>Total</span>

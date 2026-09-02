@@ -165,6 +165,23 @@ const productRow = (o: Record<string, any> = {}) => ({
 const findRpc = (name: string) =>
   dbHolder.current.calls.execute.find((e: any) => sqlText(e).includes(name));
 
+// ★★ ONE FILE-LEVEL RESET FOR THE OFFERS SEAM, and it is not belt-and-braces.
+// `vi.clearAllMocks()` — which every block below calls — clears CALLS but NOT
+// IMPLEMENTATIONS, so a `mockResolvedValue` set inside one test leaks into
+// every test that runs after it. The offers block sets `resolveOffersForCart`
+// to return a real result; under `test:shuffle` that block can run BEFORE the
+// store-credit block, whose own `beforeEach` is `clearAllMocks()` alone — and
+// 21 store-credit assertions then failed because a discount they never asked
+// for was being applied. Caught by the shuffled run, invisible in declaration
+// order. A top-level hook runs before every describe's own, so restoring the
+// file default here means a block added later cannot reintroduce this.
+beforeEach(() => {
+  vi.mocked(resolveOffersForCart).mockResolvedValue(null);
+  vi.mocked(reserveOfferUses).mockResolvedValue({ ok: true, reserved: [] });
+  vi.mocked(releaseOfferUses).mockResolvedValue(undefined);
+  vi.mocked(recordOfferRedemptions).mockResolvedValue(undefined);
+});
+
 describe("placeOrder", () => {
   beforeEach(() => {
     vi.clearAllMocks();

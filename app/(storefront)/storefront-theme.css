@@ -584,3 +584,23 @@
 .sm-card-overlay.storefront-root .shop-card:hover .shop-card-img-el {
   transform: scale(1.025);
 }
+
+/* ---------------------------------------------------------------------------
+   Offer nudge — "Add ₹200 more to get 20% off" (docs/offers-plan.md §14b).
+   Tokenised on --sm-* like everything else here, so it re-skins with the
+   store's theme instead of pinning one palette.
+   --------------------------------------------------------------------------- */
+.sm-offer-nudge {
+  margin: 0.5rem 0;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--sm-border, #e5e7eb);
+  border-radius: var(--sm-radius-sm, 8px);
+  background: var(--sm-surface, #ffffff);
+  color: var(--sm-ink-soft, #4b5563);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+.sm-offer-nudge strong {
+  color: var(--sm-ink, #111827);
+  font-weight: 600;
+}

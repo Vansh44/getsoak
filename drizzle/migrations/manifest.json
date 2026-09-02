@@ -2104,7 +2104,7 @@
       "id": "20260902_0059_offers_phase_a",
       "description": "Add the offers spine: offer rules, scoping, redemptions, per-line allocation and atomic caps; migrate coupons into offers",
       "file": "sql/20260902_0059_offers_phase_a.sql",
-      "checksum": "766c2a9d2eab426db7b06ceb0d1ae1746809130e17dc4f56775fb0ce024f742a",
+      "checksum": "801a9fa2d5d8537d41969ddbe7ee735be472f27b45c29f31eaac448afeda9b10",
       "transaction": true,
       "requires": ["20260902_0058_mink_phase_6a_durable_workflows"],
       "verify": {},
@@ -2179,6 +2179,11 @@
             "name": "migrated coupons are storefront-only, not switched on at every till",
             "sql": "select count(*)::text from public.offers o join public.coupons c on c.id = o.id where o.channels <> array['storefront']::text[]",
             "equals": "0"
+          },
+          {
+            "name": "discount codes are never readable through the API",
+            "sql": "select count(*)::text from information_schema.column_privileges where grantee in ('anon', 'authenticated') and table_schema = 'public' and table_name = 'offers' and column_name = 'code'",
+            "equals": "0"
           }
         ]
       },
@@ -2238,6 +2243,11 @@
             "name": "the offers guide is published under a category",
             "sql": "select count(*)::text from public.help_articles where slug = 'create-and-manage-offers' and status = 'published' and category_id is not null and body like '%Best offer wins%' and body like '%A total budget%' and body like '%Stack on sale prices%' and body like '%never happens for an offer that needs a code%' and body like '%any code you have advertised keeps working%'",
             "equals": "1"
+          },
+          {
+            "name": "discount codes are never readable through the API",
+            "sql": "select count(*)::text from information_schema.column_privileges where grantee in ('anon', 'authenticated') and table_schema = 'public' and table_name = 'offers' and column_name = 'code'",
+            "equals": "0"
           }
         ]
       }

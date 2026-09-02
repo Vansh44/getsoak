@@ -349,13 +349,25 @@ CREATE POLICY "Admins read order item offers" ON public.order_item_offers
 REVOKE ALL ON TABLE public.offer_redemptions FROM PUBLIC, anon;
 REVOKE ALL ON TABLE public.order_item_offers FROM PUBLIC, anon;
 
--- ★ THE SEAL: anon reads only the columns the storefront must render. Budget,
--- spend and redemption counts leak a store's promotional economics, and
--- `spent_paise` in particular would let anyone watch a budget drain in real
--- time and time their order.
+-- ★ THE SEAL: only the columns a STOREFRONT must render are readable through
+-- the API. Three things are withheld and each for its own reason:
+--
+--   • budget_paise / spent_paise / redemption_count / max_* — a store's
+--     promotional economics. `spent_paise` in particular would let anyone
+--     watch a budget drain in real time and time their order to catch it.
+--   • code — the storefront never needs to READ a code. It validates one the
+--     shopper TYPED, server-side. Granting it would publish every active
+--     discount code to anyone who calls the API, which is exactly the leak the
+--     near-miss nudge is careful not to cause (plan §14b).
+--
+-- ⚠ COLUMN GRANTS APPLY TO `authenticated` TOO, INCLUDING STORE ADMINS, and a
+-- policy cannot re-grant a column. So the dashboard's own reads and writes go
+-- through the SERVICE scope after an app-layer permission gate — the exact
+-- pattern `store_pages` uses for its sealed `draft` column. Reading these with
+-- `withUser` would silently return nothing for the merchant who owns them.
 REVOKE SELECT ON public.offers FROM anon, authenticated;
 GRANT SELECT (
-  id, store_id, name, description, status, delivery, code, priority,
+  id, store_id, name, description, status, delivery, priority,
   trigger_type, trigger_config, reward_type, reward_config, channels,
   valid_from, valid_until, created_at, updated_at
 ) ON public.offers TO anon, authenticated;

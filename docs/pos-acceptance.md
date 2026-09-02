@@ -3666,12 +3666,97 @@ transfer stock, contact the customer or undo a completed status action.
 allowed status proposal. Corrections use the established Orders/Logistics
 workflow; Phase 5C has no automatic reverse transition.
 
+## 11l. Offers at the till _(roadmap Step 22, Phase A)_
+
+The register now applies automatic offers, so the screen and the charge have a
+new way to disagree. Run these after migration
+`20260902_0059_offers_phase_a`; until it is applied every offer read fails open
+and the till behaves exactly as it did before, which is itself PS-OF.1.
+
+**PS-OF.1 ★ — Before the migration, nothing changes**
+Open a register on a build that has the offer code but not the migration.
+**Expect:** the register opens normally, prices exactly as before, and takes a
+sale. No error toast, no blocked tender. The server log carries one
+`offers unavailable — migration not applied` WARNING, not an error. ⚠ This is
+the case that matters most on deploy day: DDL is a separate release gate, so
+this state is guaranteed to exist in production for a while.
+
+**PS-OF.2 ★★ — The quote equals the charge**
+Create an active automatic offer (say 10% off any order, POS channel included).
+Ring up a cart at the till. **Expect:** the cart panel lists the offer BY NAME
+with its amount, the total reflects it, and completing the sale charges exactly
+the quoted total — check the receipt and `orders.total`. This is the
+`posTotals` incident's shape: any divergence here means the screen and the
+server are no longer running the same engine.
+
+**PS-OF.3 — The line carries its own share**
+After PS-OF.2, read the sale's `order_items`. **Expect:** `offer_discount` on
+each line sums to the order's offer discount, `total` is GROSS of it (unchanged
+from before), and `order_item_offers` holds one row per discounted line with
+the offer's NAME snapshotted.
+
+**PS-OF.4 ★ — A returned discounted line refunds what was paid**
+Take a return of one line from the PS-OF.2 sale. **Expect:** the refund is the
+line's price MINUS its offer share, not its full price. Set an offer that
+discounts one line to zero and return only that line: the refund is ₹0.
+
+**PS-OF.5 — Pausing an offer stops quoting it**
+Pause the offer in the dashboard, then re-open the register (the offer list
+arrives with `RegisterConfig`, so it refreshes when the register opens, not on
+the catalogue's background sync). **Expect:** new carts price at full price. ⚠ A
+register left open on the old config keeps quoting until reopened; the server
+refuses nothing here because the offer is merely inactive, so the sale would
+complete at the SERVER's price. Reopen the register after changing an offer.
+
+**PS-OF.6 ★ — A budget that runs out stops the offer mid-shift**
+Set a budget of ₹100 on a 10% offer. Ring sales until it is spent. **Expect:**
+the first sale that would exceed the budget is refused with "…has just reached
+its limit", nothing is written, and re-ringing without the offer succeeds. The
+dashboard's Given away column shows the spend against the budget.
+
+**PS-OF.7 ★ — A per-customer cap re-prices when the customer is identified**
+Set an offer to one use per customer and redeem it once for a customer. Ring a
+new cart WITHOUT attaching anyone: the offer is quoted (nobody is attached, so
+the cap cannot be known). Now enter that customer's mobile at Charge.
+**Expect:** the quote re-prices to full price the moment they are resolved —
+`resolvePosCustomerByPhone` returns their exhausted offer ids. Completing
+charges the re-priced total.
+
+**PS-OF.8 — A sale price and an offer do not both apply by default**
+With `offers.onSalePrice` at its default (`best`), ring a variant that has a
+`special_price` under a percentage offer. **Expect:** the customer pays
+whichever is lower, never both. Switch the setting to `stack` and re-ring: the
+offer now applies on top. ⚠ This works at the till and NOT online, because
+`placeOrder` does not charge `special_price` at all — a pre-existing bug, not a
+POS limitation.
+
+**PS-OF.9 — A location-scoped offer applies only there**
+On a multi-location store, scope an offer to one location. **Expect:** it
+quotes and charges at that location's register and nowhere else. Placing a
+website order never picks it up, whichever shop fulfils it.
+
+**PS-OF.10 — A failed sale gives the offer back**
+Force a completion failure (a stock shortfall on a second line is easiest)
+against a sale carrying an offer. **Expect:** `offers.spent_paise` and
+`redemption_count` return to their previous values. A budget must not be spent
+by a sale that never happened.
+
+**PS-OF.11 — No money-audit noise**
+Complete an offer sale and open `/dashboard/pos/money`. **Expect:** NO row for
+the offer. That is deliberate (CODEBASE §39): the cashier chose nothing, and
+`order_item_offers` + `offer_redemptions` carry more than a log line would. A
+manual discount on the same sale DOES appear.
+
+---
+
 ## 12. Known gaps
 
 Real and deliberate, so nobody files them as bugs:
 
 | Gap                                                                     | Status                                                                                                                                                                                                                                                                                                                                                                                                         |
 | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **An open register keeps quoting a changed offer until reopened**       | By design: offers arrive with `RegisterConfig` (like tax rates) so the till prices without the network. Reopen the register after editing an offer. PS-OF.5                                                                                                                                                                                                                                                    |
+| **`offers.onSalePrice` is inert on the website**                        | Not an offers limitation — `placeOrder` never charges `product_variants.special_price` while the storefront advertises it, so there is no sale price online for an offer to interact with. Fix that first; the till already handles it. PS-OF.8                                                                                                                                                                |
 | **Cancel doesn't offer a refund**                                       | Refunds themselves are BUILT (dashboard order drawer, gateway + manual — CODEBASE §26). What's left is wiring the prompt into cancel and pickup expiry; by decision it must prompt, never auto-pay                                                                                                                                                                                                             |
 | ~~**Checkout queried customers while the cashier typed**~~              | **FIXED** (PS-C.25–C.29, C.44–C.47). Charge now accepts one 10-digit mobile locally; only OK performs an exact lookup, creates a phone-only customer when absent, and advances directly to payment                                                                                                                                                                                                             |
 | ~~**A stale checkout could still create a Walk-in sale**~~              | **FIXED** (PS-C.48). Customer capture is enforced by `placePosSale` before all pricing, stock and money work; historical anonymous receipts remain readable but no new register sale can omit its customer                                                                                                                                                                                                     |

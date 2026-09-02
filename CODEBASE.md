@@ -368,7 +368,11 @@ wholesip/
 │   │   │                      # builder.css (tokenised on --dash-*)
 │   │   │   └── settings/      # Website settings ("Website" registry group, e.g.
 │   │   │                      # pages.customCode) — linked from the builder top bar
-│   │   ├── marketing/coupons/ # coupon CRUD + coupon email campaigns
+│   │   ├── marketing/coupons/ # RETIRED as a destination — 307s to offers/
+│   │   │                      # (§39). Coupon email campaigns still live here
+│   │   ├── offers/            # ★ OFFERS (§39): one engine for every discount.
+│   │   │                      # List + new/ + [id]/edit + the shared settings
+│   │   │                      # card. Permission section is still `promotions`
 │   │   ├── enquiries/         # enquiry inbox + @modal detail
 │   │   ├── users/             # customers + user_groups/ (segments)  [superadmin only]
 │   │   ├── admins/ roles/     # staff invites + role management
@@ -759,6 +763,18 @@ wholesip/
 │   │                          # NOT in the "use server" file, or the sweep would be
 │   │                          # a public unauthenticated endpoint). Tested, plus a
 │   │                          # RUN_DOMAIN_INTEGRATION=1 live provisioning test.
+│   ├── money/allocate.ts      # ★ §39: splitting one amount across lines in
+│   │                          # PAISE, exactly. Shared by the offer engine
+│   │                          # (allocating a reward at sale time) and
+│   │                          # refundBreakdown (undoing it) — a second copy is
+│   │                          # how a full return comes back a paisa short
+│   ├── offers/                # ★ §39: types.ts (client-safe registry +
+│   │                          # validation), apply.ts (PURE — best offer wins
+│   │                          # as a bounded scenario comparison, per-line
+│   │                          # allocation, four limits, near-miss reporting),
+│   │                          # resolve.ts + cart.ts (server-only: load,
+│   │                          # reserve, release, record — every read FAILS
+│   │                          # OPEN so the deploy can precede its migration)
 │   ├── analytics/             # ★ §20 dashboard contracts plus platform feature gates;
 │   │                          # merchant-pixels.ts validates/fail-closes the GA4 + Meta
 │   │                          # settings stored under stores.settings.marketing;
@@ -7973,7 +7989,142 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       merchant's Twilio number needs a messaging webhook pointed at us. Until
       then opt-out is enforced on send but can only be recorded by hand.
 
-38. **The operator console — one screen per job.** `app/platform/dashboard/(console)`
+38. **Offers — one engine for every discount** (Phase A shipped; design and the
+    full phase plan in **`docs/offers-plan.md`**, sequenced as roadmap Step 22).
+    Coupons were the only discount mechanism and were order-level only: a
+    percentage or a rupee amount off the whole cart, on a code, online only.
+    Offers replace that with one engine reaching both counters.
+    - **★ A CODE IS A DELIVERY METHOD, NOT A KIND OF OFFER.** One `offers`
+      table with `delivery` ∈ `automatic | code | link`; every coupon row
+      migrated in place. Two systems would mean two engines, two stacking
+      policies and no way to turn a code into an automatic offer.
+      `/dashboard/marketing/coupons` and `/dashboard/promotions` both **307**
+      to `/dashboard/offers` (307 not 308 — admin paths behind a login have no
+      SEO signals to consolidate, and a 308 is cached indefinitely).
+      **⚠ `/dashboard/promotions` had no route behind it at all**: the
+      permission section pointed there, so every merchant granted it saw a
+      sidebar link that 404'd.
+    - **★ THE PERMISSION KEY IS STILL `promotions`.** Roles store the KEY, so
+      renaming it to `offers` silently revokes the grant on every saved role —
+      the `navigation` precedent (§11). Label and href changed; key untouched.
+      The `Coupons` CHILD was removed instead, which is safe for the opposite
+      reason: a child carries no key.
+    - **★★ THE DISCOUNT LANDS ON LINES, NOT THE ORDER, and that is the whole
+      design.** `computeTax` allocates `orders.discount` across lines
+      **proportionally**, and `refundBreakdown` re-allocates it the same way. A
+      product-scoped or Buy-1-Get-1 reward is **not** proportional, so routing
+      it through `orders.discount` applies the WRONG allocation twice over:
+      ₹200 off a ₹1,000 18% shirt beside a ₹1,000 5% book taxes as ₹207 spread
+      instead of ₹194, misstating GST on the invoice with nothing reporting an
+      error; and returning the free half of a B1G1 refunds its full ₹1,000, so
+      the customer keeps a free shirt AND takes the money. So
+      `order_items.offer_discount` carries the engine's exact per-line share,
+      `order_item_offers` records which offer and its SNAPSHOTTED name (a
+      rename must not change an issued invoice), `computeTax` gained a per-line
+      `discount`, and `refundBreakdown` subtracts it DIRECTLY while
+      re-allocating only the genuine order-level remainder. Both directions
+      tested.
+    - **★ BEST OFFER WINS** (owner, 2026-09-02): exclusive selection BY VALUE —
+      one offer per line, one order-level offer — with `priority` demoted to a
+      tie-break. Implemented as a **bounded scenario comparison**, never a
+      search: optimal assignment is exponential and its cost would scale with
+      how many offers a merchant creates. `order_only` genuinely beats
+      `line_and_order` because a claimed line LEAVES the order offer's base
+      (5% off shakes + 20% off order on ₹100+₹900 scores ₹185 vs ₹200), which
+      is the whole reason the comparison exists. `line_only` is provably
+      dominated and evaluated anyway as the base case — do not delete it as
+      dead. Ties break savings → priority → age → id, thresholds are measured
+      against the **undiscounted** subtotal (testing after is circular), and
+      the result reports the losing scenarios so a counter can explain the
+      choice.
+    - **★★ ONE PURE ENGINE, EVERY SURFACE.** `lib/offers/apply.ts` is called by
+      `placeOrder`, `placePosSale`, `posTotals`, the cart/checkout summary and
+      the register screen. This is the `posTotals` incident, not a preference:
+      shipping the engine behind `placeOrder` alone guarantees a second
+      implementation for the till within a week. The register gets the live
+      offers in **`RegisterConfig`**, exactly as `taxRates` already arrive and
+      for the same reason (zero-network pricing) — **in the config, never the
+      IndexedDB catalogue**, or an ended offer keeps being quoted until the next
+      sync. Applied offers render BY NAME at the till, because "offer" is not
+      an answer to a customer asking why the price changed.
+    - **★ FOUR CEILINGS, THREE OF THEM CLAIMED ATOMICALLY.**
+      `reserve_offer_use` puts the redemption cap, the budget cap AND the
+      per-customer cap inside ONE conditional UPDATE (the
+      `increment_coupon_usage` pattern), claimed BEFORE the order exists and
+      released from the single unwind helper each counter already calls — 7
+      sites online, 4 at the till. `offer_redemptions` is a TABLE because
+      `used_count` knows how many times a code was used, never by whom.
+      `offers.maxTotalDiscountPercent` is the fourth: a per-order depth ceiling
+      that best-offer-wins makes load-bearing, since the engine actively seeks
+      out the most generous applicable rule. A cap refusal is reported; a
+      transient failure fails OPEN (invariant 6).
+    - **★★ EVERY OFFER READ FAILS OPEN, and that is a deploy decision.** DDL is
+      a separate release gate, so this code reaches production before
+      20260902_0059 does. `isSchemaNotReady` (`lib/db/errors.ts`, 42P01/42883/ 42703) tells "the migration has not run" from a real outage, and either
+      way a sale completes at full price. **`resolveOffersForCart` returning
+      `null` means OFFERS ARE UNAVAILABLE, not "nothing applied"** — the legacy
+      coupon path is the fallback whenever the engine applies nothing, which
+      three live cases need: the pre-migration window, a Mink Phase 4C coupon
+      row that is not an offer, and a coupon the migration left behind. Only
+      one path can produce a discount, so nothing double-counts.
+    - **★ SEALED COLUMNS, AND THE SERVICE SCOPE THAT FOLLOWS FROM THEM.**
+      `budget_paise`, `spent_paise`, the redemption counts and **`code`** are
+      withheld by a COLUMN GRANT: spend would let anyone watch a budget drain
+      in real time and time their order, and the storefront never needs to READ
+      a code (it validates one the shopper typed). ⚠ Column grants apply to
+      `authenticated` — which is what a store admin is — and no policy can
+      re-grant a column, so every read and write in
+      `app/actions/offer-actions.ts` uses `withService` after
+      `getManagerIdentity("promotions")`, the `store_pages` draft pattern.
+      Reading them with `withUser` returns nothing for the merchant who owns
+      them.
+    - **★ `offers.onSalePrice` WORKS AT THE TILL AND IS INERT ONLINE**
+      (`best` | `skip` | `stack`, default `best` — the only value that cannot
+      give away more than intended, which matters because the engine seeks out
+      compounding). `placePosSale` charges `special_price` so it passes
+      `regularUnitPrice`; `placeOrder` never reads `special_price` and
+      deliberately passes none. **⚠ That asymmetry is a pre-existing bug, not a
+      design choice: the storefront ADVERTISES a variant's sale price and
+      online checkout bills the regular one.** Fix that before promising the
+      setting works online.
+    - **★ THE NEAR-MISS NUDGE COMES FROM THE ENGINE.** "Add ₹200 more for free
+      delivery" is a claim about what happens if the shopper adds something,
+      and under best-offer-wins only the engine knows whether the offer would
+      actually win. **Never for a code or group-restricted offer** — nudging
+      "₹200 from 20% off with WHOLESALE20" leaks a targeted code to every
+      visitor. One nudge, the closest.
+    - **★ NO `offer_applied` AUDIT ROW OR ACTIVITY EVENT, deliberately.** §22
+      does not audit a gateway tender because "the cashier chose nothing" and
+      noise is what makes an audit stop being read; an auto-applied offer is
+      that case, and `order_item_offers` + `offer_redemptions` carry strictly
+      more than a log line would. §24's rule keeps per-row events out of the
+      activity feed. Revisit if the till ever takes a code — that IS a choice.
+    - **Plan gating:** `maxActiveOffers` free 3 / Basic+ unlimited, every type
+      on every plan. ★ It counts the MERGED pool, since coupons are offers now —
+      counting separately would hand a free store 3 + 3. Gating offers behind
+      Basic would have removed the three active coupons free stores already
+      have, which is invariant 1. `assertCanActivateOffer` takes the same
+      per-store advisory lock and counts inside the writing transaction.
+    - **Migration `20260902_0059_offers_phase_a`** (applied: NO — DDL is its own
+      gate). It was verified against a throwaway local Postgres: it applies
+      clean, every cap behaves, and the coupon migration handles each branch —
+      `max_uses = 0` becomes NULL (unlimited), not a cap of zero. ★ The code
+      filter mirrors `normalizeCode` EXACTLY (uppercase, all whitespace
+      stripped), which is provably the set of REDEEMABLE coupons: a coupon
+      stored `save10` or `SAVE 10` cannot be redeemed today, and migrating
+      those is the only way the insert could collide. ★ The code column accepts
+      1–200 characters because `coupons.code` never had a length rule; a
+      friendlier 3-char minimum for NEW offers lives in the action, where it can
+      change without a migration.
+    - **Not built (Phases B–I):** product/category scoping UI, Buy X get Y,
+      tiers and volume breaks, payment-method / fulfilment / time-window
+      conditions, free shipping, gift with purchase, bundles, cashback, and Mink
+      offer authority. The engine already honours line-level rewards and
+      `offer_products`, which is why `PosCatalogItem` carries `categoryId`
+      (cache SCHEMA_VERSION v4) — a client that could not see it would quote a
+      different total the moment such an offer exists by any route.
+
+39. **The operator console — one screen per job.** `app/platform/dashboard/(console)`
     - `lib/platform/`. Full IA + rationale: **`docs/operator-console.md`**.
     - **★ IT USED TO BE ONE PAGE.** The store table, the pricing editor and the
       theme seeder all rendered on `page.tsx`, under a metric row, so the home

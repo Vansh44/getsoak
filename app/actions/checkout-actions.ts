@@ -17,7 +17,13 @@ import { getCurrentStore, getCurrentStoreId } from "@/lib/store/resolve";
 import { isDemoStore } from "@/lib/store/launch";
 import { rateLimit, clientIp } from "@/lib/rate-limit";
 import { validateCoupon } from "./coupon-actions";
+import { loadCustomerGroupIds } from "@/lib/offers/resolve";
+import type {
+  Offer as StorefrontOffer,
+  OnSalePriceMode,
+} from "@/lib/offers/types";
 import {
+  loadOffersForStorefront,
   recordOfferRedemptions,
   releaseOfferUses,
   reserveOfferUses,
@@ -393,6 +399,45 @@ export interface CartTaxRateLine {
   rate: number;
   /** Tax class name, for the per-rate breakdown label. */
   label?: string;
+}
+
+/**
+ * The automatic offers and policy the CART may price with, for display.
+ *
+ * The client then runs the pure engine locally, so a quantity change costs no
+ * round trip — the same shape `getCartTaxRates` + `useCartTax` already use, and
+ * for the same reason.
+ *
+ * ★ TENANCY FROM THE HOST, never an argument. This is a public endpoint (every
+ * export of a "use server" file is), so a store id parameter would let anyone
+ * enumerate another store's offers.
+ *
+ * ★ AUTOMATIC OFFERS ONLY, and codes are stripped — `loadOffersForStorefront`
+ * enforces both. A typed code is validated by `placeOrder`; publishing the
+ * list would hand every active discount code to anyone reading the response.
+ */
+export async function getStorefrontOffers(): Promise<{
+  offers: StorefrontOffer[];
+  showNearMiss: boolean;
+  policy: {
+    onSalePrice: OnSalePriceMode;
+    maxTotalDiscountPercent: number;
+    autoApply: boolean;
+  };
+} | null> {
+  try {
+    const storeId = await getCurrentStoreId();
+    const user = await getServerUser();
+    const groupIds = user
+      ? await withService((db) => loadCustomerGroupIds(db, user.id))
+      : [];
+    return await loadOffersForStorefront(storeId, user?.id ?? null, groupIds);
+  } catch (err) {
+    // Display only: a cart that cannot show a badge still sells, and
+    // `placeOrder` re-prices authoritatively either way.
+    console.error("getStorefrontOffers:", errMsg(err));
+    return null;
+  }
 }
 
 export interface CartTaxRates {

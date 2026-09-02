@@ -72,7 +72,7 @@ is large enough to need its own decisions doc BEFORE any of it is built.
 | **19** | Catalogue delta sync                                              | M    | ✅ done |
 | **20** | `placePosSale` round trips (11 → few)                             | M    | ✅ done |
 | **5**  | **Receipts — SMS opt-out webhook, then a real send (POS 6)**      | M    | ⏭ next |
-| **22** | **Offers — codes, automatic, BXGY (docs/offers-plan.md)**         | XL   | ⏳      |
+| **22** | **Offers — Phase A shipped; B–I to build (docs/offers-plan.md)**  | XL   | ◐ part  |
 | **6**  | Channel stock policy, per location and configurable (LOC H)       | M    | ⏳      |
 | **7**  | Transfer dispatch note (LOC I — rescoped, no in-transit state)    | S    | ⏳      |
 | **8**  | More routing strategies (LOC J)                                   | M    | ⏳      |
@@ -1379,7 +1379,14 @@ budget cap and activation as a separate approval · `offers.onSalePrice` is
 configurable (`best` | `skip` | `stack`) · an offer may only ever make shipping
 cheaper · the near-miss nudge ships.
 
-**Effort: XL across 9 phases; Phase A alone is L.**
+**Phase A is SHIPPED** (2026-09-02): the engine, per-line allocation, the four
+limits, both counters, the near-miss nudge, `/dashboard/offers`, coupons
+migrated, and the dead `promotions` link answered. Architecture in
+`CODEBASE.md` §39. ⚠ Migration `20260902_0059` is NOT applied — DDL is its own
+release gate — and every offer read fails open until it is, so the deploy is
+order-independent. Phases B–I remain.
+
+**Effort: XL across 9 phases; Phase A alone was L.**
 
 ---
 

@@ -159,6 +159,32 @@ const nextConfig: NextConfig = {
   // /dashboard/activity/import-export?kind=export lands correctly.
   async redirects() {
     return [
+      // Offers (docs/offers-plan.md §2). A coupon is a DELIVERY METHOD of an
+      // offer, not a separate feature, so the coupons pages fold into
+      // /dashboard/offers rather than living beside it.
+      //
+      // ⚠ `/dashboard/promotions` had no route behind it at ALL — the
+      // permission section pointed there and every merchant granted it saw a
+      // link that 404'd. This is the first thing that has ever answered it.
+      //
+      // 307, not 308, for the reason the log redirects below give: these are
+      // admin paths behind a login with no SEO signals to consolidate, and a
+      // 308 is cached by browsers indefinitely.
+      {
+        source: "/dashboard/promotions",
+        destination: "/dashboard/offers",
+        permanent: false,
+      },
+      {
+        source: "/dashboard/marketing/coupons",
+        destination: "/dashboard/offers",
+        permanent: false,
+      },
+      {
+        source: "/dashboard/marketing/coupons/:path*",
+        destination: "/dashboard/offers",
+        permanent: false,
+      },
       {
         source: "/dashboard/activity",
         destination: "/dashboard/logs",
