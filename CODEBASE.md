@@ -2135,6 +2135,42 @@ allow-popups"` + `srcDoc`, **never `allow-same-origin`**: the session cookie
       exceeded under concurrent checkouts. The reservation is released
       (`decrement_coupon_usage`) if the order then fails to persist; a transient
       RPC error fails open (never blocks a sale over the counter).
+    - **★★ RE-READING THE PRICE IS NOT THE SAME AS READING THE RIGHT COLUMN.**
+      `placeOrder` re-read `products`/`product_variants` faithfully and still
+      charged the wrong amount, because it selected only
+      `product_variants.selling_price` — never `special_price` — and a variant
+      on sale is sold at the latter. So the anti-tampering rule above was
+      satisfied while a variant at 450/500 DISPLAYED ₹450 on the PDP, CHARGED
+      ₹450 at the till (`placePosSale` has always applied the rule) and BILLED
+      ₹500 online. The cart summary disagreed with itself too: its subtotal came
+      from `CartItem.price` (the sale price, captured on the PDP) while
+      `getCartTaxRates` taxed the regular price, and the checkout shipping quote
+      valued the basket at the regular price when deciding free delivery — while
+      the PDP's PIN quote, which carried its own INLINE copy of the rule, valued
+      it at the sale price. Five surfaces, three different answers.
+      **`lib/pricing.variantEffectiveSelling` is now the ONE rule** — display
+      (PDP + shop grid), the cart's tax basis (`getCartTaxRates`), both shipping
+      quotes and the charge (`placeOrder`) all call it, and its parameter type is
+      narrowed to exactly the two columns it reads so a server row that selects
+      only those is a valid input. **Do not inline `special ?? selling`** — an
+      inline copy is what let the two shipping quotes diverge. Blast radius when
+      found: production held ONE such variant and ZERO live orders, so nobody was
+      ever overcharged; it was latent. Regression-tested in both directions,
+      including an assertion that the charge path actually SELECTS the column —
+      the db mock serves canned rows, so the price assertions alone stay green if
+      someone drops it. Same class of defect `lib/pos/totals.ts` exists to
+      prevent (§22).
+      **★ AND IT UNBLOCKED `offers.onSalePrice` ONLINE.** The offer engine reads
+      `unitPrice` (what will be charged) alongside `regularUnitPrice` (the
+      non-sale price), where **absent or equal means "not on sale"** — a default
+      that fails SILENTLY. `placePosSale` passed the pair; `placeOrder` passed
+      only `unitPrice`, so online every sale line looked full-price and `skip`
+      did not skip while `stack` did not stack, with no error anywhere. That was
+      correct while nothing online charged a sale price; both halves move
+      together, so `placeOrder` now passes `regularUnitPrice` = the variant's
+      `selling_price` — never `base_price`, which is a struck-through MRP and
+      would let `best` discount from a much higher base (docs/offers-plan.md
+      §14).
     - **Service-role writes**: `orders`/`order_items` have **no customer INSERT
       RLS policy** by design; the writes run with `createAdminClient()` (service
       role) _after_ all the above validation. Customers get RLS `SELECT` on their

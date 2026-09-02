@@ -2251,6 +2251,33 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260902_0060_variant_sale_price_help",
+      "description": "State that a variant sale price is what the customer pays online and in store, how it affects tax and delivery charges, and that the offers sale-price choice applies in both channels",
+      "file": "sql/20260902_0060_variant_sale_price_help.sql",
+      "checksum": "d60f6e8c7cec281f9f9aa799ba3f45a12ef185ee88038668b1b6d29b95aaf8ef",
+      "transaction": true,
+      "requires": ["20260902_0059_offers_phase_a"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "the product and offers guides state what a variant sale price does",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and ((slug = 'set-product-pricing-tax-and-shipping-details' and body like '%<h2>What a variant sale price does</h2>%' and body like '%both on your website and at the register%' and body like '%counts towards free delivery at the price the customer actually pays%') or (slug = 'add-product-images-and-variants' and body like '%<h2>Sale prices on variants</h2>%' and body like '%Clear it to return the variant to its selling price%') or (slug = 'create-and-manage-offers' and body like '%priced the same way in either place%'))",
+            "equals": "3"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "the product and offers guides already state what a variant sale price does",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and ((slug = 'set-product-pricing-tax-and-shipping-details' and body like '%<h2>What a variant sale price does</h2>%' and body like '%both on your website and at the register%' and body like '%counts towards free delivery at the price the customer actually pays%') or (slug = 'add-product-images-and-variants' and body like '%<h2>Sale prices on variants</h2>%' and body like '%Clear it to return the variant to its selling price%') or (slug = 'create-and-manage-offers' and body like '%priced the same way in either place%'))",
+            "equals": "3"
+          }
+        ]
+      }
     }
   ]
 }

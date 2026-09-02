@@ -14,14 +14,30 @@ export function discountPercent(base: number, selling: number): number {
   return Math.round(((base - selling) / base) * 100);
 }
 
-export interface PricedVariant {
-  base_price: number;
+/**
+ * Exactly the fields `variantEffectiveSelling` reads — deliberately narrower
+ * than `PricedVariant`.
+ *
+ * ★ THE NARROWNESS IS THE POINT. The server's checkout reads select only the
+ * price columns they need and never `base_price`, so a parameter type that
+ * demanded it would not accept a DB row — and the way round that is to inline
+ * `special ?? selling` at the call site, i.e. a second copy of this rule. That
+ * is exactly how the storefront came to DISPLAY `special_price` while
+ * `placeOrder` CHARGED `selling_price`. Keep this shape at the minimum the
+ * function actually reads so every caller — display, cart and charge — can use
+ * the one helper.
+ */
+export interface VariantSellingFields {
   selling_price: number;
   // Overrides selling_price when present. NULL/undefined → variant prices as
   // normal. Used to flag a temporary sale on a single variant (e.g. push the
   // bigger pack at an aggressive discount); the storefront also renders a
   // "best value" price tag on the variant chip when this is set.
   special_price?: number | null;
+}
+
+export interface PricedVariant extends VariantSellingFields {
+  base_price: number;
   sort_order?: number;
 }
 
@@ -85,11 +101,21 @@ export function effectivePricing(p: PricedLike): EffectivePricing {
 }
 
 /**
- * The effective selling price for a single variant: special_price when set
- * (non-null, > 0), otherwise the regular selling_price. Exported so the PDP
- * and cart can resolve the per-variant price consistently with the helper.
+ * ★ THE ONE RULE FOR WHAT A VARIANT COSTS: special_price when set (non-null,
+ * > 0), otherwise the regular selling_price.
+ *
+ * Every surface that shows, sums or CHARGES a variant price must come through
+ * here — the PDP and shop grid, the cart's tax basis (`getCartTaxRates`) and
+ * the authoritative charge (`placeOrder`). `placePosSale` applies the
+ * identical rule at the till.
+ *
+ * ⚠ It was not always shared, and the gap was a real overcharge: the PDP used
+ * this helper while `placeOrder` read `selling_price` directly, so a variant on
+ * sale displayed ₹450 and billed ₹1,000 online while the till charged ₹450.
+ * Same class of defect `lib/pos/totals.ts` exists to prevent. Do not inline
+ * `special ?? selling` anywhere; call this.
  */
-export function variantEffectiveSelling(v: PricedVariant): number {
+export function variantEffectiveSelling(v: VariantSellingFields): number {
   if (v.special_price != null && v.special_price > 0) return v.special_price;
   return v.selling_price;
 }

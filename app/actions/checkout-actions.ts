@@ -32,6 +32,8 @@ import {
 } from "@/lib/offers/cart";
 import { CartItem } from "@/app/(storefront)/components/cart/CartProvider";
 import { computeTax } from "@/lib/billing/tax";
+import { variantEffectiveSelling } from "@/lib/pricing";
+import type { VariantSellingFields } from "@/lib/pricing";
 import { getLiveStoreGateway, getStoreGateway } from "@/lib/payments/provider";
 import {
   getCreditBalance,
@@ -509,6 +511,10 @@ export async function getCartTaxRates(
           .select({
             id: productVariants.id,
             selling_price: productVariants.sellingPrice,
+            // The cart's tax basis must be the price actually charged, so a
+            // variant on sale is taxed on its special price, not its regular
+            // one — resolved through variantEffectiveSelling below.
+            special_price: productVariants.specialPrice,
           })
           .from(productVariants)
           .where(
@@ -528,7 +534,7 @@ export async function getCartTaxRates(
     ]),
   );
   const vMap = new Map(
-    variantRows.map((v) => [v.id as string, v as { selling_price: number }]),
+    variantRows.map((v) => [v.id as string, v as VariantSellingFields]),
   );
   const classById = new Map(taxClassList.map((c) => [c.id, c]));
 
@@ -542,9 +548,9 @@ export async function getCartTaxRates(
         rate: 0,
       };
     }
-    const price = l.variantId
-      ? (vMap.get(l.variantId)?.selling_price ?? p.selling_price)
-      : p.selling_price;
+    const v = l.variantId ? vMap.get(l.variantId) : null;
+    // One shared rule with the PDP and with placeOrder (lib/pricing.ts).
+    const price = v ? variantEffectiveSelling(v) : p.selling_price;
     const classId = p.tax_class_id ?? billing.defaultTaxClassId;
     const cls = classId ? classById.get(classId) : null;
     return {
@@ -962,6 +968,7 @@ export async function placeOrder(
       id: string;
       name: string;
       selling_price: number;
+      special_price: number | null;
       cost_price: number | null;
       track_inventory?: boolean | null;
       allow_backorder?: boolean | null;
@@ -980,6 +987,10 @@ export async function placeOrder(
           id: productVariants.id,
           name: productVariants.name,
           selling_price: productVariants.sellingPrice,
+          // ★ WITHOUT THIS COLUMN THE CHARGE CANNOT SEE THE SALE. Omitting it
+          // is what made a variant on sale display its special price and bill
+          // the regular one.
+          special_price: productVariants.specialPrice,
           cost_price: productVariants.costPrice,
           track_inventory: productVariants.trackInventory,
           allow_backorder: productVariants.allowBackorder,
@@ -1011,6 +1022,7 @@ export async function placeOrder(
     name: string;
     variant_name: string | null;
     price: number;
+    listed_price: number;
     quantity: number;
     total: number;
     unit_cost: number | null;
@@ -1035,6 +1047,11 @@ export async function placeOrder(
       return { error: `Product no longer available: ${item.name}` };
 
     let price = dbProduct.selling_price;
+    // The non-sale price, kept beside the charged one so the offer engine can
+    // tell a discounted line from a full-price one (`offers.onSalePrice`).
+    // Only variants carry a special price, so for a simple product the two are
+    // equal — which the engine reads as "not on sale".
+    let listedPrice = dbProduct.selling_price;
     let unitCost = dbProduct.cost_price;
     const name = dbProduct.name;
     let variantName: string | null = null;
@@ -1051,7 +1068,10 @@ export async function placeOrder(
       const dbVariant = variantsMap.get(item.variantId);
       if (!dbVariant)
         return { error: `Variant no longer available: ${item.variantName}` };
-      price = dbVariant.selling_price;
+      // The price CHARGED comes from the same helper the PDP displays and the
+      // till charges — never `selling_price` directly (lib/pricing.ts).
+      price = variantEffectiveSelling(dbVariant);
+      listedPrice = dbVariant.selling_price;
       unitCost = dbVariant.cost_price ?? dbProduct.cost_price;
       variantName = dbVariant.name;
       logistics = {
@@ -1073,6 +1093,7 @@ export async function placeOrder(
       name,
       variant_name: variantName,
       price,
+      listed_price: listedPrice,
       quantity: item.quantity,
       total: price * item.quantity,
       unit_cost: unitCost,
@@ -1122,14 +1143,17 @@ export async function placeOrder(
       categoryId: it.category_id,
       quantity: it.quantity,
       unitPrice: it.price,
-      // ★ NO `regularUnitPrice`, so `offers.onSalePrice` is inert here today —
-      // deliberately, and it is not a shortcut. `placeOrder` charges
-      // `selling_price` and never reads `product_variants.special_price`
-      // (see the variant select above), so at checkout there is no sale price
-      // for an offer to interact with. Passing `base_price` instead would be
-      // WRONG: MRP is a struck-through list price, not a sale price, and
-      // treating it as one would let `best` mode discount from a much higher
-      // base. Wire this up when special_price is actually charged.
+      // ★ `offers.onSalePrice` NOW WORKS ONLINE, because `placeOrder` charges
+      // `product_variants.special_price` when one is set (see the variant
+      // select above) — so `unitPrice` is the sale price and this is the price
+      // it is on sale FROM. Same pair the till passes, so a basket prices
+      // identically in both channels.
+      // ⚠ NOT `base_price`: MRP is a struck-through list price, not a sale
+      // price, and treating it as one would let `best` mode discount from a
+      // much higher base. For a line that is not on sale the two are equal,
+      // which the engine reads as "no sale" and every mode collapses to the
+      // same arithmetic.
+      regularUnitPrice: it.listed_price,
     })),
   });
 

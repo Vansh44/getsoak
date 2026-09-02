@@ -536,6 +536,23 @@ refuses a stored value outside `options` and falls back to the default, and
 `saveStoreSettings` re-checks it server-side. Use ids that read as data
 (`best`, `skip`, `stack`), never prose, because they are what lands in the jsonb.
 
+**★ BOTH CHANNELS MUST TELL THE ENGINE WHAT A LINE IS ON SALE FROM, and one
+did not.** The engine's contract is that `unitPrice` is what will be charged
+(already reflecting `special_price`) and `regularUnitPrice` is the non-sale
+price, with **absent or equal meaning "not on sale"**. That default is
+convenient and it fails silently: `placePosSale` passed the pair, `placeOrder`
+passed only `unitPrice`, so online every sale line looked full-price and all
+three modes collapsed to the same arithmetic — `skip` did not skip and `stack`
+did not stack, with nothing raising an error. It was not a shortcut at the
+time: `placeOrder` charged `selling_price` and never read `special_price`, so
+there genuinely was no sale price for an offer to interact with. Both halves
+are fixed together — `placeOrder` now charges the special price through
+`lib/pricing.variantEffectiveSelling` and passes `regularUnitPrice`, so the
+setting is live in both channels and a basket prices identically in either.
+⚠ `regularUnitPrice` is the **selling price, never `base_price`**: MRP is a
+struck-through list price, and treating it as a sale price would let `best`
+discount from a much higher base.
+
 **★ AND IT IS A PRICING RULE, SO THE ENGINE OWNS IT — not the UI.** The setting
 is resolved server-side and passed into the pure engine as an input, the way the
 tax config is. A storefront badge that reads it independently is a second
