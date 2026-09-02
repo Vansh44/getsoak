@@ -4,7 +4,7 @@ import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { toast } from "sonner";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Plus, Trash2 } from "lucide-react";
 import {
   createOffer,
   updateOffer,
@@ -34,6 +34,256 @@ const hintClass = "mt-1 block text-[11px] text-[#9ca3af]";
 const PRODUCT_PICKER_LIMIT = 200;
 
 /** The four shapes merchants actually ask for, over one stored rule. */
+/**
+ * Common ladders, offered as a starting point.
+ *
+ * ★ A LADDER IS THE ONE OFFER SHAPE NOBODY BUILDS FROM AN EMPTY LIST. Three
+ * rungs is six numbers that must rise together in two dimensions, and a
+ * merchant who has to invent all six usually enters one rung and leaves — which
+ * is a plain threshold offer wearing a ladder's clothes. The rungs stay fully
+ * editable below, so a preset is a shortcut and never a restriction.
+ */
+const TIER_PRESETS: {
+  label: string;
+  mode: "percent" | "amount";
+  tiers: { minSubtotal: number; value: number }[];
+}[] = [
+  {
+    label: "5% / 10% / 15%",
+    mode: "percent",
+    tiers: [
+      { minSubtotal: 1000, value: 5 },
+      { minSubtotal: 2500, value: 10 },
+      { minSubtotal: 5000, value: 15 },
+    ],
+  },
+  {
+    label: "10% / 20%",
+    mode: "percent",
+    tiers: [
+      { minSubtotal: 1500, value: 10 },
+      { minSubtotal: 3000, value: 20 },
+    ],
+  },
+  {
+    label: "₹100 / ₹300 / ₹750 off",
+    mode: "amount",
+    tiers: [
+      { minSubtotal: 1000, value: 100 },
+      { minSubtotal: 2500, value: 300 },
+      { minSubtotal: 5000, value: 750 },
+    ],
+  },
+];
+
+const BREAK_PRESETS: {
+  label: string;
+  breaks: { minQuantity: number; percent: number }[];
+}[] = [
+  {
+    label: "6+ / 12+",
+    breaks: [
+      { minQuantity: 6, percent: 10 },
+      { minQuantity: 12, percent: 15 },
+    ],
+  },
+  {
+    label: "3+ / 6+ / 12+",
+    breaks: [
+      { minQuantity: 3, percent: 5 },
+      { minQuantity: 6, percent: 10 },
+      { minQuantity: 12, percent: 15 },
+    ],
+  },
+  { label: "10+ only", breaks: [{ minQuantity: 10, percent: 12 }] },
+];
+
+const MAX_RUNGS = 10;
+
+/**
+ * The rung editor for both ladders.
+ *
+ * ★ IT VALIDATES AS YOU TYPE, and specifically it names the ONE mistake that
+ * is invisible on a form: a higher level giving less than the one below it. The
+ * server refuses it, but discovering that on Save — after entering six numbers
+ * — is the difference between a warning and a wasted attempt.
+ */
+function LadderEditor({
+  form,
+  setForm,
+}: {
+  form: OfferFormData;
+  setForm: React.Dispatch<React.SetStateAction<OfferFormData>>;
+}) {
+  const isSpend = form.rewardType === "tiered";
+  const rows: { at: number; value: number }[] = isSpend
+    ? form.tiers.map((t) => ({ at: t.minSubtotal, value: t.value }))
+    : form.breaks.map((b) => ({ at: b.minQuantity, value: b.percent }));
+
+  const write = (next: { at: number; value: number }[]) =>
+    setForm((f) =>
+      isSpend
+        ? {
+            ...f,
+            tiers: next.map((r) => ({ minSubtotal: r.at, value: r.value })),
+          }
+        : {
+            ...f,
+            breaks: next.map((r) => ({
+              minQuantity: Math.trunc(r.at),
+              percent: r.value,
+            })),
+          },
+    );
+
+  const setCell = (i: number, key: "at" | "value", v: number) =>
+    write(rows.map((r, j) => (i === j ? { ...r, [key]: v } : r)));
+
+  // Sorted the way the engine will read them, so the warning below describes
+  // the rule as applied rather than as typed.
+  const ordered = [...rows].sort((a, b) => a.at - b.at);
+  const notRising = ordered.some(
+    (r, i) => i > 0 && r.value <= ordered[i - 1].value,
+  );
+  const duplicated = new Set(ordered.map((r) => r.at)).size !== ordered.length;
+  const asPercent = !isSpend || form.tierMode === "percent";
+
+  const unitLabel = isSpend ? "Order over (₹)" : "Quantity from";
+  const valueLabel = asPercent ? "Discount (%)" : "Discount (₹)";
+
+  return (
+    <div className="sm:col-span-2">
+      <span className={hintClass}>Common levels</span>
+      <div className="mb-3 mt-1 flex flex-wrap gap-2">
+        {(isSpend ? TIER_PRESETS : BREAK_PRESETS).map((preset) => (
+          <button
+            key={preset.label}
+            type="button"
+            onClick={() =>
+              setForm((f) =>
+                isSpend && "tiers" in preset
+                  ? { ...f, tierMode: preset.mode, tiers: preset.tiers }
+                  : {
+                      ...f,
+                      breaks: (preset as { breaks: typeof f.breaks }).breaks,
+                    },
+              )
+            }
+            className="rounded-full border border-[#e5e7eb] px-3 py-1 text-xs text-[#6b7280]"
+          >
+            {preset.label}
+          </button>
+        ))}
+      </div>
+
+      {isSpend ? (
+        <label className="mb-3 block max-w-xs">
+          <span className={hintClass}>Each level gives</span>
+          <select
+            className={fieldClass}
+            value={form.tierMode}
+            onChange={(e) =>
+              setForm((f) => ({
+                ...f,
+                tierMode: e.target.value === "amount" ? "amount" : "percent",
+              }))
+            }
+          >
+            <option value="percent">A percentage off the order</option>
+            <option value="amount">A fixed amount off the order</option>
+          </select>
+        </label>
+      ) : null}
+
+      <div className="space-y-2">
+        {rows.map((row, i) => (
+          <div key={i} className="flex items-end gap-2">
+            <label className="block flex-1">
+              {i === 0 ? <span className={hintClass}>{unitLabel}</span> : null}
+              <input
+                className={fieldClass}
+                inputMode="numeric"
+                value={row.at || ""}
+                onChange={(e) =>
+                  setCell(
+                    i,
+                    "at",
+                    Number(e.target.value.replace(/\D/g, "")) || 0,
+                  )
+                }
+              />
+            </label>
+            <label className="block flex-1">
+              {i === 0 ? <span className={hintClass}>{valueLabel}</span> : null}
+              <input
+                className={fieldClass}
+                inputMode="numeric"
+                value={row.value || ""}
+                onChange={(e) =>
+                  setCell(
+                    i,
+                    "value",
+                    Number(e.target.value.replace(/\D/g, "")) || 0,
+                  )
+                }
+              />
+            </label>
+            <button
+              type="button"
+              aria-label={`Remove level ${i + 1}`}
+              disabled={rows.length <= 1}
+              onClick={() => write(rows.filter((_, j) => j !== i))}
+              className="mb-[6px] rounded-md border border-[#e5e7eb] p-2 text-[#6b7280] disabled:opacity-40"
+            >
+              <Trash2 size={14} />
+            </button>
+          </div>
+        ))}
+      </div>
+
+      {rows.length < MAX_RUNGS ? (
+        <button
+          type="button"
+          onClick={() =>
+            write([
+              ...rows,
+              {
+                at: (ordered[ordered.length - 1]?.at ?? 0) * 2 || 1,
+                value: (ordered[ordered.length - 1]?.value ?? 0) + 5,
+              },
+            ])
+          }
+          className="mt-2 inline-flex items-center gap-1 rounded-md border border-[#e5e7eb] px-3 py-1.5 text-xs text-[#374151]"
+        >
+          <Plus size={13} /> Add a level
+        </button>
+      ) : (
+        <span className={hintClass}>
+          Ten levels is the most an offer can have.
+        </span>
+      )}
+
+      {notRising ? (
+        <p className="mt-2 text-xs text-[#b45309]">
+          Each level has to give more than the one below it, or the higher level
+          never does anything.
+        </p>
+      ) : null}
+      {duplicated ? (
+        <p className="mt-2 text-xs text-[#b45309]">
+          Two levels start at the same {isSpend ? "order value" : "quantity"}.
+        </p>
+      ) : null}
+
+      <span className={hintClass}>
+        {isSpend
+          ? "The highest level the order reaches applies — never several at once. Levels are judged on the order total before any discount."
+          : "Units are counted across all the products you choose, and once a level is reached every one of those items is discounted."}
+      </span>
+    </div>
+  );
+}
+
 const BXGY_PRESETS = [
   { label: "Buy 1 get 1 free", buy: 1, get: 1, pct: 100 },
   { label: "Buy 2 get 1 free", buy: 2, get: 1, pct: 100 },
@@ -88,6 +338,9 @@ export function OfferForm({
     getQuantity: offer?.getQuantity ?? 1,
     getPercent: offer?.getPercent ?? 100,
     maxSets: offer?.maxSets ?? 1,
+    tierMode: offer?.tierMode ?? "percent",
+    tiers: offer?.tiers ?? [{ minSubtotal: 1000, value: 5 }],
+    breaks: offer?.breaks ?? [{ minQuantity: 6, percent: 10 }],
     channels: offer?.channels ?? [],
     validFrom: dateValue(offer?.validFrom ?? null),
     validUntil: dateValue(offer?.validUntil ?? null),
@@ -115,7 +368,11 @@ export function OfferForm({
   const scopeIsReward =
     form.rewardType === "percent_off_items" ||
     form.rewardType === "fixed_price" ||
-    form.rewardType === "buy_x_get_y";
+    form.rewardType === "buy_x_get_y" ||
+    // ★ A quantity ladder MUST be scoped: "buy 6 or more" counts units across
+    // the chosen products, and unscoped it would count the whole basket —
+    // a case price on an unrelated mixture of everything in the shop.
+    form.rewardType === "volume_break";
   const scopeIsCondition =
     form.triggerType === "contains_product" ||
     form.triggerType === "contains_category";
@@ -139,20 +396,42 @@ export function OfferForm({
     const scopeCount =
       form.productIds.length + form.variantIds.length + form.categoryIds.length;
     const scoped = scopeCount > 0 ? ` (${scopeCount} selected)` : "";
+    const ladder =
+      form.rewardType === "tiered"
+        ? form.tiers
+            .map(
+              (t) =>
+                `over ₹${Number(t.minSubtotal || 0).toLocaleString("en-IN")} → ${
+                  form.tierMode === "amount"
+                    ? `₹${Number(t.value || 0).toLocaleString("en-IN")} off`
+                    : `${Number(t.value || 0)}% off`
+                }`,
+            )
+            .join(", ")
+        : form.breaks
+            .map(
+              (b) =>
+                `${Math.trunc(Number(b.minQuantity) || 0)}+ → ${Number(b.percent || 0)}% off`,
+            )
+            .join(", ");
     const gives =
-      form.rewardType === "amount_off"
-        ? `₹${Number(form.amount || 0).toLocaleString("en-IN")} off the order`
-        : form.rewardType === "fixed_price"
-          ? `Chosen items${scoped} at ₹${Number(form.unitPrice || 0).toLocaleString("en-IN")} each`
-          : form.rewardType === "buy_x_get_y"
-            ? `Buy ${form.buyQuantity || 0}, get ${form.getQuantity || 0}${
-                form.getPercent && form.getPercent < 100
-                  ? ` at ${form.getPercent}% off`
-                  : " free"
-              }${scoped}`
-            : form.rewardType === "percent_off_items"
-              ? `${Number(form.percent || 0)}% off chosen items${scoped}`
-              : `${Number(form.percent || 0)}% off the order`;
+      form.rewardType === "tiered"
+        ? `Order discount by level: ${ladder || "no levels yet"}`
+        : form.rewardType === "volume_break"
+          ? `Chosen items${scoped} by quantity: ${ladder || "no levels yet"}`
+          : form.rewardType === "amount_off"
+            ? `₹${Number(form.amount || 0).toLocaleString("en-IN")} off the order`
+            : form.rewardType === "fixed_price"
+              ? `Chosen items${scoped} at ₹${Number(form.unitPrice || 0).toLocaleString("en-IN")} each`
+              : form.rewardType === "buy_x_get_y"
+                ? `Buy ${form.buyQuantity || 0}, get ${form.getQuantity || 0}${
+                    form.getPercent && form.getPercent < 100
+                      ? ` at ${form.getPercent}% off`
+                      : " free"
+                  }${scoped}`
+                : form.rewardType === "percent_off_items"
+                  ? `${Number(form.percent || 0)}% off chosen items${scoped}`
+                  : `${Number(form.percent || 0)}% off the order`;
     const when =
       form.triggerType === "min_subtotal"
         ? ` on orders over ₹${Number(form.minSubtotal || 0).toLocaleString("en-IN")}`
@@ -243,9 +522,18 @@ export function OfferForm({
                   A set price for each chosen item
                 </option>
                 <option value="buy_x_get_y">Buy X get Y</option>
+                <option value="tiered">
+                  Spend more, save more (order levels)
+                </option>
+                <option value="volume_break">
+                  Buy more, save more (quantity levels)
+                </option>
               </select>
             </label>
-            {form.rewardType === "buy_x_get_y" ? (
+            {form.rewardType === "tiered" ||
+            form.rewardType === "volume_break" ? (
+              <LadderEditor form={form} setForm={setForm} />
+            ) : form.rewardType === "buy_x_get_y" ? (
               <div className="sm:col-span-2">
                 {/* ★ PRESETS OVER FOUR NUMBER BOXES. "Buy 1 get 1 free" is what
                     a merchant is thinking; buy/get/percent is how it is

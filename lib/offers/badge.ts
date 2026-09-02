@@ -56,6 +56,15 @@ export function offerBadgeFor(
   >,
   now: Date = new Date(),
 ): OfferBadge | null {
+  // ★ A QUANTITY LADDER CORRECTLY BADGES NOTHING, and that is not a gap to
+  // close later. The cart priced below holds ONE unit, so a `volume_break`
+  // whose first rung is 10 reaches no rung and contributes nothing — which is
+  // the honest answer, because "15% off when you buy 10" is not a claim about
+  // buying one. Advertising the rung price on a product card would put a price
+  // on screen that the cart then declines, which is the exact failure this
+  // whole function exists to prevent. (`buy_x_get_y` behaves identically for
+  // the same reason.) A ladder starting at 1 unit is a plain per-item discount
+  // and badges normally, with no special case.
   const lineOffers = offers.filter(
     (o) => rewardLevel(o.reward.type) === "line",
   );

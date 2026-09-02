@@ -59,6 +59,9 @@ import {
   type OfferRewardType,
   type OfferStatus,
   type OfferTriggerType,
+  decodeReward,
+  sortedTiers,
+  sortedBreaks,
 } from "@/lib/offers/types";
 
 export interface OfferFormData {
@@ -80,6 +83,12 @@ export interface OfferFormData {
   getQuantity: number;
   getPercent: number;
   maxSets: number;
+  /** `tiered`: whether each rung is a percentage or a rupee amount. */
+  tierMode: "percent" | "amount";
+  /** `tiered`: the spend ladder. Highest qualifying rung wins. */
+  tiers: { minSubtotal: number; value: number }[];
+  /** `volume_break`: the quantity ladder. Highest qualifying rung wins. */
+  breaks: { minQuantity: number; percent: number }[];
   /** Empty = every channel. */
   channels: OfferChannel[];
   validFrom: string;
@@ -114,6 +123,9 @@ export interface OfferRow {
   getQuantity: number | null;
   getPercent: number | null;
   maxSets: number | null;
+  tierMode: "percent" | "amount";
+  tiers: { minSubtotal: number; value: number }[];
+  breaks: { minQuantity: number; percent: number }[];
   channels: OfferChannel[];
   validFrom: string | null;
   validUntil: string | null;
@@ -197,6 +209,9 @@ function validateForm(form: OfferFormData): string | null {
     },
     {
       type: form.rewardType,
+      tierMode: form.tierMode,
+      tiers: form.tiers ?? [],
+      breaks: form.breaks ?? [],
       percent: isPercentReward(form.rewardType)
         ? Number(form.percent)
         : undefined,
@@ -270,18 +285,37 @@ function buildRow(form: OfferFormData, userId: string, creating: boolean) {
         : {},
     rewardType: form.rewardType,
     rewardConfig:
-      form.rewardType === "amount_off"
-        ? { amount: Number(form.amount) }
-        : form.rewardType === "fixed_price"
-          ? { unitPrice: Number(form.unitPrice) }
-          : form.rewardType === "buy_x_get_y"
-            ? {
-                buyQuantity: Number(form.buyQuantity),
-                getQuantity: Number(form.getQuantity),
-                getPercent: Number(form.getPercent) || 100,
-                ...(form.maxSets > 0 ? { maxSets: Number(form.maxSets) } : {}),
-              }
-            : { percent: Number(form.percent) },
+      form.rewardType === "tiered"
+        ? {
+            tierMode: form.tierMode === "amount" ? "amount" : "percent",
+            // Stored ordered and de-duplicated, so what the engine reads is
+            // what the editor's own preview showed.
+            tiers: sortedTiers(form.tiers ?? []).map((t) => ({
+              minSubtotal: Number(t.minSubtotal),
+              value: Number(t.value),
+            })),
+          }
+        : form.rewardType === "volume_break"
+          ? {
+              breaks: sortedBreaks(form.breaks ?? []).map((b) => ({
+                minQuantity: Math.trunc(Number(b.minQuantity)),
+                percent: Number(b.percent),
+              })),
+            }
+          : form.rewardType === "amount_off"
+            ? { amount: Number(form.amount) }
+            : form.rewardType === "fixed_price"
+              ? { unitPrice: Number(form.unitPrice) }
+              : form.rewardType === "buy_x_get_y"
+                ? {
+                    buyQuantity: Number(form.buyQuantity),
+                    getQuantity: Number(form.getQuantity),
+                    getPercent: Number(form.getPercent) || 100,
+                    ...(form.maxSets > 0
+                      ? { maxSets: Number(form.maxSets) }
+                      : {}),
+                  }
+                : { percent: Number(form.percent) },
     channels: form.channels ?? [],
     validFrom: toTimestamp(form.validFrom),
     validUntil: toTimestamp(form.validUntil),
@@ -551,6 +585,7 @@ export async function getOfferRedemptions(
 function mapRow(row: typeof offers.$inferSelect): OfferRow {
   const trigger = (row.triggerConfig ?? {}) as Record<string, unknown>;
   const reward = (row.rewardConfig ?? {}) as Record<string, unknown>;
+  const decoded = decodeReward(row.rewardType, row.rewardConfig);
   const numOrNull = (v: unknown) => {
     const n = Number(v);
     return Number.isFinite(n) ? n : null;
@@ -573,6 +608,18 @@ function mapRow(row: typeof offers.$inferSelect): OfferRow {
     getQuantity: numOrNull(reward.getQuantity),
     getPercent: numOrNull(reward.getPercent),
     maxSets: numOrNull(reward.maxSets),
+    // ★ VIA THE SHARED DECODER, so the editor and the engine can never read a
+    // stored ladder differently — the exact divergence that made buy-X-get-Y
+    // look configured and discount nothing.
+    tierMode: decoded.tierMode ?? "percent",
+    tiers: sortedTiers(decoded.tiers ?? []).map((t) => ({
+      minSubtotal: t.minSubtotal,
+      value: t.value,
+    })),
+    breaks: sortedBreaks(decoded.breaks ?? []).map((b) => ({
+      minQuantity: b.minQuantity,
+      percent: b.percent,
+    })),
     channels: (row.channels ?? []) as OfferChannel[],
     validFrom: row.validFrom,
     validUntil: row.validUntil,

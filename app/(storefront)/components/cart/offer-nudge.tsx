@@ -27,11 +27,30 @@ const inr = (n: number) =>
  *  which is the merchant's reference ("Launch week Q3") and means nothing to a
  *  customer. */
 function rewardPhrase(offer: NearMissOffer): string {
-  if (offer.rewardType === "amount_off" && offer.amount) {
-    return `${inr(offer.amount)} off`;
-  }
+  if (offer.amount && !offer.percent) return `${inr(offer.amount)} off`;
   if (offer.percent) return `${offer.percent}% off`;
   return "a discount";
+}
+
+/**
+ * " instead of 10% off" — appended only when the cart is ALREADY earning from
+ * this offer and the gap buys a better level.
+ *
+ * ★★ WITHOUT THIS THE LADDER NUDGE IS ACTIVELY MISLEADING. "Add ₹200 more to
+ * get 15% off" reads, to somebody already receiving 10%, as though they are
+ * getting nothing today — so the honest sentence and the wrong one differ by
+ * three words. The engine sends `currentPercent`/`currentAmount` precisely so
+ * this component never has to infer which situation it is in; absent means the
+ * offer does not apply yet, and the plain sentence is then correct.
+ */
+function insteadOf(offer: NearMissOffer): string {
+  if (typeof offer.currentPercent === "number") {
+    return ` instead of ${offer.currentPercent}%`;
+  }
+  if (typeof offer.currentAmount === "number") {
+    return ` instead of ${inr(offer.currentAmount)}`;
+  }
+  return "";
 }
 
 /** "one is free" / "two are half price" — what completing the set earns. */
@@ -62,14 +81,26 @@ export function OfferNudge({
   // would have to render the unit gap as currency or the spend gap as a count,
   // and either reads as a bug. The engine tags which it is rather than leaving
   // the component to infer it from the number.
+  // ★ A QUANTITY LADDER IS A UNIT GAP THAT IS NOT A SET. Both arrive as
+  // `kind: "units"`, and "add 2 more and one is free" would be flatly wrong for
+  // a case price — so the reward TYPE, which the engine already sends, decides
+  // the second half of the sentence.
   const body =
     offer.kind === "units" ? (
-      <>
-        Add <strong>{offer.gap}</strong> more and {setReward(offer)}.
-      </>
+      offer.rewardType === "volume_break" ? (
+        <>
+          Add <strong>{offer.gap}</strong> more to get {rewardPhrase(offer)} on
+          each{insteadOf(offer)}.
+        </>
+      ) : (
+        <>
+          Add <strong>{offer.gap}</strong> more and {setReward(offer)}.
+        </>
+      )
     ) : (
       <>
-        Add <strong>{inr(offer.gap)}</strong> more to get {rewardPhrase(offer)}.
+        Add <strong>{inr(offer.gap)}</strong> more to get {rewardPhrase(offer)}
+        {insteadOf(offer)}.
       </>
     );
 

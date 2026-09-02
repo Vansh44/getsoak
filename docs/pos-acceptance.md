@@ -3754,6 +3754,62 @@ the offer. That is deliberate (CODEBASE §39): the cashier chose nothing, and
 `order_item_offers` + `offer_redemptions` carry more than a log line would. A
 manual discount on the same sale DOES appear.
 
+**PS-OF.12 — A spend ladder gives ONE level, not the sum**
+Create an offer with reward **Spend more, save more**, percentage levels
+₹1,000→5%, ₹2,500→10%, ₹5,000→15%. Ring a ₹3,000 basket. **Expect:** ₹300 off
+(10%), _not_ ₹450 (5+10). Ring ₹6,000: ₹900 (15%). Ring ₹800: no discount, and
+the offer shows as `trigger_unmet` in the skip list, not as an error.
+
+**PS-OF.13 — Reaching a level cannot un-reach it**
+On the same ladder, ring a basket of exactly ₹2,500. **Expect:** 10% (₹250), so
+the charge is ₹2,250. It must NOT fall back to 5% on the ground that the
+discounted total is below ₹2,500 — the level is judged on the undiscounted
+subtotal, or the answer would depend on evaluation order.
+
+**PS-OF.14 — A quantity ladder counts across the lines it covers**
+Create **Buy more, save more** scoped to two products, levels 6→10% and
+12→15%. Ring six of the first product and six of the second. **Expect:** 15% off
+all twelve units. Then ring six of just one: 10% off all six — every unit, not
+only those above the number.
+
+**PS-OF.15 — A quantity ladder ignores what it does not cover**
+On the same offer, ring five covered units plus five uncovered ones.
+**Expect:** no discount. Ten items are in the basket but only five are in
+scope, and the level counts scope, not basket size.
+
+**PS-OF.16 ★ — A ladder does not displace something better**
+Add a second offer, 25% off the same product, alongside the 6→10% ladder. Ring
+six units. **Expect:** 25% applies and the ladder does not. Best-offer-wins
+holds across reward SHAPES, so a ladder does not win merely by being a ladder.
+
+**PS-OF.17 ★★ — The upgrade nudge says what you already have**
+On the storefront with a ₹1,000→10%, ₹1,200→15% ladder, fill a cart to ₹1,050.
+**Expect:** 10% is already applied AND the strip reads "Add ₹150 more to get 15%
+off **instead of 10%**". At ₹1,300 (top level) the strip disappears. At ₹900 it
+reads "Add ₹100 more to get 10% off" with NO "instead of" — the cart earns
+nothing yet, and claiming otherwise is the misleading version of the same
+sentence.
+
+**PS-OF.18 — The quantity nudge counts items, not rupees**
+With a 6→10%, 12→15% quantity ladder, put ten covered units in the cart.
+**Expect:** "Add 2 more to get 15% off on each instead of 10%". With four units:
+"Add 2 more to get 10% off on each" and no "instead of". With none of the
+covered products in the cart: no strip at all.
+
+**PS-OF.19 ★ — A case price does not appear on a product card**
+With a 6→10% quantity ladder active, open a covered product's page.
+**Expect:** NO offer badge. Correct, not a gap: "10% off when you buy 6" is not
+a claim about buying one, and the discount appears in the cart once the
+quantity is reached.
+
+**PS-OF.20 ★★ — Buy X get Y actually discounts (the Phase D regression)**
+Create "buy 1 get 1 free" scoped to a product, ring two units. **Expect:** one
+free. Then create a fixed-price offer and ring one covered item. **Expect:** the
+set price. Both were **silently inert** before Phase D — configured, listed as
+active, correct summary sentence, no error, and no discount — because the engine
+loader copied only `percent` and `amount` out of `reward_config`. Re-run this
+after any change to reward configuration.
+
 ---
 
 ## 12. Known gaps

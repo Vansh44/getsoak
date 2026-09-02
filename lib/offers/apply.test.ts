@@ -1410,3 +1410,298 @@ describe("applyOffers — buy X get Y near miss", () => {
     expect(r.nearMiss.map((n) => n.kind)).toContain("spend");
   });
 });
+
+describe("applyOffers — spend-more-save-more tiers", () => {
+  const ladder = offer({
+    reward: {
+      type: "tiered",
+      tierMode: "percent",
+      tiers: [
+        { minSubtotal: 1000, value: 5 },
+        { minSubtotal: 2000, value: 10 },
+        { minSubtotal: 5000, value: 15 },
+      ],
+    },
+  });
+
+  it("applies the highest qualifying rung, never the sum of them", () => {
+    const r = applyOffers({
+      lines: [line({ unitPrice: 2500 })],
+      offers: [ladder],
+      context: ctx(),
+    });
+    // 10% of 2500, not 5+10 = 15%.
+    expect(r.discount).toBe(250);
+  });
+
+  it("takes the top rung on a large cart", () => {
+    const r = applyOffers({
+      lines: [line({ unitPrice: 6000 })],
+      offers: [ladder],
+      context: ctx(),
+    });
+    expect(r.discount).toBe(900);
+  });
+
+  it("refuses below the lowest rung, and says why", () => {
+    const r = applyOffers({
+      lines: [line({ unitPrice: 400 })],
+      offers: [ladder],
+      context: ctx(),
+    });
+    expect(r.discount).toBe(0);
+    expect(r.skipped).toEqual([{ offerId: "o1", reason: "trigger_unmet" }]);
+  });
+
+  it("chooses the rung on the UNDISCOUNTED subtotal, so it cannot deselect itself", () => {
+    // 2000 exactly reaches the 10% rung. Were the rung re-tested after the
+    // discount (1800), it would fall back to 5% — and then 1900 would qualify
+    // again, which is the circularity `min_subtotal` avoids the same way.
+    const r = applyOffers({
+      lines: [line({ unitPrice: 2000 })],
+      offers: [ladder],
+      context: ctx(),
+    });
+    expect(r.discount).toBe(200);
+  });
+
+  it("supports a rupee ladder as well as a percentage one", () => {
+    const r = applyOffers({
+      lines: [line({ unitPrice: 3000 })],
+      offers: [
+        offer({
+          reward: {
+            type: "tiered",
+            tierMode: "amount",
+            tiers: [
+              { minSubtotal: 1000, value: 100 },
+              { minSubtotal: 2500, value: 300 },
+            ],
+          },
+        }),
+      ],
+      context: ctx(),
+    });
+    expect(r.discount).toBe(300);
+  });
+
+  it("honours the per-order depth ceiling like any other reward", () => {
+    const r = applyOffers({
+      lines: [line({ unitPrice: 6000 })],
+      offers: [ladder],
+      context: ctx({ maxTotalDiscountPercent: 5 }),
+    });
+    expect(r.discount).toBe(300);
+    expect(r.cappedByCeiling).toBe(true);
+  });
+
+  it("loses to a deeper flat offer under best-offer-wins", () => {
+    const r = applyOffers({
+      lines: [line({ unitPrice: 2500 })],
+      offers: [
+        ladder,
+        offer({ id: "flat", reward: { type: "percent_off", percent: 20 } }),
+      ],
+      context: ctx(),
+    });
+    expect(r.discount).toBe(500);
+    expect(r.applied[0].offerId).toBe("flat");
+  });
+});
+
+describe("applyOffers — tier upgrade nudge", () => {
+  const ladder = offer({
+    reward: {
+      type: "tiered",
+      tierMode: "percent",
+      tiers: [
+        { minSubtotal: 1000, value: 10 },
+        { minSubtotal: 1200, value: 15 },
+      ],
+    },
+  });
+
+  it("names the next rung AND what the cart already earns", () => {
+    const r = applyOffers({
+      lines: [line({ unitPrice: 1050 })],
+      offers: [ladder],
+      context: ctx(),
+    });
+    // The cart is being discounted at 10% right now…
+    expect(r.discount).toBe(105);
+    // …and is told what 150 more would buy, against what it has.
+    expect(r.nearMiss).toHaveLength(1);
+    expect(r.nearMiss[0]).toMatchObject({
+      kind: "spend",
+      gap: 150,
+      percent: 15,
+      currentPercent: 10,
+    });
+  });
+
+  it("says nothing on the top rung", () => {
+    const r = applyOffers({
+      lines: [line({ unitPrice: 1300 })],
+      offers: [ladder],
+      context: ctx(),
+    });
+    expect(r.nearMiss).toEqual([]);
+  });
+
+  it("carries NO current value before the ladder applies at all", () => {
+    // ★ The distinction the UI branches on: without a current value the
+    // sentence is "get 10% off", with one it is "get 15% instead of 10%".
+    const r = applyOffers({
+      lines: [line({ unitPrice: 900 })],
+      offers: [ladder],
+      context: ctx(),
+    });
+    expect(r.nearMiss[0]).toMatchObject({ gap: 100, percent: 10 });
+    expect(r.nearMiss[0].currentPercent).toBeUndefined();
+  });
+
+  it("never nudges an upgrade for a coded or group-only ladder", () => {
+    for (const over of [
+      { delivery: "code" as const, code: "LADDER" },
+      { groupIds: ["g1"] },
+    ]) {
+      const r = applyOffers({
+        lines: [line({ unitPrice: 1050 })],
+        offers: [{ ...ladder, ...over }],
+        context: ctx({ code: "LADDER", groupIds: ["g1"] }),
+      });
+      expect(r.nearMiss).toEqual([]);
+    }
+  });
+});
+
+describe("applyOffers — volume breaks", () => {
+  const caseprice = offer({
+    productIds: ["p1", "p2"],
+    reward: {
+      type: "volume_break",
+      breaks: [
+        { minQuantity: 6, percent: 10 },
+        { minQuantity: 12, percent: 15 },
+      ],
+    },
+  });
+
+  it("counts units ACROSS the scoped lines, not per line", () => {
+    // Six of one and six of another reach the twelve-unit rung together.
+    const r = applyOffers({
+      lines: [
+        line({ id: "a", productId: "p1", quantity: 6, unitPrice: 100 }),
+        line({ id: "b", productId: "p2", quantity: 6, unitPrice: 100 }),
+      ],
+      offers: [caseprice],
+      context: ctx(),
+    });
+    expect(r.discount).toBe(180); // 15% of 1200
+  });
+
+  it("discounts EVERY scoped unit once the rung is reached, not only the ones above it", () => {
+    const r = applyOffers({
+      lines: [line({ quantity: 6, unitPrice: 100 })],
+      offers: [caseprice],
+      context: ctx(),
+    });
+    expect(r.discount).toBe(60); // 10% of all six, not of one
+  });
+
+  it("refuses below the first rung", () => {
+    const r = applyOffers({
+      lines: [line({ quantity: 5, unitPrice: 100 })],
+      offers: [caseprice],
+      context: ctx(),
+    });
+    expect(r.discount).toBe(0);
+    expect(r.skipped).toEqual([{ offerId: "o1", reason: "trigger_unmet" }]);
+  });
+
+  it("ignores units outside its scope", () => {
+    const r = applyOffers({
+      lines: [
+        line({ id: "in", productId: "p1", quantity: 5, unitPrice: 100 }),
+        line({ id: "out", productId: "zzz", quantity: 5, unitPrice: 100 }),
+      ],
+      offers: [caseprice],
+      context: ctx(),
+    });
+    expect(r.discount).toBe(0);
+  });
+
+  it("does not displace a deeper line offer on the same products", () => {
+    const r = applyOffers({
+      lines: [line({ quantity: 6, unitPrice: 100 })],
+      offers: [
+        caseprice,
+        offer({
+          id: "deep",
+          productIds: ["p1"],
+          reward: { type: "percent_off_items", percent: 25 },
+        }),
+      ],
+      context: ctx(),
+    });
+    expect(r.discount).toBe(150); // 25%, not the 10% case price
+    expect(r.applied[0].offerId).toBe("deep");
+  });
+
+  it("nudges toward the next quantity rung, with what the cart already earns", () => {
+    const r = applyOffers({
+      lines: [line({ quantity: 10, unitPrice: 100 })],
+      offers: [caseprice],
+      context: ctx(),
+    });
+    expect(r.discount).toBe(100); // 10% of ten units
+    expect(r.nearMiss).toHaveLength(1);
+    expect(r.nearMiss[0]).toMatchObject({
+      kind: "units",
+      gap: 2,
+      percent: 15,
+      currentPercent: 10,
+    });
+  });
+
+  it("nudges toward the FIRST rung, but only when the cart holds a scoped item", () => {
+    const near = applyOffers({
+      lines: [line({ quantity: 4, unitPrice: 100 })],
+      offers: [caseprice],
+      context: ctx(),
+    });
+    expect(near.nearMiss[0]).toMatchObject({
+      kind: "units",
+      gap: 2,
+      percent: 10,
+    });
+    expect(near.nearMiss[0].currentPercent).toBeUndefined();
+
+    // ★ Nothing of the product in the cart is an advert, not a nudge: it would
+    // fire on every basket in the store.
+    const none = applyOffers({
+      lines: [line({ productId: "zzz", quantity: 1, unitPrice: 100 })],
+      offers: [caseprice],
+      context: ctx(),
+    });
+    expect(none.nearMiss).toEqual([]);
+  });
+
+  it("respects a total budget cap", () => {
+    const r = applyOffers({
+      lines: [line({ quantity: 12, unitPrice: 100 })],
+      offers: [{ ...caseprice, remainingBudget: 50 }],
+      context: ctx(),
+    });
+    expect(r.discount).toBe(50);
+  });
+
+  it("skips on-sale lines under `skip`, so they neither qualify nor discount", () => {
+    const r = applyOffers({
+      lines: [line({ quantity: 6, unitPrice: 80, regularUnitPrice: 100 })],
+      offers: [caseprice],
+      context: ctx({ onSalePrice: "skip" }),
+    });
+    expect(r.discount).toBe(0);
+  });
+});

@@ -26,7 +26,7 @@ import {
   userGroupMembers,
 } from "@/drizzle/schema";
 import { getStoreSettings } from "@/lib/settings/resolve";
-import { normalizeOnSalePriceMode } from "./types";
+import { decodeReward, normalizeOnSalePriceMode } from "./types";
 import type { Offer, OfferChannel } from "./types";
 import { MAX_EVALUATED_OFFERS } from "./apply";
 import type { OfferContext } from "./apply";
@@ -206,11 +206,7 @@ export async function loadLiveOffers(
         type: r.triggerType === "min_subtotal" ? "min_subtotal" : "always",
         minSubtotal: num(trigger.minSubtotal),
       },
-      reward: {
-        type: r.rewardType as Offer["reward"]["type"],
-        percent: num(reward.percent),
-        amount: num(reward.amount),
-      },
+      reward: decodeReward(r.rewardType, reward),
       productIds: scope?.productIds ?? [],
       variantIds: scope?.variantIds ?? [],
       categoryIds: scope?.categoryIds ?? [],

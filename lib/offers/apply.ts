@@ -54,6 +54,8 @@ import {
   isContentsTrigger,
   isFixedPriceReward,
   isGroupReward,
+  sortedTiers,
+  sortedBreaks,
   isPercentReward,
   normalizeOfferCode,
   rewardLevel,
@@ -176,6 +178,20 @@ export interface NearMissOffer {
   amount?: number;
   /** `units` only: how many the offer gives once the set completes. */
   getQuantity?: number;
+  /**
+   * What the cart earns from this offer RIGHT NOW, when the gap buys an
+   * upgrade rather than the offer itself. Absent means the offer does not
+   * apply yet.
+   *
+   * ★ THIS IS WHAT MAKES A LADDER WORTH BUILDING. "Spend ₹200 more for 15%
+   * off" is a different and far stronger sentence than "spend ₹200 more for
+   * 15% off" when the shopper already has 10% — the second needs "instead of
+   * 10%" to mean anything, and without these fields the UI cannot tell the two
+   * situations apart. It would then either omit the comparison (making the
+   * nudge look like an offer they do not have) or invent one.
+   */
+  currentPercent?: number;
+  currentAmount?: number;
 }
 
 export interface OfferResult {
@@ -264,6 +280,60 @@ function offerCoversLine(offer: Offer, pl: PricedLine): boolean {
     return true;
   }
   return false;
+}
+
+/**
+ * The highest rung of a `tiered` reward the cart has reached, or null.
+ *
+ * ★ HIGHEST QUALIFYING, NEVER CUMULATIVE. A ₹2,500 cart on a 5/10/15 ladder
+ * gets 15%, not 30%. Summing the rungs is the mistake this function exists to
+ * make impossible, and it is the reading every merchant means.
+ *
+ * ★ MEASURED ON THE UNDISCOUNTED SUBTOTAL, like `min_subtotal` — for the same
+ * anti-circularity reason: a rung that lowered the subtotal below its own
+ * threshold would deselect itself, and the answer would depend on evaluation
+ * order rather than on the cart.
+ */
+function activeTier(
+  offer: Offer,
+  subtotalPaise: number,
+): { minSubtotal: number; value: number } | null {
+  let chosen: { minSubtotal: number; value: number } | null = null;
+  for (const tier of sortedTiers(offer.reward.tiers)) {
+    if (subtotalPaise >= toPaise(tier.minSubtotal)) chosen = tier;
+    else break;
+  }
+  return chosen;
+}
+
+/** Units of the offer's scope present in the cart and still available to it. */
+function scopedUnits(
+  offer: Offer,
+  priced: readonly PricedLine[],
+  mode: OnSalePriceMode,
+  excluded?: readonly (string | null)[],
+): number {
+  let units = 0;
+  for (const pl of priced) {
+    if (!lineEligible(pl, mode)) continue;
+    if (excluded && excluded[pl.index] !== null) continue;
+    if (!offerCoversLine(offer, pl)) continue;
+    units += Math.max(0, Math.trunc(Number(pl.line.quantity) || 0));
+  }
+  return units;
+}
+
+/** The highest quantity rung `units` has reached, or null. */
+function activeBreak(
+  offer: Offer,
+  units: number,
+): { minQuantity: number; percent: number } | null {
+  let chosen: { minQuantity: number; percent: number } | null = null;
+  for (const b of sortedBreaks(offer.reward.breaks)) {
+    if (units >= b.minQuantity) chosen = b;
+    else break;
+  }
+  return chosen;
 }
 
 /**
@@ -361,6 +431,9 @@ function claimGroupOffer(
   mode: OnSalePriceMode,
   excluded: readonly (string | null)[],
 ): Claim {
+  if (offer.reward.type === "volume_break") {
+    return claimVolumeOffer(priced, offer, mode, excluded);
+  }
   const claim = emptyClaim(priced.length);
   const buy = Math.trunc(offer.reward.buyQuantity ?? 0);
   const get = Math.trunc(offer.reward.getQuantity ?? 0);
@@ -536,6 +609,56 @@ function claimLineOffers(
 }
 
 /**
+ * "Buy 10 or more, save 15% on each" — a quantity ladder over the offer's
+ * scope.
+ *
+ * ★ IT IS A GROUP REWARD FOR ONE REASON: the QUANTITY is counted across every
+ * line in scope, so six of one flavour and six of another earn the twelve-unit
+ * rung together. Evaluated per line it would find six and six and award
+ * nothing, which is the opposite of what a merchant setting a case-price
+ * means. That shared counting is exactly what `isGroupReward` marks.
+ *
+ * ★ ONCE A RUNG IS REACHED, EVERY SCOPED UNIT GETS IT — not only the units
+ * above the threshold. "Buy 10+, 15% off" universally means all ten are
+ * discounted, and charging full price for the first nine would make the
+ * headline false.
+ *
+ * ★ AND IT STILL COMPETES. It returns an ordinary `Claim`, so the group loop
+ * in `claimLineOffers` takes it only where it beats what those lines already
+ * had — a 20%-off-shakes offer is not displaced by a 15% case price merely
+ * because one is a ladder.
+ */
+function claimVolumeOffer(
+  priced: readonly PricedLine[],
+  offer: Offer,
+  mode: OnSalePriceMode,
+  excluded: readonly (string | null)[],
+): Claim {
+  const claim = emptyClaim(priced.length);
+
+  const units = scopedUnits(offer, priced, mode, excluded);
+  const rung = activeBreak(offer, units);
+  if (!rung) return claim;
+
+  const budget = budgetCapPaise(offer);
+  let spent = 0;
+  for (const pl of priced) {
+    if (!lineEligible(pl, mode)) continue;
+    if (excluded[pl.index] !== null) continue;
+    if (!offerCoversLine(offer, pl)) continue;
+    const raw = percentRewardPaise(rung.percent, pl, mode);
+    const value = Math.min(raw, Math.max(0, budget - spent), pl.netPaise);
+    if (value <= 0) continue;
+    claim.byLine[pl.index] = value;
+    claim.offerByLine[pl.index] = offer.id;
+    claim.total += value;
+    spent += value;
+  }
+
+  return claim;
+}
+
+/**
  * An order-level offer claiming a set of lines.
  *
  * A percentage is applied per line (separable). A fixed amount is NOT
@@ -553,8 +676,26 @@ function claimOrderOffer(
   offer: Offer,
   mode: OnSalePriceMode,
   excluded: readonly (string | null)[],
+  subtotalPaise: number,
 ): Claim {
   const claim = emptyClaim(priced.length);
+
+  // ★ A LADDER RESOLVES TO A PLAIN REWARD BEFORE ANYTHING ELSE HAPPENS, so
+  // every rule below — the budget cap, `onSalePrice`, the proportional
+  // allocation, the per-line ceiling — applies to a tier exactly as it does to
+  // a flat percentage. A second code path per reward shape is how a ladder ends
+  // up ignoring a cap that a flat offer honours.
+  let percentValue = offer.reward.percent ?? 0;
+  let amountValue = offer.reward.amount ?? 0;
+  let asPercent = isPercentReward(offer.reward.type);
+
+  if (offer.reward.type === "tiered") {
+    const rung = activeTier(offer, subtotalPaise);
+    if (!rung) return claim;
+    asPercent = (offer.reward.tierMode ?? "percent") === "percent";
+    if (asPercent) percentValue = rung.value;
+    else amountValue = rung.value;
+  }
   // ★ AN ORDER-LEVEL REWARD IS NOT NARROWED BY THE OFFER'S SCOPE, and the
   // distinction is the merchant's mental model rather than a technicality.
   // The REWARD TYPE already says which they meant:
@@ -581,10 +722,10 @@ function claimOrderOffer(
 
   const cap = budgetCapPaise(offer);
 
-  if (isPercentReward(offer.reward.type)) {
+  if (asPercent) {
     let spent = 0;
     for (const pl of eligible) {
-      const raw = percentRewardPaise(offer.reward.percent ?? 0, pl, mode);
+      const raw = percentRewardPaise(percentValue, pl, mode);
       const value = Math.min(raw, Math.max(0, cap - spent), pl.netPaise);
       if (value <= 0) continue;
       claim.byLine[pl.index] = value;
@@ -598,7 +739,7 @@ function claimOrderOffer(
   // amount_off — a lump sum spread across the lines it may touch.
   const basePaise = eligible.reduce((s, pl) => s + pl.netPaise, 0);
   const wanted = Math.min(
-    toPaise(offer.reward.amount ?? 0),
+    toPaise(amountValue),
     basePaise,
     cap === Number.POSITIVE_INFINITY ? basePaise : cap,
   );
@@ -704,8 +845,9 @@ export function applyOffers({
       skipped.push({ offerId: offer.id, reason });
       // A near miss is an offer the shopper would GET if the cart were bigger,
       // so it is only ever an unmet trigger — never a scope or code refusal.
-      if (reason === "trigger_unmet")
-        collectNearMiss(offer, subtotalPaise, nearMiss);
+      if (reason === "trigger_unmet") {
+        collectNearMiss(offer, subtotalPaise, priced, policyMode, nearMiss);
+      }
       continue;
     }
     eligible.push(offer);
@@ -716,6 +858,7 @@ export function applyOffers({
   // among the candidates rather than among the refusals.
   for (const offer of eligible) {
     collectUnitNearMiss(offer, priced, policyMode, nearMiss);
+    collectLadderUpgrade(offer, subtotalPaise, priced, policyMode, nearMiss);
   }
 
   eligible.sort(candidateOrder);
@@ -764,6 +907,7 @@ export function applyOffers({
         orderOffer,
         context.onSalePrice,
         lineOnly.offerByLine,
+        subtotalPaise,
       ),
     );
     scored.push({
@@ -778,6 +922,7 @@ export function applyOffers({
       orderOffer,
       context.onSalePrice,
       new Array<string | null>(priced.length).fill(null),
+      subtotalPaise,
     );
     scored.push({
       id: "order_only",
@@ -941,6 +1086,20 @@ function disqualify(
     if (!matches) return "trigger_unmet";
   }
 
+  // ★ A LADDER WHOSE LOWEST RUNG IS OUT OF REACH IS REFUSED HERE, not left to
+  // claim nothing. Two things depend on it: `trigger_unmet` is what routes the
+  // offer into the near-miss collector (so the shopper is told how close they
+  // are), and the operator-facing skip list then names an actionable reason
+  // rather than the catch-all `no_eligible_lines`.
+  if (offer.reward.type === "tiered") {
+    if (!activeTier(offer, subtotalPaise)) return "trigger_unmet";
+  }
+  if (offer.reward.type === "volume_break") {
+    if (!activeBreak(offer, scopedUnits(offer, priced, mode))) {
+      return "trigger_unmet";
+    }
+  }
+
   if (offer.trigger.type === "min_subtotal") {
     // ★ MEASURED AGAINST THE UNDISCOUNTED MERCHANDISE SUBTOTAL, always. Two
     // reasons, and the second is the load-bearing one: it is what the shopper
@@ -959,18 +1118,80 @@ function disqualify(
 function collectNearMiss(
   offer: Offer,
   subtotalPaise: number,
+  priced: readonly PricedLine[],
+  mode: OnSalePriceMode,
   out: NearMissOffer[],
 ): void {
-  if (offer.trigger.type !== "min_subtotal") return;
-  // ★ NEVER NUDGE A CODE OR GROUP-RESTRICTED OFFER. "You're ₹200 from 20% off
-  // with WHOLESALE20" leaks a targeted code to every visitor, and the group
-  // restriction was the whole point of setting it (plan §14b).
-  if (offer.delivery === "code") return;
-  if (offer.groupIds.length > 0) return;
+  if (!nudgeable(offer)) return;
 
-  const threshold = toPaise(offer.trigger.minSubtotal ?? 0);
-  const gap = threshold - subtotalPaise;
+  // A ladder's first rung is its threshold, so the gap comes from the rung
+  // rather than from the trigger.
+  if (offer.reward.type === "tiered") {
+    const first = sortedTiers(offer.reward.tiers)[0];
+    if (!first) return;
+    const asPercent = (offer.reward.tierMode ?? "percent") === "percent";
+    pushSpendGap(offer, toPaise(first.minSubtotal), subtotalPaise, out, {
+      percent: asPercent ? first.value : undefined,
+      amount: asPercent ? undefined : first.value,
+    });
+    return;
+  }
+
+  if (offer.reward.type === "volume_break") {
+    const first = sortedBreaks(offer.reward.breaks)[0];
+    if (!first) return;
+    const units = scopedUnits(offer, priced, mode);
+    // ★ ONLY WHEN THE CART ALREADY HOLDS ONE, the `collectUnitNearMiss`
+    // restraint: a case-price nudge on a cart containing none of the products
+    // is an advert that would fire on every basket in the store.
+    if (units <= 0) return;
+    out.push({
+      offerId: offer.id,
+      offerName: offer.name,
+      kind: "units",
+      gap: first.minQuantity - units,
+      rewardType: offer.reward.type,
+      percent: first.percent,
+    });
+    return;
+  }
+
+  if (offer.trigger.type !== "min_subtotal") return;
+  pushSpendGap(
+    offer,
+    toPaise(offer.trigger.minSubtotal ?? 0),
+    subtotalPaise,
+    out,
+    {
+      percent: offer.reward.percent,
+      amount: offer.reward.amount,
+    },
+  );
+}
+
+/**
+ * ★ NEVER NUDGE A CODE OR GROUP-RESTRICTED OFFER. "You're ₹200 from 20% off
+ * with WHOLESALE20" leaks a targeted code to every visitor, and the group
+ * restriction was the whole point of setting it (plan §14b). Shared by every
+ * collector, because the leak has nothing to do with which shape the gap takes.
+ */
+function nudgeable(offer: Offer): boolean {
+  return offer.delivery !== "code" && offer.groupIds.length === 0;
+}
+
+/** A rupee gap, subject to the shared proximity floor. */
+function pushSpendGap(
+  offer: Offer,
+  thresholdPaise: number,
+  subtotalPaise: number,
+  out: NearMissOffer[],
+  reward: { percent?: number; amount?: number },
+  current?: { percent?: number; amount?: number },
+): void {
+  const gap = thresholdPaise - subtotalPaise;
   if (gap <= 0) return;
+  // Close enough to be worth saying: within the floor, or within the size of
+  // the cart itself (so a big basket is nudged toward a big threshold).
   if (gap > Math.max(toPaise(NEAR_MISS_FLOOR), subtotalPaise)) return;
 
   out.push({
@@ -979,9 +1200,79 @@ function collectNearMiss(
     kind: "spend",
     gap: toRupees(gap),
     rewardType: offer.reward.type,
-    percent: offer.reward.percent,
-    amount: offer.reward.amount,
+    percent: reward.percent,
+    amount: reward.amount,
+    currentPercent: current?.percent,
+    currentAmount: current?.amount,
   });
+}
+
+/**
+ * "Spend ₹200 more for 15% off instead of 10%" — the next rung up a ladder the
+ * cart is ALREADY earning from.
+ *
+ * ★ THIS IS THE COMMERCIALLY USEFUL HALF OF A LADDER, and it needs its own
+ * collector because it fires on an ELIGIBLE offer rather than a refused one:
+ * nothing disqualified it, the cart simply has not reached the rung above.
+ * `collectNearMiss` only ever sees refusals, so an upgrade would be invisible
+ * to it — which would leave a merchant paying for a three-rung ladder that
+ * only ever advertises its bottom step.
+ *
+ * ★ IT REPORTS ONE RUNG UP, NEVER THE TOP. Nudging a ₹1,100 cart toward a
+ * ₹5,000 rung is not a nudge, and the proximity floor would usually reject it
+ * anyway; the next step is the one the shopper might actually take.
+ */
+function collectLadderUpgrade(
+  offer: Offer,
+  subtotalPaise: number,
+  priced: readonly PricedLine[],
+  mode: OnSalePriceMode,
+  out: NearMissOffer[],
+): void {
+  if (!nudgeable(offer)) return;
+
+  if (offer.reward.type === "tiered") {
+    const tiers = sortedTiers(offer.reward.tiers);
+    const at = activeTier(offer, subtotalPaise);
+    if (!at) return; // Not earning yet — that is `collectNearMiss`'s case.
+    const next = tiers.find((t) => toPaise(t.minSubtotal) > subtotalPaise);
+    if (!next) return; // Already on the top rung.
+    const asPercent = (offer.reward.tierMode ?? "percent") === "percent";
+    pushSpendGap(
+      offer,
+      toPaise(next.minSubtotal),
+      subtotalPaise,
+      out,
+      {
+        percent: asPercent ? next.value : undefined,
+        amount: asPercent ? undefined : next.value,
+      },
+      {
+        percent: asPercent ? at.value : undefined,
+        amount: asPercent ? undefined : at.value,
+      },
+    );
+    return;
+  }
+
+  if (offer.reward.type === "volume_break") {
+    const units = scopedUnits(offer, priced, mode);
+    const at = activeBreak(offer, units);
+    if (!at) return;
+    const next = sortedBreaks(offer.reward.breaks).find(
+      (b) => b.minQuantity > units,
+    );
+    if (!next) return;
+    out.push({
+      offerId: offer.id,
+      offerName: offer.name,
+      kind: "units",
+      gap: next.minQuantity - units,
+      rewardType: offer.reward.type,
+      percent: next.percent,
+      currentPercent: at.percent,
+    });
+  }
 }
 
 /**

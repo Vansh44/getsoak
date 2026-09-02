@@ -118,6 +118,35 @@ declared durable and adoption contracts to their reviewed state before retrying.
 Production also requires both `--confirm-database storemink` and the existing
 `--confirm-production storemink` guard.
 
+## The short way (use this)
+
+Two wrappers exist because the long form needs four things right at once —
+`DB_ADMIN_USER`, the admin password out of Secret Manager, the correct `DB_NAME`
+for the environment, and `--environment` — and getting any of them wrong is
+what makes hand-pasting into Cloud SQL Studio look easier. It is not: a hand
+apply writes no ledger row, so the runner then reports the migration as pending
+while its objects exist, and an adoption can only fix that while the migration
+is still the FIRST pending one.
+
+```bash
+npm run db:proxy                                    # in another terminal
+npm run db:migrate:staging -- status
+npm run db:migrate:staging -- apply --commit "$(git rev-parse HEAD)"
+npm run db:migrate:prod -- status
+npm run db:migrate:prod -- apply --confirm-production storemink \
+  --commit "$(git rev-parse HEAD)"
+```
+
+★ `--confirm-production` is NOT baked into the wrapper on purpose. It is the
+only deliberate step between "I meant staging" and a production write, so it
+has to be typed. (`status` rejects the flag outright, which is how you know it
+belongs to mutations only.)
+
+⚠ Needs `gcloud auth application-default login` for the proxy (ADC) as well as
+`gcloud auth login` for the secret read — they are different credentials, and a
+running proxy caches the first at startup, so an expired ADC shows up as every
+connection being RESET rather than as an auth error.
+
 Production mutations require a second explicit guard:
 
 ```bash

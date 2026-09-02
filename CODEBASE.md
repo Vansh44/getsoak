@@ -8025,8 +8025,9 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       merchant's Twilio number needs a messaging webhook pointed at us. Until
       then opt-out is enforced on send but can only be recorded by hand.
 
-38. **Offers — one engine for every discount** (Phase A shipped; design and the
-    full phase plan in **`docs/offers-plan.md`**, sequenced as roadmap Step 22).
+38. **Offers — one engine for every discount** (Phases A–D shipped; design and
+    the full phase plan in **`docs/offers-plan.md`**, sequenced as roadmap
+    Step 22).
     Coupons were the only discount mechanism and were order-level only: a
     percentage or a rupee amount off the whole cart, on a code, online only.
     Offers replace that with one engine reaching both counters.
@@ -8223,11 +8224,81 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       buy-X-get-Y row with no quantities at all, which the engine values at zero
       while the merchant's list shows it active. Caught by running it against a
       real Postgres, not by reading it.
-    - **Not built (Phases D–I):**
-      tiers and volume breaks, payment-method / fulfilment / time-window
-      conditions, free shipping, gift with purchase, bundles, cashback, and Mink
-      offer authority. `PosCatalogItem` carries `categoryId` (cache
-      SCHEMA_VERSION v4) so the till prices a scoped offer identically.
+    - **Phase D — ladders (`tiered`, `volume_break`).** Spend-more-save-more is
+      an ORDER-level reward (`{minSubtotal, value}` rungs plus
+      `tierMode: percent | amount`); buy-more-save-more is a LINE-level GROUP
+      reward (`{minQuantity, percent}`). **The highest qualifying rung applies;
+      rungs never sum** — a ₹3,000 cart on a 5/10/15 ladder gets 10%.
+      ★ ONE OFFER, NOT ONE PER RUNG: three separate offers would compete under
+      best-offer-wins and the deepest would always win, which is the opposite of
+      a ladder. Both resolve on the UNDISCOUNTED subtotal, the `min_subtotal`
+      anti-circularity rule — a rung that lowered the subtotal below its own
+      threshold would deselect itself.
+      ★★ A QUANTITY LADDER IS A GROUP REWARD because units are counted ACROSS
+      the scope: six of one flavour and six of another reach the twelve-unit
+      rung together, where per-line evaluation would find six and six and award
+      nothing. Once a rung is reached EVERY scoped unit gets it, not only those
+      above the threshold. It still competes — a 25%-off-shakes offer is not
+      displaced by a 15% case price merely because one is a ladder.
+      ★ `tiered` is DELIBERATELY EXEMPT from the name-your-items rule: it
+      discounts the ORDER, so an unscoped "spend ₹2,000, save 15%" is its
+      commonest form. `volume_break` is subject to it like every other
+      line-level reward.
+      **The tier-UPGRADE nudge needed its own collector**
+      (`collectLadderUpgrade`): `collectNearMiss` only ever sees REFUSED
+      offers, so an upgrade — nothing disqualified it, the cart just has not
+      reached the rung above — was invisible to it, which would leave a
+      three-rung ladder only ever advertising its bottom step. `NearMissOffer`
+      gained `currentPercent`/`currentAmount`, present only for an upgrade:
+      ★ "Add ₹200 more to get 15% off" reads to somebody already on 10% as
+      though they get nothing today, so the honest sentence and the misleading
+      one differ by three words. A quantity gap arrives as `kind: "units"` like
+      a set, so the nudge branches on `rewardType` — "add 2 more and one is
+      free" is flatly wrong for a case price.
+      ★ `offerBadgeFor` correctly badges NOTHING for a case price (it prices a
+      one-unit cart): "15% off when you buy 10" is not a claim about buying one,
+      and a card that promised the rung price would be exactly the
+      cart-declines-it failure the badge exists to prevent.
+      Migrations `20260903_0063` + `0064`.
+    - **★★ AND PHASE D FOUND THAT TWO EARLIER REWARD TYPES WERE SILENTLY
+      INERT.** `loadLiveOffers` decoded `reward_config` by listing the fields it
+      wanted — `percent` and `amount` — and was never extended when Phase B
+      added `fixed_price` or Phase C added `buy_x_get_y`. So **a correctly
+      configured "buy 1 get 1 free" discounted nothing at checkout or at the
+      till**: `buyQuantity` arrived undefined and `claimGroupOffer` returned an
+      empty claim. Nothing failed — the offers list showed it active, the editor
+      read it back perfectly (a SECOND, complete decoder), the live summary
+      sentence described it exactly, no error was logged. The only symptom was a
+      customer not getting their free item. `decodeReward` in
+      `lib/offers/types.ts` is now the ONE exhaustive decoder, shared by the
+      engine loader and the editor's `mapRow` so the two cannot read a stored
+      reward differently, and `types.test.ts` asserts every editor-writable
+      field survives the round trip. **A field-by-field copy out of a jsonb
+      column is an invitation to forget one, and what you forget is invisible.**
+    - **★★ THE NULL TRAP, A SECOND TIME, IN A DIFFERENT LANGUAGE.** Phase C's
+      CHECK needed `coalesce` because a CHECK is SATISFIED by NULL. Phase D's
+      rung validation cannot be a CHECK at all — examining every rung needs
+      `jsonb_array_elements`, a subquery, which **Postgres refuses in a CHECK**
+      ("cannot use subquery in check constraint") — so it became a plpgsql
+      constraint trigger, `offers_ladder_shape_valid`, and reproduced the trap:
+      `jsonb_typeof` returns NULL for an absent key, `NULL <> 'number'` is NULL,
+      `NULL AND NULL` is NULL, and **plpgsql reads a NULL condition as false**.
+      `{"tiers":[{"minSubtotal":1000}]}` — a threshold with no discount — was
+      accepted, and the follow-on `v_value <= 0` guard could not catch it either
+      (`coalesce` of two NULLs is NULL; `NULL <= 0` is NULL). Two guards, one
+      value, both bypassed. Repaired by `0064`.
+      ★ **Found by INSERTing thirteen deliberately malformed ladders against a
+      real Postgres and reading which were accepted**, not by reading the code,
+      which looks correct. That probe is the recommended step for any new
+      database-level shape rule here.
+    - **Plan gating is a COUNT, not a type list** — `maxActiveOffers` (3 on
+      Free, unlimited above) with every reward type available on every plan, so
+      Phase D needed no gate.
+    - **Not built (Phases E–I):**
+      payment-method / fulfilment / time-window conditions, free shipping, gift
+      with purchase, bundles, cashback, and Mink offer authority.
+      `PosCatalogItem` carries `categoryId` (cache SCHEMA_VERSION v4) so the
+      till prices a scoped offer identically.
 
 39. **The operator console — one screen per job.** `app/platform/dashboard/(console)`
     - `lib/platform/`. Full IA + rationale: **`docs/operator-console.md`**.

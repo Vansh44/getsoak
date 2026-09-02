@@ -767,7 +767,7 @@ Group **Offers**, section `promotions` — the existing permission key (§2).
 | **A** | **The spine.** `offers` + `offer_redemptions` + `order_item_offers`, the pure engine with §10's scenario comparison, per-line allocation, `computeTax` per-line input, `refundBreakdown` offer-aware, all four limits, the audit event, **near-miss reporting**, **the historical-replay preview**, **both counters wired**, coupons migrated, `/dashboard/offers` with preset 1, the dead `promotions` link fixed | **L** |
 | **B** | ✅ **DONE** — product/category scoping, `fixed_price`, `contains_*` conditions, badges on cards                                                                                                                                                                                                                                                                                                                    | **M** |
 | **C** | ✅ **DONE** — buy X get Y (the four presets), unit-based sets, cheapest-free, group vs per-line competition                                                                                                                                                                                                                                                                                                        | **M** |
-| **D** | Tiers and volume breaks                                                                                                                                                                                                                                                                                                                                                                                            | **M** |
+| **D** | ✅ **DONE** — spend ladders (`tiered`, highest rung wins) and quantity ladders (`volume_break`, units counted across scope), the tier-upgrade nudge, and the shared reward decoder that fixed two silently-inert Phase B/C reward types                                                                                                                                                                            | **M** |
 | **E** | The extra conditions: payment method, fulfilment type, customer group, first order, time window, location subset                                                                                                                                                                                                                                                                                                   | **M** |
 | **F** | Free shipping — the reward, the cheapest-wins reconciliation with `store_shipping_settings`, and the near-miss nudge's main use (§14, §14b)                                                                                                                                                                                                                                                                        | **M** |
 | **G** | Gift with purchase — stock reservation, ₹0 line, **GST treatment confirmed first**                                                                                                                                                                                                                                                                                                                                 | **M** |
@@ -866,3 +866,128 @@ Phase A starts, because they are requirements rather than suggestions: the
 per-order discount ceiling (§11) and the offer editor's historical replay (§10).
 Best-offer-wins takes the choice of which offer applies away from the merchant,
 and those two are what give it back as _prediction_ and _bounds_.
+
+---
+
+## 19. Phase D as built (2026-09-03)
+
+### The two ladders
+
+| Reward         | Level        | Rung shape                                             | Rung chosen by                         |
+| -------------- | ------------ | ------------------------------------------------------ | -------------------------------------- |
+| `tiered`       | order        | `{minSubtotal, value}` + `tierMode: percent \| amount` | undiscounted merchandise subtotal      |
+| `volume_break` | line (group) | `{minQuantity, percent}`                               | units of the offer's scope in the cart |
+
+**Highest qualifying rung wins; rungs never sum.** A ₹3,000 cart on a
+5/10/15 ladder gets 10%. Both resolve on the _undiscounted_ figure for §10's
+anti-circularity reason: a rung that lowered the subtotal below its own
+threshold would deselect itself, and the answer would then depend on evaluation
+order rather than on the cart.
+
+**One offer, not one per rung.** Three separate offers would compete under
+best-offer-wins and the deepest would simply always win — the opposite of a
+ladder. Holding the rungs together is what makes "spend ₹2,000 for 15%" mean
+anything.
+
+**A quantity ladder is a GROUP reward** (`isGroupReward`), because units are
+counted across every line in scope: six of one flavour and six of another reach
+the twelve-unit rung together. Evaluated per line it would find six and six and
+award nothing. Once a rung is reached, **every** scoped unit gets the discount,
+not only those above the threshold — "buy 10+, 15% off" universally means all
+ten. It returns an ordinary `Claim`, so it still competes: a 25%-off-shakes
+offer is not displaced by a 15% case price merely because one is a ladder.
+
+**A spend ladder is order-level, so it is deliberately NOT forced to name
+items** — an unscoped "spend ₹2,000, save 15%" is the commonest form of it. A
+quantity ladder is, for the same reason every other line-level reward is
+(§18): unscoped, it would count an unrelated mixture of everything in the shop.
+
+### The tier-upgrade nudge
+
+The commercially useful half of a ladder, and it needed its own collector:
+`collectNearMiss` only ever sees _refused_ offers, so an upgrade — where nothing
+disqualified the offer and the cart simply has not reached the rung above —
+would have been invisible to it. `collectLadderUpgrade` runs over the
+**eligible** offers instead, reporting one rung up, never the top.
+
+`NearMissOffer` therefore carries `currentPercent` / `currentAmount`: present
+only when the gap buys an upgrade. Without them the sentence "Add ₹200 more to
+get 15% off" reads, to somebody already receiving 10%, as though they get
+nothing today — the honest sentence and the misleading one differ by three
+words. A quantity ladder's gap arrives as `kind: "units"` like a buy-X-get-Y
+set, so the component branches on `rewardType` for the second half of the
+sentence; "add 2 more and one is free" would be flatly wrong for a case price.
+
+### What a product card does NOT claim
+
+`offerBadgeFor` prices a one-unit cart, so a `volume_break` starting at 6
+reaches no rung and badges nothing. **That is the correct answer, not a gap**:
+"15% off when you buy 10" is not a claim about buying one, and putting the rung
+price on a card would promise what the cart then declines — the exact failure
+the badge exists to prevent. A ladder starting at 1 unit is a plain per-item
+discount and badges normally.
+
+### ★★ The bug Phase D uncovered: two reward types were silently inert
+
+`loadLiveOffers` decoded `reward_config` by listing the fields it wanted —
+`percent` and `amount` — and was never extended when Phase B added
+`fixed_price` and Phase C added `buy_x_get_y`. So **a correctly configured
+"buy 1 get 1 free" discounted nothing at checkout or at the register**:
+`buyQuantity` arrived undefined, `claimGroupOffer` returned an empty claim, and
+nothing failed anywhere. The offers list showed it active, the editor read it
+back perfectly (a _second_, complete decoder), the live summary sentence
+described it exactly, and no error was logged. The only symptom was a customer
+not getting their free item.
+
+The fix is `decodeReward` in `lib/offers/types.ts` — one exhaustive decoder
+shared by the engine loader and the editor's `mapRow`, so the two can never read
+a stored reward differently. `types.test.ts` asserts every field the editor can
+write survives the round trip, so adding a reward field without teaching the
+decoder fails the suite rather than failing a customer.
+
+**The lesson generalises:** a field-by-field copy out of a jsonb column is an
+invitation to forget one, and what you forget is invisible.
+
+### ★★ And the NULL trap, twice
+
+Phase C (0062) records that a SQL `CHECK` is **satisfied** when it evaluates to
+NULL, so `(config ->> 'buyQuantity') ~ '…'` accepts a missing key — hence
+`coalesce(…, '')`. Phase D's rung validation cannot be a CHECK at all
+(examining every rung needs `jsonb_array_elements`, a subquery, which Postgres
+refuses in a CHECK), so it moved to a plpgsql constraint trigger — **and
+reproduced the same trap in the new language**:
+
+```sql
+IF jsonb_typeof(rung -> 'value')       <> 'number'
+   AND jsonb_typeof(rung -> 'percent') <> 'number' THEN
+```
+
+`jsonb_typeof` returns NULL for an absent key, `NULL <> 'number'` is NULL,
+`NULL AND NULL` is NULL, and **plpgsql reads a NULL condition as false** — so
+the branch never ran and `{"tiers":[{"minSubtotal":1000}]}` was accepted. The
+follow-on `v_value <= 0` guard could not catch it either, since `coalesce` of
+two NULLs is NULL and `NULL <= 0` is NULL. Two guards, one value, both bypassed.
+Repaired by `0064`.
+
+**Found by INSERTing thirteen deliberately malformed ladders against a real
+Postgres and reading which were accepted** — not by reading the code, which
+looks correct. Ten refused, three accepted, and the one wrongly accepted case is
+the whole reason 0064 exists rather than a production defect. That probe is now
+the recommended step for any new database-level shape rule in this feature.
+
+### Plan gating
+
+Unchanged, and already correct for the owner's choice: `maxActiveOffers` is a
+**count** (3 on Free, unlimited above), and **every reward type is available on
+every plan**. There is no per-type gate to add.
+
+### Migrations
+
+| File                                         | What it does                                                                                                                                                                                 |
+| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `20260903_0063_offers_phase_d.sql`           | widens the reward allowlist, adds the `offers_ladder_shape_valid` constraint trigger, extends the scope rule to `volume_break` (and pointedly not to `tiered`), publishes both Help sections |
+| `20260903_0064_offers_ladder_null_guard.sql` | repairs the plpgsql NULL trap above                                                                                                                                                          |
+
+Both applied to staging and production; the two databases share
+`schema_sha256=34b11afa30324c3ac8593f05c09d809c927aab2950c9353d66cda7cb09da0a94`
+at 65/65.

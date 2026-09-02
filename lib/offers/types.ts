@@ -66,6 +66,8 @@ export const OFFER_REWARDS = [
   "percent_off_items",
   "fixed_price",
   "buy_x_get_y",
+  "tiered",
+  "volume_break",
 ] as const;
 export type OfferRewardType = (typeof OFFER_REWARDS)[number];
 
@@ -90,6 +92,20 @@ export interface OfferReward {
   getQuantity?: number;
   /** How much off the "get" units: 100 is free, 50 is half price. Default 100. */
   getPercent?: number;
+  /**
+   * `tiered`: spend-more-save-more, as an ordered ladder. The HIGHEST
+   * qualifying rung applies — never several at once.
+   *
+   * ★ ONE OFFER, NOT ONE PER RUNG. Three separate offers would compete under
+   * best-offer-wins and the deepest would simply always win, which is the
+   * opposite of a ladder. Holding the rungs together is what makes "spend
+   * ₹2,000 for 15%" mean anything.
+   */
+  tiers?: { minSubtotal: number; value: number }[];
+  /** `volume_break`: quantity ladder over the scoped set, highest rung wins. */
+  breaks?: { minQuantity: number; percent: number }[];
+  /** `tiered` only: whether each rung's `value` is a percentage or rupees. */
+  tierMode?: "percent" | "amount";
   /** Most sets one order may earn. `undefined` = unlimited. ★ A cart of 100
    *  units on buy-1-get-1 otherwise gives away 50 items, which merchants
    *  reliably do not mean the first time they build one. */
@@ -107,7 +123,8 @@ export interface OfferReward {
 export function rewardLevel(type: OfferRewardType): "order" | "line" {
   return type === "percent_off_items" ||
     type === "fixed_price" ||
-    type === "buy_x_get_y"
+    type === "buy_x_get_y" ||
+    type === "volume_break"
     ? "line"
     : "order";
 }
@@ -125,7 +142,104 @@ export function rewardLevel(type: OfferRewardType): "order" | "line" {
  * competes against the per-line winners on the lines it wants.
  */
 export function isGroupReward(type: OfferRewardType): boolean {
-  return type === "buy_x_get_y";
+  return type === "buy_x_get_y" || type === "volume_break";
+}
+
+/**
+ * The rungs of a ladder reward, ordered lowest first and de-duplicated.
+ *
+ * ★ NORMALISED IN ONE PLACE because three consumers must agree on it: the
+ * engine picking a rung, the validator refusing a bad ladder, and the near-miss
+ * naming the NEXT rung. A ladder sorted differently in any of them would apply
+ * one discount and advertise another.
+ */
+/**
+ * `offers.reward_config` (jsonb) → a typed `OfferReward`.
+ *
+ * ★★ THE ONE DECODER, BECAUSE THE HAND-WRITTEN ONE SILENTLY DISABLED TWO WHOLE
+ * REWARD TYPES. `loadLiveOffers` listed the fields it wanted — `percent` and
+ * `amount` — and was never extended when `fixed_price` and `buy_x_get_y`
+ * arrived. So a correctly configured "buy 1 get 1 free" reached the engine with
+ * `buyQuantity` undefined, `claimGroupOffer` returned an empty claim, and the
+ * cart discounted NOTHING. Nothing failed: the offers list showed it active,
+ * the form read it back correctly (a SECOND, complete decoder), the live
+ * summary sentence described it perfectly, and no error appeared anywhere. The
+ * only symptom was a customer not getting their free item.
+ *
+ * A field-by-field copy is an invitation to forget one, and the thing you
+ * forget is invisible. This decoder is exhaustive over the reward union, so the
+ * compiler is what notices next time — and `types.test.ts` asserts every field
+ * the editor can write survives the round trip.
+ */
+export function decodeReward(
+  rewardType: string,
+  config: unknown,
+): OfferReward {
+  const c = (config ?? {}) as Record<string, unknown>;
+  const num = (v: unknown): number | undefined => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : undefined;
+  };
+  const ladder = <K extends string>(
+    raw: unknown,
+    key: K,
+  ): ({ [P in K]: number } & { value?: number; percent?: number })[] | undefined => {
+    if (!Array.isArray(raw)) return undefined;
+    const out = raw
+      .map((entry) => {
+        const e = (entry ?? {}) as Record<string, unknown>;
+        const at = num(e[key]);
+        const value = num(e.value);
+        const percent = num(e.percent);
+        if (at === undefined) return null;
+        if (value === undefined && percent === undefined) return null;
+        return {
+          [key]: at,
+          ...(value === undefined ? {} : { value }),
+          ...(percent === undefined ? {} : { percent }),
+        };
+      })
+      .filter((e): e is NonNullable<typeof e> => e !== null);
+    return out.length > 0
+      ? (out as ({ [P in K]: number } & { value?: number; percent?: number })[])
+      : undefined;
+  };
+
+  const type = (
+    (OFFER_REWARDS as readonly string[]).includes(rewardType)
+      ? rewardType
+      : "percent_off"
+  ) as OfferRewardType;
+
+  return {
+    type,
+    percent: num(c.percent),
+    amount: num(c.amount),
+    unitPrice: num(c.unitPrice),
+    buyQuantity: num(c.buyQuantity),
+    getQuantity: num(c.getQuantity),
+    getPercent: num(c.getPercent),
+    maxSets: num(c.maxSets),
+    tierMode: c.tierMode === "amount" ? "amount" : undefined,
+    tiers: ladder(c.tiers, "minSubtotal") as OfferReward["tiers"],
+    breaks: ladder(c.breaks, "minQuantity") as OfferReward["breaks"],
+  };
+}
+
+export function sortedTiers<T extends { minSubtotal: number }>(
+  tiers: readonly T[] | undefined,
+): T[] {
+  return [...(tiers ?? [])]
+    .filter((t) => Number.isFinite(t.minSubtotal) && t.minSubtotal >= 0)
+    .sort((a, b) => a.minSubtotal - b.minSubtotal);
+}
+
+export function sortedBreaks<T extends { minQuantity: number }>(
+  breaks: readonly T[] | undefined,
+): T[] {
+  return [...(breaks ?? [])]
+    .filter((b) => Number.isInteger(b.minQuantity) && b.minQuantity >= 1)
+    .sort((a, b) => a.minQuantity - b.minQuantity);
 }
 
 /** Is this reward a percentage of the line, rather than a lump sum? Percentage
@@ -335,6 +449,105 @@ export function validateOfferRule(
           field: "reward.maxSets",
           message: "Leave the limit blank for no limit, or enter 1 or more.",
         });
+      }
+      break;
+    }
+    case "tiered": {
+      const tiers = sortedTiers(reward.tiers);
+      const mode = reward.tierMode ?? "percent";
+      if (tiers.length < 1 || tiers.length > 10) {
+        issues.push({
+          field: "reward.tiers",
+          message: "Add between one and ten spending levels.",
+        });
+        break;
+      }
+      if (mode !== "percent" && mode !== "amount") {
+        issues.push({
+          field: "reward.tierMode",
+          message: "Choose a discount type.",
+        });
+        break;
+      }
+      // ★ DUPLICATE THRESHOLDS ARE REFUSED, not silently collapsed. Two rungs
+      // at ₹1,000 make "the highest qualifying rung" ambiguous, and whichever
+      // the sort happened to put last would win — a rule nobody could predict
+      // from the merchant's own screen.
+      const seen = new Set<number>();
+      for (const t of tiers) {
+        if (seen.has(t.minSubtotal)) {
+          issues.push({
+            field: "reward.tiers",
+            message: "Two levels cannot start at the same order value.",
+          });
+          break;
+        }
+        seen.add(t.minSubtotal);
+        const bad =
+          mode === "percent"
+            ? !(t.value > 0 && t.value <= MAX_PERCENT)
+            : !(t.value > 0 && t.value <= MAX_AMOUNT);
+        if (bad) {
+          issues.push({
+            field: "reward.tiers",
+            message:
+              mode === "percent"
+                ? "Every level needs a percentage between 1 and 100."
+                : "Every level needs an amount above zero.",
+          });
+          break;
+        }
+      }
+      // ★ A LADDER MUST GO UP. A higher spend earning LESS is always a mistake,
+      // and it is invisible on a form that shows the rungs in entry order.
+      for (let i = 1; i < tiers.length; i += 1) {
+        if (tiers[i].value <= tiers[i - 1].value) {
+          issues.push({
+            field: "reward.tiers",
+            message:
+              "Each level has to give more than the one below it, or the higher level does nothing.",
+          });
+          break;
+        }
+      }
+      break;
+    }
+    case "volume_break": {
+      const breaks = sortedBreaks(reward.breaks);
+      if (breaks.length < 1 || breaks.length > 10) {
+        issues.push({
+          field: "reward.breaks",
+          message: "Add between one and ten quantity levels.",
+        });
+        break;
+      }
+      const seenQty = new Set<number>();
+      for (const b of breaks) {
+        if (seenQty.has(b.minQuantity)) {
+          issues.push({
+            field: "reward.breaks",
+            message: "Two levels cannot start at the same quantity.",
+          });
+          break;
+        }
+        seenQty.add(b.minQuantity);
+        if (!(b.percent > 0 && b.percent <= MAX_PERCENT)) {
+          issues.push({
+            field: "reward.breaks",
+            message: "Every level needs a percentage between 1 and 100.",
+          });
+          break;
+        }
+      }
+      for (let i = 1; i < breaks.length; i += 1) {
+        if (breaks[i].percent <= breaks[i - 1].percent) {
+          issues.push({
+            field: "reward.breaks",
+            message:
+              "Each quantity level has to give more than the one below it.",
+          });
+          break;
+        }
       }
       break;
     }
