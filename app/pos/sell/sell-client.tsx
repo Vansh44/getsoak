@@ -68,6 +68,7 @@ import {
 import { ReceiptOverlay } from "./receipt-overlay";
 import { CameraScanner } from "./camera-scanner";
 import { posTotals } from "@/lib/pos/totals";
+import { applyOffers } from "@/lib/offers/apply";
 import type { PosExchangeContext } from "@/app/actions/pos-return-actions";
 
 export interface CartLine {
@@ -89,6 +90,9 @@ export interface CartLine {
   /** Resolved to a rate via config.taxRates so the screen can quote the
    *  tax-inclusive total (see lib/pos/totals.ts). */
   taxClassId: string | null;
+  /** The product's category, for offer scoping. Carried on the cart line so
+   *  the quote and the charge see the same scope (docs/offers-plan.md). */
+  categoryId: string | null;
 }
 
 const lineKey = (p: string, v: string | null) => `${p}:${v ?? ""}`;
@@ -144,6 +148,10 @@ export function SellClient({
   // Customer is resolved once, by exact mobile, after Charge is selected.
   const [exchangeActive, setExchangeActive] =
     useState<PosExchangeContext | null>(exchange ?? null);
+  // Offers this customer has already used up, learned from the phone lookup at
+  // Charge. Empty until somebody is identified — a register opens with nobody
+  // attached, so a per-customer cap cannot be known before then.
+  const [exhaustedOfferIds, setExhaustedOfferIds] = useState<string[]>([]);
   const [customer, setCustomer] = useState<PosCustomer | null>(
     exchange?.customer ?? null,
   );
@@ -276,6 +284,7 @@ export function SellClient({
           image: it.image,
           unitPrice: it.price,
           taxClassId: it.taxClassId ?? null,
+          categoryId: it.categoryId ?? null,
           quantity: 1,
           lineDiscount: 0,
           stock: it.stock,
@@ -442,6 +451,57 @@ export function SellClient({
     return cls ? (config.taxRates[cls] ?? 0) : 0;
   };
 
+  // Offers, priced with the SAME pure engine `placePosSale` charges with, over
+  // the offer list shipped in RegisterConfig. The server re-resolves
+  // authoritatively — this is the quote, so it must agree with the charge.
+  //
+  // ★ `exhaustedOfferIds` COMES FROM THE CUSTOMER LOOKUP. A register opens with
+  // nobody attached, so per-customer caps cannot be resolved then; the moment a
+  // customer is identified at Charge, the ids they have used up arrive with
+  // their record and the quote re-prices. Without it the screen would quote an
+  // offer the server then refuses, in front of the customer.
+  const offerQuote = useMemo(() => {
+    if (cart.length === 0) return null;
+    return applyOffers({
+      lines: cart.map((l) => ({
+        id: l.key,
+        productId: l.productId,
+        variantId: l.variantId,
+        categoryId: l.categoryId,
+        quantity: l.quantity,
+        unitPrice: l.unitPrice,
+        lineDiscount: l.lineDiscount,
+      })),
+      offers: config.offers.map((o) =>
+        exhaustedOfferIds.includes(o.id) ? { ...o, exhausted: true } : o,
+      ),
+      context: {
+        channel: "pos",
+        locationId: config.locationId,
+        customerId: customer?.id ?? null,
+        groupIds: [],
+        now: new Date(),
+        code: null,
+        ...config.offerPolicy,
+      },
+    });
+  }, [
+    cart,
+    config.offers,
+    config.offerPolicy,
+    config.locationId,
+    customer?.id,
+    exhaustedOfferIds,
+  ]);
+
+  const offerByLine = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const line of offerQuote?.lines ?? []) {
+      map.set(line.id, line.offerDiscount);
+    }
+    return map;
+  }, [offerQuote]);
+
   // The SAME pure helper placePosSale charges with — including tax. Quoting the
   // pre-tax subtotal here (as this screen used to) meant the cashier promised
   // the customer one number and the till charged another, so the change handed
@@ -450,13 +510,14 @@ export function SellClient({
     lines: cart.map((l) => ({
       gross: l.unitPrice * l.quantity,
       lineDiscount: l.lineDiscount,
+      offerDiscount: offerByLine.get(l.key) ?? 0,
       rate: rateForClass(l.taxClassId),
     })),
     requestedOrderDiscount: discount,
     pricesIncludeTax: config.pricesIncludeTax,
     taxEnabled: config.taxEnabled,
   });
-  const { subtotal, lineDiscountTotal, tax } = totals;
+  const { subtotal, lineDiscountTotal, offerDiscountTotal, tax } = totals;
   const cappedDiscount = totals.orderDiscount;
   const estTotal = totals.total;
   const cartQuantity = cart.reduce((sum, line) => sum + line.quantity, 0);
@@ -1032,6 +1093,28 @@ export function SellClient({
                 <span>−₹{lineDiscountTotal.toLocaleString("en-IN")}</span>
               </div>
             )}
+            {/* ★ NAMED, NOT JUST TOTALLED. The cashier is standing in front of
+                the customer who is asking why the price changed, and "offer"
+                is not an answer. One row per offer, by name, is. */}
+            {offerDiscountTotal > 0 &&
+              (offerQuote?.applied ?? []).map((offer) => (
+                <div
+                  key={offer.offerId}
+                  className="mb-2 flex items-center justify-between gap-3 text-sm"
+                >
+                  <span className="truncate text-[var(--pos-ink-2)]">
+                    {offer.offerName}
+                  </span>
+                  <span className="shrink-0">
+                    −₹{offer.amount.toLocaleString("en-IN")}
+                  </span>
+                </div>
+              ))}
+            {offerQuote?.cappedByCeiling && (
+              <p className="mb-2 text-xs text-[var(--pos-ink-2)]">
+                Capped at this store&rsquo;s maximum discount per order.
+              </p>
+            )}
             {config.canDiscount && (
               <label className="mb-2 flex items-center justify-between gap-2 text-sm">
                 <span className="text-[var(--pos-ink-2)]">Discount ₹</span>
@@ -1205,7 +1288,15 @@ export function SellClient({
           customer={customer}
           customerLocked={!!exchangeActive}
           onCustomer={setCustomer}
-          onResolveCustomer={resolvePosCustomerByPhone}
+          onResolveCustomer={async (mobile) => {
+            const result = await resolvePosCustomerByPhone(mobile);
+            // ★ Re-price the moment the customer is known. Their per-customer
+            // offer caps could not be resolved when the register opened, so
+            // without this the till keeps quoting an offer the server will
+            // refuse at completion — with the customer watching.
+            setExhaustedOfferIds(result.exhaustedOfferIds ?? []);
+            return result;
+          }}
           gstin={gstin}
           onGstin={setGstin}
           gstEnabled={config.gstEnabled}

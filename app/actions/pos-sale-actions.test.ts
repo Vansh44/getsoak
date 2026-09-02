@@ -48,6 +48,26 @@ vi.mock("./pos-shift-actions", () => ({
 }));
 
 const dbHolder = vi.hoisted(() => ({ current: null as any }));
+// Offers are mocked at their own seam. Left real, `resolveOffersForCart` and
+// `loadExhaustedOfferIds` read the offer tables and would consume entries from
+// the shared db mock queue, shifting every later read. ★ The defaults are
+// "offers unavailable" / "nothing exhausted", which is byte-for-byte today's
+// behaviour, so every existing pricing and tender assertion is unchanged.
+vi.mock("@/lib/offers/cart", () => ({
+  resolveOffersForCart: vi.fn(async () => null),
+  reserveOfferUses: vi.fn(async () => ({ ok: true, reserved: [] })),
+  releaseOfferUses: vi.fn(async () => {}),
+  recordOfferRedemptions: vi.fn(async () => {}),
+  loadOffersForRegister: vi.fn(async () => ({
+    offers: [],
+    policy: {
+      onSalePrice: "best",
+      maxTotalDiscountPercent: 50,
+      autoApply: false,
+    },
+  })),
+  loadExhaustedOfferIds: vi.fn(async () => []),
+}));
 vi.mock("@/lib/db/client", () => ({
   withService: vi.fn((fn: any) => Promise.resolve(fn(dbHolder.current.db))),
   withUser: vi.fn((_i: any, fn: any) =>
@@ -1424,6 +1444,9 @@ describe("resolvePosCustomerByPhone", () => {
         email: "asha@example.com",
         storeCredit: 240,
       },
+      // Rides along with the lookup so the till can re-price for this
+      // customer's own offer caps without a second round trip.
+      exhaustedOfferIds: [],
     });
     expect(dbHolder.current.calls.insert).toHaveLength(0);
   });
@@ -1456,6 +1479,7 @@ describe("resolvePosCustomerByPhone", () => {
         email: null,
         storeCredit: 0,
       },
+      exhaustedOfferIds: [],
     });
     expect(dbHolder.current.calls.select).toHaveLength(2);
   });

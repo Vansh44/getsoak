@@ -73,6 +73,19 @@ vi.mock("@/lib/fulfilment/resolve", () => ({
 vi.mock("@/lib/shipping/quote", () => ({
   quoteShippingForOrder: vi.fn(),
 }));
+// Offers are mocked at their own seam for the same reason as fulfilment
+// routing: left real, `resolveOffersForCart` reads the offer tables and would
+// consume entries from the shared db mock queue, shifting every later read.
+//
+// ★ THE DEFAULT IS `null`, WHICH MEANS "OFFERS UNAVAILABLE" — byte-for-byte
+// today's behaviour, so every pricing, stock and coupon test below asserts the
+// legacy path unchanged. The offer path has its own block at the bottom.
+vi.mock("@/lib/offers/cart", () => ({
+  resolveOffersForCart: vi.fn(async () => null),
+  reserveOfferUses: vi.fn(async () => ({ ok: true, reserved: [] })),
+  releaseOfferUses: vi.fn(async () => {}),
+  recordOfferRedemptions: vi.fn(async () => {}),
+}));
 
 import {
   placeOrder,
@@ -86,6 +99,12 @@ import {
   spendCredit,
   reinstateCreditForOrder,
 } from "@/lib/credit/store-credit";
+import {
+  recordOfferRedemptions,
+  releaseOfferUses,
+  reserveOfferUses,
+  resolveOffersForCart,
+} from "@/lib/offers/cart";
 import { getServerUser } from "@/lib/auth/server-user";
 import { rateLimit } from "@/lib/rate-limit";
 import { validateCoupon } from "./coupon-actions";
@@ -1035,5 +1054,209 @@ describe("placeOrder — store credit", () => {
     expect("error" in res && res.error).toBeFalsy();
     // And the balance goes straight back, so ledger and order agree.
     expect(reinstateCreditForOrder).toHaveBeenCalledWith(STORE, "order-1");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Offers (docs/offers-plan.md §8, §11). The seam is mocked above and defaults
+// to `null` — "offers unavailable" — so these tests opt IN to the offer path.
+// ---------------------------------------------------------------------------
+
+describe("placeOrder — offers", () => {
+  const offerResult = (over: Partial<any> = {}) => ({
+    subtotal: 200,
+    lines: [{ id: "0", offerDiscount: 30 }],
+    discount: 30,
+    applied: [
+      {
+        offerId: "offer-1",
+        offerName: "Launch offer",
+        code: null,
+        rewardType: "percent_off",
+        level: "order",
+        amount: 30,
+      },
+    ],
+    allocations: [
+      {
+        lineId: "0",
+        offerId: "offer-1",
+        offerName: "Launch offer",
+        amount: 30,
+      },
+    ],
+    nearMiss: [],
+    scenario: { chosen: "order_only", scores: [] },
+    skipped: [],
+    cappedByCeiling: false,
+    ...over,
+  });
+
+  // ★ EVERY DEFAULT RESTORED EXPLICITLY. `vi.clearAllMocks()` clears CALLS,
+  // not IMPLEMENTATIONS, so a `mockResolvedValue` set inside one test leaks
+  // into every test after it — the exact defect `test:shuffle` exists to
+  // catch (CODEBASE.md convention #8).
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getServerUser).mockResolvedValue({ id: "user-1" } as any);
+    vi.mocked(rateLimit).mockResolvedValue({ allowed: true } as any);
+    vi.mocked(validateCoupon).mockResolvedValue({} as any);
+    vi.mocked(quoteShippingForOrder).mockResolvedValue({
+      options: [],
+      error: "No courier available",
+    });
+    vi.mocked(resolveOffersForCart).mockResolvedValue(null);
+    vi.mocked(reserveOfferUses).mockResolvedValue({ ok: true, reserved: [] });
+    vi.mocked(releaseOfferUses).mockResolvedValue(undefined);
+    vi.mocked(recordOfferRedemptions).mockResolvedValue(undefined);
+  });
+
+  it("applies an automatic offer and snapshots it on the line", async () => {
+    vi.mocked(resolveOffersForCart).mockResolvedValue(offerResult() as any);
+    vi.mocked(reserveOfferUses).mockResolvedValue({
+      ok: true,
+      reserved: [{ offerId: "offer-1", amountPaise: 3000 }],
+    });
+    dbHolder.current = makeDbMock({
+      selectQueue: [[productRow()], [], []],
+      executeQueue: [[{ reserved: true }]],
+      returning: [{ id: "order-1", order_ref: "ORD1" }],
+    });
+
+    const result = await placeOrder(validForm, [oneItem()]);
+    expect("success" in result && result.success).toBe(true);
+
+    const order = dbHolder.current.calls.values[0];
+    expect(order.discount).toBe(30);
+    expect(order.total).toBe(170);
+
+    // ★ THE LINE CARRIES ITS OWN SHARE. Without this, a partial return
+    // re-allocates the discount proportionally and refunds the wrong amount.
+    const items = dbHolder.current.calls.values[1];
+    const line = Array.isArray(items) ? items[0] : items;
+    expect(line.offerDiscount).toBe(30);
+  });
+
+  it("★ never runs both discount systems for one order", async () => {
+    vi.mocked(resolveOffersForCart).mockResolvedValue(offerResult() as any);
+    dbHolder.current = makeDbMock({
+      selectQueue: [[productRow()], [], []],
+      executeQueue: [[{ reserved: true }]],
+      returning: [{ id: "order-1", order_ref: "ORD1" }],
+    });
+
+    await placeOrder(validForm, [oneItem()], "SAVE10");
+    // A coupon IS an offer now, so the legacy path must stay untouched —
+    // running both would double the discount AND the usage counter.
+    expect(validateCoupon).not.toHaveBeenCalled();
+    expect(findRpc("increment_coupon_usage")).toBeFalsy();
+  });
+
+  it("★ falls back to the coupon path when the engine applies nothing", async () => {
+    // Three live cases need this: the deploy window before the migration, a
+    // Mink-created coupon row that is not an offer, and a coupon the migration
+    // left behind. Refusing the code outright breaks all three.
+    vi.mocked(resolveOffersForCart).mockResolvedValue(
+      offerResult({
+        applied: [],
+        allocations: [],
+        discount: 0,
+        lines: [{ id: "0", offerDiscount: 0 }],
+      }) as any,
+    );
+    vi.mocked(validateCoupon).mockResolvedValue({
+      coupon: {
+        code: "SAVE10",
+        discountType: "percentage",
+        discountValue: 10,
+        minOrderAmount: 0,
+      },
+    } as any);
+    dbHolder.current = makeDbMock({
+      selectQueue: [[productRow()], [], []],
+      executeQueue: [[{ reserved: true }], [{ reserved: true }]],
+      returning: [{ id: "order-1", order_ref: "ORD1" }],
+    });
+
+    const result = await placeOrder(validForm, [oneItem()], "SAVE10");
+    expect("success" in result && result.success).toBe(true);
+    expect(validateCoupon).toHaveBeenCalled();
+    expect(dbHolder.current.calls.values[0].discount).toBe(20);
+  });
+
+  it("refuses the order when an offer cap was reached mid-checkout", async () => {
+    vi.mocked(resolveOffersForCart).mockResolvedValue(offerResult() as any);
+    vi.mocked(reserveOfferUses).mockResolvedValue({
+      ok: false,
+      error: "“Launch offer” has just reached its limit.",
+      reserved: [],
+    });
+    dbHolder.current = makeDbMock({
+      selectQueue: [[productRow()], [], []],
+      returning: [{ id: "order-1", order_ref: "ORD1" }],
+    });
+
+    const result = await placeOrder(validForm, [oneItem()]);
+    expect("error" in result && result.error).toMatch(/reached its limit/i);
+    // ★ Refused BEFORE the order exists, so nothing needs unwinding.
+    expect(dbHolder.current.calls.values[0]).toBeUndefined();
+  });
+
+  it("★ releases reserved offer uses when the order items fail to save", async () => {
+    vi.mocked(resolveOffersForCart).mockResolvedValue(offerResult() as any);
+    vi.mocked(reserveOfferUses).mockResolvedValue({
+      ok: true,
+      reserved: [{ offerId: "offer-1", amountPaise: 3000 }],
+    });
+    dbHolder.current = makeDbMock({
+      selectQueue: [[productRow()], [], []],
+      executeQueue: [[{ reserved: true }]],
+      returning: [{ id: "order-1", order_ref: "ORD1" }],
+      failInsertFor: [orderItems],
+    });
+
+    const result = await placeOrder(validForm, [oneItem()]);
+    expect("error" in result && result.error).toBeTruthy();
+    expect(releaseOfferUses).toHaveBeenCalledWith(STORE, [
+      { offerId: "offer-1", amountPaise: 3000 },
+    ]);
+  });
+
+  it("records the redemption and the per-line offer after the sale commits", async () => {
+    vi.mocked(resolveOffersForCart).mockResolvedValue(offerResult() as any);
+    dbHolder.current = makeDbMock({
+      selectQueue: [[productRow()], [], []],
+      executeQueue: [[{ reserved: true }]],
+      returning: [{ id: "order-1", order_ref: "ORD1" }],
+    });
+
+    await placeOrder(validForm, [oneItem()]);
+    expect(recordOfferRedemptions).toHaveBeenCalledWith(
+      expect.objectContaining({ storeId: STORE, orderId: "order-1" }),
+    );
+    // The line id the engine used must resolve to a real order_items row id,
+    // or the per-line record is silently dropped.
+    const call = vi.mocked(recordOfferRedemptions).mock.calls.at(-1)?.[0];
+    expect(call?.orderItemIdByLine.get("0")).toBeTruthy();
+  });
+
+  it("does not write an offer record when no offer applied", async () => {
+    vi.mocked(resolveOffersForCart).mockResolvedValue(
+      offerResult({
+        applied: [],
+        allocations: [],
+        discount: 0,
+        lines: [{ id: "0", offerDiscount: 0 }],
+      }) as any,
+    );
+    dbHolder.current = makeDbMock({
+      selectQueue: [[productRow()], [], []],
+      executeQueue: [[{ reserved: true }]],
+      returning: [{ id: "order-1", order_ref: "ORD1" }],
+    });
+
+    await placeOrder(validForm, [oneItem()]);
+    expect(recordOfferRedemptions).not.toHaveBeenCalled();
+    expect(reserveOfferUses).not.toHaveBeenCalled();
   });
 });

@@ -452,24 +452,47 @@ before anyone files against it.
 
 ---
 
-## 13. Decision — every automatic discount is audited
+## 13. Decision — every automatic discount is attributable
 
-`lib/pos/audit.ts` already records `sale_discount` and `price_override` with
-amount, actor and approver — the till's manual path. Automatic offers write the
-same shape, with the offer as the actor: a new `offer_applied` event carrying
-offer id, allocated amount and order id.
+**★ WITHOUT ATTRIBUTION THE P&L HAS AN UNEXPLAINABLE HOLE.** Month end shows
+₹80,000 of revenue missing; the manual discount log explains ₹12,000. The other
+₹68,000 came from automatic offers, and with no per-offer record the merchant
+cannot tell a working promotion from a misconfigured rule, cannot answer "why is
+margin down", and cannot decide which offer to stop.
 
-**★ WITHOUT IT THE P&L HAS AN UNATTRIBUTABLE HOLE.** Month end shows ₹80,000 of
-revenue missing; the manual discount log explains ₹12,000. The other ₹68,000
-came from automatic offers, and with no per-offer record the merchant cannot
-tell a working promotion from a misconfigured rule, cannot answer "why is margin
-down", and cannot decide which offer to stop. `order_item_offers` (§8) makes
-this queryable per line; the audit event makes it visible in the money feed
-beside the manual ones.
+That is closed by **`order_item_offers` + `offer_redemptions`** (§15): every
+line records which offer discounted it, by how much, under a snapshotted name,
+and every redemption records who, when and against which order. Per-offer,
+per-line, per-customer — strictly more than a log line carries.
 
-Analytics gets the same data for free: gross margin already reads immutable
+Analytics gets it for free: gross margin already reads immutable
 `order_items.unit_cost` (§20 Phase 10), so discount-per-offer against cost is a
 join, not a new pipeline.
+
+### ★★ REVISED WHILE BUILDING (2026-09-02): NO `offer_applied` EVENT, AND NO POS AUDIT ROW
+
+This section originally called for a new `offer_applied` entry in
+`lib/pos/audit.ts` and an activity event beside it. Both were dropped, because
+each contradicts a rule this codebase already holds — and adding them would
+have made two logs worse without making anything answerable.
+
+- **The POS money audit exists to attribute a HUMAN CHOICE.** Its own
+  precedent settles this: `CODEBASE.md` §22 records that a gateway tender is
+  _deliberately not audited_ because "the cashier chose nothing and it is
+  reconstructible from `order_payments` + `orders.cashier_id`; noise is what
+  makes an audit stop being read." An automatically applied offer is exactly
+  that case — nobody at the till chose it, and it is fully reconstructible from
+  the two new tables. A row per offer per sale would bury `sale_discount` and
+  `price_override`, which DO record a person's decision.
+- **An activity event per applied offer would double every order's feed.**
+  `order.placed` already fires for the same moment, and §24's rule is that
+  per-row events "bury every other thing that happened that day". The offer
+  detail belongs on the order, and it is on the order.
+- **⚠ REVISIT IF THE TILL EVER TAKES A CODE.** Phase A's register applies
+  automatic offers only — there is no code field on the sell screen. A cashier
+  typing a code IS a choice, and one open to abuse (their own code, on a
+  stranger's sale), so `offer_code_entered` would then earn a `pos_audit_log`
+  row on the same grounds `sale_discount` does.
 
 ---
 

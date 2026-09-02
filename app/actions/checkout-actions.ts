@@ -17,6 +17,13 @@ import { getCurrentStore, getCurrentStoreId } from "@/lib/store/resolve";
 import { isDemoStore } from "@/lib/store/launch";
 import { rateLimit, clientIp } from "@/lib/rate-limit";
 import { validateCoupon } from "./coupon-actions";
+import {
+  recordOfferRedemptions,
+  releaseOfferUses,
+  reserveOfferUses,
+  resolveOffersForCart,
+  type ReservedOffer,
+} from "@/lib/offers/cart";
 import { CartItem } from "@/app/(storefront)/components/cart/CartProvider";
 import { computeTax } from "@/lib/billing/tax";
 import { getLiveStoreGateway, getStoreGateway } from "@/lib/payments/provider";
@@ -868,6 +875,11 @@ export async function placeOrder(
         length_cm: products.lengthCm,
         width_cm: products.widthCm,
         height_cm: products.heightCm,
+        // Offer scoping (docs/offers-plan.md). Selected here rather than in a
+        // second read: the offer engine needs it for every line, and a cart
+        // must not pay another round trip at ~46ms for a column this query is
+        // already positioned to return.
+        category_id: products.categoryId,
       })
       .from(products)
       .where(
@@ -962,6 +974,7 @@ export async function placeOrder(
     tax_rate: number;
     tax_amount: number;
     tax_class_name: string | null;
+    category_id: string | null;
     sku: string;
     hsn_code: string | null;
     requires_shipping: boolean;
@@ -1021,18 +1034,89 @@ export async function placeOrder(
       tax_rate: taxInfo.rate,
       tax_amount: 0,
       tax_class_name: taxInfo.name,
+      category_id: dbProduct.category_id,
       ...logistics,
       hsn_code: dbProduct.hsn_code,
     });
   }
 
-  // 3. Validate and apply coupon. Round to whole rupees and clamp to subtotal so
-  //    the stored total matches what the cart showed the shopper (CartProvider
-  //    rounds identically).
+  // 3. Apply offers, then fall back to the legacy coupon path.
+  //
+  // ★ ONE OR THE OTHER, NEVER BOTH. A coupon IS an offer since
+  // 20260902_0059 (docs/offers-plan.md §2), so running both paths would
+  // double-count a migrated coupon's discount AND its usage counter. The offer
+  // engine is authoritative whenever it resolves.
+  //
+  // ★ AND `null` MEANS "OFFERS ARE UNAVAILABLE", NOT "NOTHING APPLIED".
+  // Database DDL is a separate release gate, so this code reaches production
+  // before its migration; in that window `resolveOffersForCart` returns null
+  // and the coupon path below keeps every advertised code working. Without the
+  // fallback, deploying first would silently break every coupon on the
+  // platform — the same order-independence `getStoreChrome`'s `store_menus`
+  // fallback exists for (CODEBASE.md §11).
+  const offerResult = await resolveOffersForCart({
+    storeId,
+    channel: "storefront",
+    // ★ NO LOCATION ONLINE, and not merely because routing has not run yet
+    // (it hasn't — `fulfilmentLocationId` is resolved further down, after the
+    // total). A location-scoped offer is a POS concept: an online order's
+    // fulfilment location is an internal routing OUTCOME the shopper never
+    // chose and which can change between carts, so pricing a web order
+    // against it would make the same basket cost different amounts for
+    // reasons invisible to the customer. The engine fails CLOSED on a
+    // location-scoped offer with no location, so such an offer simply does
+    // not apply online — which is the honest reading of "this offer is for
+    // that shop".
+    locationId: null,
+    customerId: user.id,
+    code: couponCode ?? null,
+    lines: validItems.map((it, idx) => ({
+      id: String(idx),
+      productId: it.product_id,
+      variantId: it.variant_id,
+      categoryId: it.category_id,
+      quantity: it.quantity,
+      unitPrice: it.price,
+      // ★ NO `regularUnitPrice`, so `offers.onSalePrice` is inert here today —
+      // deliberately, and it is not a shortcut. `placeOrder` charges
+      // `selling_price` and never reads `product_variants.special_price`
+      // (see the variant select above), so at checkout there is no sale price
+      // for an offer to interact with. Passing `base_price` instead would be
+      // WRONG: MRP is a struck-through list price, not a sale price, and
+      // treating it as one would let `best` mode discount from a much higher
+      // base. Wire this up when special_price is actually charged.
+    })),
+  });
+
   let discount = 0;
+  // Per-line offer allocation, indexed the same way as `validItems`. §8: a
+  // scoped reward belongs to ONE line, so it is snapshotted per line rather
+  // than spread — otherwise GST is misstated and a partial return over-refunds.
+  const offerDiscounts = validItems.map(() => 0);
+
   let couponApplied = false;
   const couponCodeNormalized = couponCode ? normalizeCode(couponCode) : null;
-  if (couponCode) {
+
+  // ★ THE LEGACY COUPON PATH IS THE FALLBACK WHENEVER THE ENGINE APPLIED
+  // NOTHING — not only when offers are unavailable. Three live cases need it,
+  // and refusing an unmatched code outright breaks all three:
+  //   1. the deploy window before 20260902_0059 runs (offerResult is null);
+  //   2. a coupon row that is not an offer — Mink Phase 4C still creates
+  //      `coupons` under human approval, and `createCoupon` remains callable;
+  //   3. a coupon left behind by the migration because its stored code is not
+  //      in normal form, which cannot match an offer by definition.
+  // Only one path can ever produce a discount, so nothing double-counts.
+  //
+  // ⚠ Known transitional gap: if an AUTOMATIC offer applies and the shopper
+  // also holds a legacy coupon worth more, they get the automatic offer and
+  // their code is ignored rather than compared. Both discount systems running
+  // at once is the cause; it resolves when `coupons` stops being written.
+  if (offerResult && offerResult.applied.length > 0) {
+    offerResult.lines.forEach((line, idx) => {
+      offerDiscounts[idx] = line.offerDiscount;
+    });
+    discount = Math.min(offerResult.discount, subtotal);
+  } else if (couponCode) {
     const validation = await validateCoupon(couponCode, subtotal);
     if (validation.error) {
       return { error: `Coupon error: ${validation.error}` };
@@ -1055,12 +1139,23 @@ export async function placeOrder(
   //     Inclusive: tax is already inside the listed prices, so it's reported but
   //     NOT added again. Per-line tax is written back to each order item below.
   const taxResult = computeTax({
-    lines: validItems.map((it) => ({
+    lines: validItems.map((it, idx) => ({
       amount: it.total,
       rate: it.tax_rate,
       label: it.tax_class_name ?? undefined,
+      // ★ THE OFFER'S SHARE OF THIS LINE, not a proportional slice of the
+      // order total. §8: ₹200 off a ₹1,000 18% shirt beside a ₹1,000 5% book
+      // is taxed as ₹194, not the ₹207 the spread produces — and nothing
+      // anywhere would report the difference as an error.
+      discount: offerDiscounts[idx],
     })),
-    discount,
+    // Whatever the offers did NOT allocate to a line stays order-level and is
+    // still spread proportionally. With offers resolved that is zero; with the
+    // legacy coupon fallback it is the whole discount.
+    discount: Math.max(
+      0,
+      discount - offerDiscounts.reduce((sum, d) => sum + d, 0),
+    ),
     pricesIncludeTax: billing.pricesIncludeTax,
     enabled: billing.taxEnabled,
   });
@@ -1130,7 +1225,35 @@ export async function placeOrder(
     }
   }
 
-  const releaseCoupon = async () => {
+  // 3b-ii. Claim every applied offer's caps, atomically, before the order
+  //         exists — the same position and the same reasoning as the coupon
+  //         reservation above. `reserve_offer_use` puts the redemption cap, the
+  //         budget cap and the per-customer cap inside ONE conditional UPDATE,
+  //         so two simultaneous checkouts cannot both take the last redemption.
+  //
+  // ★ HITTING A CAP IS REPORTED; AN UNREACHABLE DATABASE IS NOT. A cap is a
+  // real answer the shopper must see, because the price they were quoted has
+  // just changed. A transient failure is not a reason to refuse a paying
+  // customer, so it fails open at the priced total — the trade
+  // `increment_coupon_usage` already makes.
+  let reservedOffers: ReservedOffer[] = [];
+  if (offerResult && offerResult.applied.length > 0) {
+    const claim = await reserveOfferUses(storeId, offerResult.applied, user.id);
+    reservedOffers = claim.reserved;
+    if (!claim.ok) {
+      await releaseOfferUses(storeId, reservedOffers);
+      return { error: claim.error ?? "That offer is no longer available." };
+    }
+  }
+
+  // ★ ONE UNWIND HELPER FOR BOTH, called from all seven failure paths. Adding
+  // a second release call beside each of them is how the eighth path ends up
+  // leaking an offer's budget forever.
+  const releaseDiscounts = async () => {
+    if (reservedOffers.length > 0) {
+      await releaseOfferUses(storeId, reservedOffers);
+      reservedOffers = [];
+    }
     if (couponReserved && couponCodeNormalized) {
       await withService((db) =>
         db.execute(
@@ -1247,7 +1370,7 @@ export async function placeOrder(
       ),
     });
     if (!shippingQuote.options.length) {
-      await releaseCoupon();
+      await releaseDiscounts();
       return {
         error:
           shippingQuote.error || "Delivery is not available for this address.",
@@ -1259,7 +1382,7 @@ export async function placeOrder(
         )
       : shippingQuote.options[0];
     if (!selectedRate) {
-      await releaseCoupon();
+      await releaseDiscounts();
       return {
         error:
           "That delivery rate changed. Review the latest options and try again.",
@@ -1270,7 +1393,7 @@ export async function placeOrder(
       typeof selectedShippingRateAmount === "number" &&
       Math.abs(selectedRate.amount - selectedShippingRateAmount) > 0.009
     ) {
-      await releaseCoupon();
+      await releaseDiscounts();
       return {
         error:
           "That delivery price changed. Review the latest options and try again.",
@@ -1388,7 +1511,7 @@ export async function placeOrder(
 
   const order = orderRows?.[0];
   if (!order) {
-    await releaseCoupon(); // give the reserved coupon use back
+    await releaseDiscounts(); // give the reserved coupon/offer uses back
     return { error: "Failed to create order. Please try again." };
   }
 
@@ -1551,7 +1674,7 @@ export async function placeOrder(
       await releaseHolds();
       await releaseStock();
       await deleteOrder();
-      await releaseCoupon();
+      await releaseDiscounts();
       // Report the exact shortfall so the shopper knows what to do rather than
       // seeing a generic "not enough stock". reserve_stock failed because the
       // SKU is tracked, non-backorderable, and short — so the live count is the
@@ -1586,7 +1709,14 @@ export async function placeOrder(
   //    reserved stock (order still present so the movements write), then delete
   //    the order, then give the coupon use back — no orphan order is left behind
   //    (there is no cross-statement transaction).
-  const orderItemsToInsert = validItems.map((item) => ({
+  //
+  // ★ IDS ARE GENERATED HERE, not read back from RETURNING. `order_item_offers`
+  // needs to know which persisted row each engine line became, and relying on
+  // a multi-row INSERT returning rows in VALUES order is an assumption the SQL
+  // standard does not make. The orders table already does exactly this.
+  const orderItemIds = validItems.map(() => crypto.randomUUID());
+  const orderItemsToInsert = validItems.map((item, idx) => ({
+    id: orderItemIds[idx],
     orderId: order.id,
     productId: item.product_id,
     variantId: item.variant_id,
@@ -1599,6 +1729,10 @@ export async function placeOrder(
     taxRate: item.tax_rate,
     taxAmount: item.tax_amount,
     taxClassName: item.tax_class_name,
+    // §8: which line the offer actually discounted. `total` stays GROSS of it,
+    // exactly as it is gross of the order-level discount, so every existing
+    // reader is unaffected and `refundBreakdown` subtracts this directly.
+    offerDiscount: offerDiscounts[idx],
     hsnCode: item.hsn_code,
     sku: item.sku,
     requiresShipping: item.requires_shipping,
@@ -1620,11 +1754,29 @@ export async function placeOrder(
     await releaseHolds();
     await releaseStock();
     await deleteOrder();
-    await releaseCoupon();
+    await releaseDiscounts();
     return { error: "Failed to save order items. Please try again." };
   }
 
   await recordStorefrontOrderAttribution(order.id, storeId);
+
+  // Which offer discounted which line, and who redeemed what. Deliberately
+  // AFTER the order and its items are safely persisted, and best-effort like
+  // every other bookkeeping write here: losing this is a reporting gap, while
+  // failing the sale at this point would take the money and then tell the
+  // shopper it did not work. Idempotent on (offer, order) and
+  // (order_item, offer), so a retry cannot double-count a redemption.
+  if (offerResult && offerResult.applied.length > 0) {
+    await recordOfferRedemptions({
+      storeId,
+      orderId: order.id,
+      customerId: user.id,
+      result: offerResult,
+      orderItemIdByLine: new Map(
+        validItems.map((_, idx) => [String(idx), orderItemIds[idx]]),
+      ),
+    });
+  }
 
   // Shopify's durable split: the order records the sale; this work object says
   // which location must prepare it. A migration rolling out moments after the
@@ -1804,7 +1956,7 @@ export async function placeOrder(
       await releaseHolds();
       await releaseStock();
       await deleteOrder();
-      await releaseCoupon();
+      await releaseDiscounts();
       await releaseCredit();
     };
 
