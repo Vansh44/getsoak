@@ -8025,7 +8025,7 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       merchant's Twilio number needs a messaging webhook pointed at us. Until
       then opt-out is enforced on send but can only be recorded by hand.
 
-38. **Offers — one engine for every discount** (Phases A–D shipped; design and
+38. **Offers — one engine for every discount** (Phases A–E shipped; design and
     the full phase plan in **`docs/offers-plan.md`**, sequenced as roadmap
     Step 22).
     Coupons were the only discount mechanism and were order-level only: a
@@ -8294,11 +8294,82 @@ way — an entry there is a deliberate act, not a way to silence the guard.
     - **Plan gating is a COUNT, not a type list** — `maxActiveOffers` (3 on
       Free, unlimited above) with every reward type available on every plan, so
       Phase D needed no gate.
-    - **Not built (Phases E–I):**
-      payment-method / fulfilment / time-window conditions, free shipping, gift
-      with purchase, bundles, cashback, and Mink offer authority.
-      `PosCatalogItem` carries `categoryId` (cache SCHEMA_VERSION v4) so the
-      till prices a scoped offer identically.
+    - **Phase E — extra conditions (`offers.conditions`, a jsonb LIST).** Four
+      kinds: `payment_method`, `fulfilment_type`, `first_order`, `time_window`.
+      ★★ A LIST, NOT MORE `trigger_type` VALUES, because the offer merchants
+      want is "₹50 off prepaid orders over ₹500" — a payment rule AND a
+      threshold, which alternative trigger types cannot both hold. ★ **AND,
+      never OR**: an OR needs grouping and precedence and a merchant could not
+      read their own offer back; two alternatives are two offers, which
+      best-offer-wins already resolves. ★ `customer_group` and location subset
+      were ALREADY built as SCOPE (plan §5 is explicit that scope is not a
+      trigger, since modelling location as one invites reading it from the
+      cart) and were not rebuilt.
+      **★★ TWO OF THEM CANNOT WORK AT A REGISTER, AND ARE REFUSED AT SAVE.**
+      `payment_method` cannot: `lib/pos/totals.ts` exists so the till screen and
+      `placePosSale` agree on ONE total (§22), and the till's flow is
+      total-THEN-tender — a tender-dependent discount would change the total
+      after it had been quoted to the customer. `fulfilment_type` cannot either:
+      a register sale is neither a delivery nor a collection, and
+      `orders.fulfilment_type` carries the legacy `delivery` default for POS
+      rows that never meant a courier promise. Both refused for a POS-inclusive
+      offer — INCLUDING one with no channels, since that means every channel —
+      rather than saved and silently never matching (§23's rule). Enforced in
+      the pure validator, the action AND the database trigger, which re-fires
+      when an offer's CHANNELS change: widening a website-only offer to the
+      till is exactly how a saved condition becomes unenforceable.
+      **★ EVERY MISSING INPUT FAILS CLOSED** — no stated method, no fulfilment
+      type, `isFirstOrder: null` (guest or unreadable), no/invalid store
+      timezone. ★★ And an UNPARSEABLE stored condition REFUSES THE WHOLE OFFER:
+      dropping it and applying anyway would silently WIDEN the offer, so one
+      restricted to first orders would start discounting every order with
+      nothing to see. Failing closed costs a discount somebody expected; failing
+      open gives away money nobody authorised.
+      **`first_order` counts every prior order EXCEPT a cancellation whose
+      payment failed.** Ignoring cancellations opens the order-cancel-reorder
+      farm; counting all of them punishes the customer whose first attempt the
+      pending-payment reaper cancelled. Excluding exactly that case closes both
+      holes. A guest never qualifies — no history to check, and "unknown means
+      first" would hand every guest the discount forever.
+      **`time_window` resolves in the STORE's IANA zone** via `Intl` (offsets
+      change twice a year, so hand-rolled minutes are wrong at exactly the
+      boundaries a happy hour cares about), defaulting to `Asia/Kolkata` like
+      `lib/analytics/range.ts` — never the container's UTC, which would put
+      every Indian happy hour 5½ hours early. ★★ A WRAPPED WINDOW BELONGS TO THE
+      DAY IT BEGINS ON: "Friday 22:00–02:00" is one evening, so 01:00 SATURDAY
+      is inside it and 01:00 Friday is not. Checking the current day's bit gives
+      the opposite answer and halves every late-night offer, silently, on the
+      day the merchant chose. Ranges are half-open.
+      **★ A BLOCKED OFFER IS NEVER NUDGED** — conditions are checked BEFORE the
+      trigger, so only `trigger_unmet` reaches the near-miss collector. "You're
+      ₹200 from an offer you cannot have because you chose cash" is worse than
+      silence. One skip reason per condition, since that list is what answers
+      "why didn't my offer apply?".
+      Migration `20260903_0065`; the NULL trap is documented there for the THIRD
+      time (`jsonb_array_length` is satisfied on a non-array). Verified by 21
+      adversarial inserts against real Postgres.
+    - **★★ AND PHASE E CLOSED AN EXISTING PREVIEW GAP.** The client cannot
+      derive `groupIds` (a membership read) or `isFirstOrder` (order history), so
+      `loadOffersForStorefront` now ships both as server-resolved `viewer`
+      facts. Group-restricted offers had exactly that gap before: the bundle
+      filtered them to the ones the viewer qualifies for and `useCartOffers`
+      then re-rejected every one by passing an empty group list — so a member's
+      group offer never appeared in the cart and then applied at `placeOrder`,
+      dropping the total at the last step. The shopper's live payment method and
+      fulfilment type come from the checkout UI instead, which is NOT a trust
+      problem: `placeOrder` re-prices against what it will actually RECORD, so a
+      client claiming otherwise changes only its own preview. The cart drawer
+      passes neither, so a prepaid offer appears once the shopper picks a method
+      — promising it in the drawer would promise a discount on terms nobody has
+      agreed to. At the till `isFirstOrder` rides along with the customer lookup
+      like `exhaustedOfferIds`, GATED on a customer actually being attached: a
+      stale `true` with nobody attached would quote a discount the server
+      refuses, making the total go UP at completion, which is the one direction
+      of divergence that is indefensible in front of a customer.
+    - **Not built (Phases F–I):**
+      free shipping, gift with purchase, bundles, cashback, and Mink offer
+      authority. `PosCatalogItem` carries `categoryId` (cache SCHEMA_VERSION v4)
+      so the till prices a scoped offer identically.
 
 39. **The operator console — one screen per job.** `app/platform/dashboard/(console)`
     - `lib/platform/`. Full IA + rationale: **`docs/operator-console.md`**.

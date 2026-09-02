@@ -3810,6 +3810,73 @@ active, correct summary sentence, no error, and no discount — because the engi
 loader copied only `percent` and `amount` out of `reward_config`. Re-run this
 after any change to reward configuration.
 
+**PS-OF.21 ★★ — A payment-method condition cannot be saved for the register**
+Create an offer, add the **Payment method** condition, and set the channel to
+POS (or leave the channel blank, which means every channel). **Expect:** save is
+refused, naming the website. Not a bug: the till shows the total before payment
+is taken, so a tender-dependent discount would make the screen and the sale
+disagree. Same for **Delivery or pickup** — a register sale is neither. Then set
+the channel to the website only: it saves.
+
+**PS-OF.22 — Widening the channel later is refused too**
+Save a website-only offer with a payment-method condition, then edit it to
+include POS. **Expect:** refused. Widening the channel is the way a saved
+condition would otherwise become unenforceable.
+
+**PS-OF.23 — First order only, and a guest never qualifies**
+Create "20% off, first order only", website. Sign in as a customer with no
+orders and fill a cart. **Expect:** 20% applied, in the cart AND at checkout —
+not appearing only at the last step. Place the order, then start another:
+**expect** no discount. As a GUEST (not signed in): **expect** no discount,
+because there is no history to check.
+
+**PS-OF.24 ★ — A failed first payment does not burn the offer**
+As a new customer, start a prepaid order and abandon the payment window so the
+reaper cancels it. Then order again. **Expect:** the first-order discount still
+applies. Deliberate: they received nothing, and losing the offer to our own
+timeout is not defensible. But a customer who orders, _cancels deliberately_ and
+re-orders **does** lose it — that is the farm this closes.
+
+**PS-OF.25 ★★ — Happy hour runs on the STORE's clock**
+Create "20% off, Mondays 16:00–19:00", website. Set the store timezone to
+Asia/Kolkata. At 17:30 IST on a Monday: **expect** 20%. At 19:00 exactly:
+**expect** none (the end is half-open). On Tuesday at 17:30: none. Then, with a
+browser or device clock set to another timezone, repeat at 17:30 IST:
+**expect** 20% still — the window is a fact about the shop, not the shopper.
+
+**PS-OF.26 ★★ — A window past midnight is one evening**
+Create "10% off, Friday 22:00–02:00". At 23:00 Friday: **expect** 10%. At 01:00
+**Saturday**: **expect** 10% — Friday's window runs into Saturday morning. At
+01:00 **Friday**: **expect** none, because those hours belong to Thursday's
+window, which is not selected.
+
+**PS-OF.27 — Conditions are ANDed, and the preview says so**
+Create "₹50 off, orders over ₹500, paid online, first order only". As a
+returning customer paying online with a ₹600 cart: **expect** no discount, and
+the offer's skip reason is the first-order rule, not the threshold. The editor's
+summary sentence must read the conditions back — check it says "first orders
+only" and "paid by card or UPI".
+
+**PS-OF.28 ★ — A blocked offer is never nudged**
+With "₹50 off prepaid orders over ₹500" and a ₹400 cart, choose **cash on
+delivery**. **Expect:** NO "add ₹100 more" strip. The shopper cannot have that
+offer on these terms, and inviting them to spend more for it is worse than
+silence. Switch to paying online: the strip appears.
+
+**PS-OF.29 ★★ — A group offer now previews (the Phase E regression)**
+Put a customer in a group, create an automatic offer restricted to that group,
+and fill their cart. **Expect:** the discount shows in the CART, not only after
+placing the order. Before Phase E the bundle filtered the offer in and the cart
+hook filtered it back out, so the total dropped at the last step and the offer
+looked broken until the shopper committed.
+
+**PS-OF.30 — First order at the till, before and after attaching a customer**
+With "10% off, first order only" on all channels, ring a cart at the register
+BEFORE entering a phone number. **Expect:** no discount in the quoted total.
+Enter a new customer's number: **expect** the total to drop by 10% at that
+point, and the charge to match it exactly. The quote and the sale must never
+disagree.
+
 ---
 
 ## 12. Known gaps

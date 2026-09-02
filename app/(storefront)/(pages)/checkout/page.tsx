@@ -309,7 +309,18 @@ export default function CheckoutPage() {
   // Automatic offers, for the near-miss nudge. Display only — `placeOrder`
   // re-resolves and re-prices authoritatively, and the nudge's whole value is
   // that its gap comes from the engine rather than from arithmetic here.
-  const offerInfo = useCartOffers(cart.items, cart.hydrated, taxInfo?.lines);
+  // ★ THE LIVE SELECTIONS GO IN, so a "₹50 off when you pay online" offer
+  // appears the moment the shopper picks that method rather than surprising
+  // them at the last step. `resolvedPayMethod` is the value that will actually
+  // be SUBMITTED, and `fulfilment` the one that decides `pickupLocationId` —
+  // so the preview is priced against exactly what `placeOrder` will record.
+  // ★ A PLAIN OBJECT, NOT A `useMemo`. The hook depends on the two PRIMITIVES
+  // inside it, not on this object's identity, so memoising buys nothing — and
+  // the React Compiler refuses a hand-written memo it cannot preserve here.
+  const offerInfo = useCartOffers(cart.items, cart.hydrated, taxInfo?.lines, {
+    paymentMethod: resolvedPayMethod,
+    fulfilmentType: fulfilment,
+  });
 
   const selectedShippingOption =
     shippingOptions.find((option) => option.id === selectedShippingRateId) ??

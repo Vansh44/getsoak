@@ -447,7 +447,9 @@ export async function getStorefrontOffers(): Promise<{
     onSalePrice: OnSalePriceMode;
     maxTotalDiscountPercent: number;
     autoApply: boolean;
+    timeZone?: string | null;
   };
+  viewer: { groupIds: string[]; isFirstOrder: boolean | null };
 } | null> {
   try {
     const storeId = await getCurrentStoreId();
@@ -1165,6 +1167,19 @@ export async function placeOrder(
     locationId: null,
     customerId: user.id,
     code: couponCode ?? null,
+    // ★ THE METHOD THE SHOPPER CHOSE, which is also what the cart preview was
+    // priced against — the two must agree or the total moves at the last
+    // step. A fully credit-covered order is relabelled `store_credit` further
+    // down, and an unpaid gateway order is cancelled by the reaper, so the
+    // choice is the honest input either way.
+    paymentMethod,
+    // ★ SAFE TO DERIVE FROM THE REQUEST HERE, and provably so: an invalid
+    // pickup location RETURNS AN ERROR below (it does not fall back to
+    // delivery), so if this call reaches the order insert with
+    // `pickupLocationId` set, the order IS a collection. Were that a silent
+    // fallback instead, a rejected pickup would keep a pickup-only discount on
+    // a delivered order.
+    fulfilmentType: pickupLocationId ? "pickup" : "delivery",
     lines: validItems.map((it, idx) => ({
       id: String(idx),
       productId: it.product_id,

@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   applyOffers,
   MAX_EVALUATED_OFFERS,
+  storeLocalTime,
+  withinTimeWindow,
   type OfferContext,
   type OfferLine,
 } from "./apply";
@@ -1703,5 +1705,311 @@ describe("applyOffers — volume breaks", () => {
       context: ctx({ onSalePrice: "skip" }),
     });
     expect(r.discount).toBe(0);
+  });
+});
+
+describe("applyOffers — extra conditions", () => {
+  const prepaid = offer({
+    trigger: { type: "min_subtotal", minSubtotal: 500 },
+    conditions: [{ type: "payment_method", methods: ["razorpay"] }],
+    reward: { type: "amount_off", amount: 50 },
+  });
+
+  const cart = () => [line({ unitPrice: 1000 })];
+
+  it("holds when the shopper chose an allowed method", () => {
+    const r = applyOffers({
+      lines: cart(),
+      offers: [prepaid],
+      context: ctx({ paymentMethod: "razorpay" }),
+    });
+    expect(r.discount).toBe(50);
+  });
+
+  it("refuses another method, and names WHICH condition failed", () => {
+    const r = applyOffers({
+      lines: cart(),
+      offers: [prepaid],
+      context: ctx({ paymentMethod: "cod" }),
+    });
+    expect(r.discount).toBe(0);
+    expect(r.skipped).toEqual([
+      { offerId: "o1", reason: "wrong_payment_method" },
+    ]);
+  });
+
+  it("fails CLOSED when no method was stated", () => {
+    // A discount for paying online must not be granted to a caller that
+    // declined to say how it is paying.
+    const r = applyOffers({
+      lines: cart(),
+      offers: [prepaid],
+      context: ctx(),
+    });
+    expect(r.discount).toBe(0);
+    expect(r.skipped[0].reason).toBe("wrong_payment_method");
+  });
+
+  it("combines with the trigger rather than replacing it", () => {
+    // ★ THE WHOLE REASON CONDITIONS ARE A LIST. "₹50 off prepaid orders over
+    // ₹500" is inexpressible if payment method is an alternative trigger type.
+    const r = applyOffers({
+      lines: [line({ unitPrice: 400 })],
+      offers: [prepaid],
+      context: ctx({ paymentMethod: "razorpay" }),
+    });
+    expect(r.discount).toBe(0);
+    expect(r.skipped[0].reason).toBe("trigger_unmet");
+  });
+
+  it("requires EVERY condition, not any", () => {
+    const both = offer({
+      conditions: [
+        { type: "payment_method", methods: ["razorpay"] },
+        { type: "first_order" },
+      ],
+      reward: { type: "percent_off", percent: 10 },
+    });
+    expect(
+      applyOffers({
+        lines: cart(),
+        offers: [both],
+        context: ctx({ paymentMethod: "razorpay", isFirstOrder: true }),
+      }).discount,
+    ).toBe(100);
+    expect(
+      applyOffers({
+        lines: cart(),
+        offers: [both],
+        context: ctx({ paymentMethod: "razorpay", isFirstOrder: false }),
+      }).discount,
+    ).toBe(0);
+  });
+
+  it("gates on delivery or pickup", () => {
+    const pickupOnly = offer({
+      conditions: [{ type: "fulfilment_type", fulfilment: ["pickup"] }],
+      reward: { type: "percent_off", percent: 5 },
+    });
+    expect(
+      applyOffers({
+        lines: cart(),
+        offers: [pickupOnly],
+        context: ctx({ fulfilmentType: "pickup" }),
+      }).discount,
+    ).toBe(50);
+    const away = applyOffers({
+      lines: cart(),
+      offers: [pickupOnly],
+      context: ctx({ fulfilmentType: "delivery" }),
+    });
+    expect(away.skipped[0].reason).toBe("wrong_fulfilment_type");
+  });
+
+  it("treats an UNKNOWN first-order state as not-first", () => {
+    // ★ A guest has no history to check, so "unknown means first" would hand
+    // every guest the new-customer discount on every order forever.
+    const newCustomer = offer({
+      conditions: [{ type: "first_order" }],
+      reward: { type: "percent_off", percent: 20 },
+    });
+    for (const isFirstOrder of [null, undefined]) {
+      const r = applyOffers({
+        lines: cart(),
+        offers: [newCustomer],
+        context: ctx({ isFirstOrder }),
+      });
+      expect(r.skipped[0].reason).toBe("not_first_order");
+    }
+  });
+
+  it("REFUSES an offer whose stored condition could not be read", () => {
+    // ★★ Failing closed costs a discount somebody expected; failing open gives
+    // away money nobody authorised. An offer restricted to first orders must
+    // not start discounting every order because we could not parse the rule.
+    const r = applyOffers({
+      lines: cart(),
+      offers: [
+        offer({
+          conditionsUnreadable: true,
+          reward: { type: "percent_off", percent: 50 },
+        }),
+      ],
+      context: ctx(),
+    });
+    expect(r.discount).toBe(0);
+    expect(r.skipped).toEqual([
+      { offerId: "o1", reason: "conditions_unreadable" },
+    ]);
+  });
+
+  it("does NOT nudge an offer blocked by a condition", () => {
+    // "You're ₹200 from an offer you cannot have because you chose cash" is
+    // worse than saying nothing. Conditions are checked before the trigger, so
+    // a blocked offer never reaches the near-miss collector.
+    const r = applyOffers({
+      lines: [line({ unitPrice: 400 })],
+      offers: [prepaid],
+      context: ctx({ paymentMethod: "cod" }),
+    });
+    expect(r.nearMiss).toEqual([]);
+  });
+
+  it("still nudges when the conditions pass and only the trigger is short", () => {
+    const r = applyOffers({
+      lines: [line({ unitPrice: 400 })],
+      offers: [prepaid],
+      context: ctx({ paymentMethod: "razorpay" }),
+    });
+    expect(r.nearMiss[0]).toMatchObject({ kind: "spend", gap: 100 });
+  });
+});
+
+describe("applyOffers — time windows", () => {
+  const happyHour = (over: Partial<OfferContext> = {}) =>
+    applyOffers({
+      lines: [line({ unitPrice: 1000 })],
+      offers: [
+        offer({
+          conditions: [
+            {
+              type: "time_window",
+              days: [1], // Monday
+              startMinute: 16 * 60,
+              endMinute: 19 * 60,
+            },
+          ],
+          reward: { type: "percent_off", percent: 20 },
+        }),
+      ],
+      context: ctx(over),
+    });
+
+  it("applies inside the window, in the STORE's timezone", () => {
+    // 12:00 UTC on Monday 2026-09-07 = 17:30 IST, inside 16:00–19:00.
+    const r = happyHour({
+      now: new Date("2026-09-07T12:00:00.000Z"),
+      timeZone: "Asia/Kolkata",
+    });
+    expect(r.discount).toBe(200);
+  });
+
+  it("★ the SAME instant is outside the window in another store timezone", () => {
+    // 12:00 UTC is 08:00 in New York — Monday, but before 16:00. This is the
+    // whole point of resolving in the store's zone: the answer must be a fact
+    // about the shop, not about the shopper.
+    const r = happyHour({
+      now: new Date("2026-09-07T12:00:00.000Z"),
+      timeZone: "America/New_York",
+    });
+    expect(r.discount).toBe(0);
+    expect(r.skipped[0].reason).toBe("outside_time_window");
+  });
+
+  it("fails closed with no timezone, and with a nonsense one", () => {
+    for (const timeZone of [null, undefined, "Mars/Olympus"]) {
+      const r = happyHour({
+        now: new Date("2026-09-07T12:00:00.000Z"),
+        timeZone,
+      });
+      expect(r.skipped[0].reason).toBe("outside_time_window");
+    }
+  });
+
+  it("refuses the right time on the wrong day", () => {
+    // Tuesday 17:30 IST.
+    const r = happyHour({
+      now: new Date("2026-09-08T12:00:00.000Z"),
+      timeZone: "Asia/Kolkata",
+    });
+    expect(r.discount).toBe(0);
+  });
+
+  it("is half-open, so the end minute is already outside", () => {
+    // Exactly 19:00 IST on Monday.
+    const at19 = happyHour({
+      now: new Date("2026-09-07T13:30:00.000Z"),
+      timeZone: "Asia/Kolkata",
+    });
+    expect(at19.discount).toBe(0);
+    // …and the start minute is inside.
+    const at16 = happyHour({
+      now: new Date("2026-09-07T10:30:00.000Z"),
+      timeZone: "Asia/Kolkata",
+    });
+    expect(at16.discount).toBe(200);
+  });
+});
+
+describe("withinTimeWindow — wrapping past midnight", () => {
+  // ★★ A wrapped window belongs to the day it BEGINS on. "Friday 22:00–02:00"
+  // is one four-hour evening, not two hours on Friday plus two unrelated hours
+  // before dawn. Checking the current day's bit would cut every late-night
+  // offer in half, silently, on the day the merchant actually chose.
+  const friNight = { days: [5], startMinute: 22 * 60, endMinute: 2 * 60 };
+
+  it("includes Friday evening", () => {
+    expect(withinTimeWindow({ day: 5, minute: 23 * 60 }, friNight)).toBe(true);
+  });
+
+  it("includes SATURDAY's early hours, because Friday's window runs into them", () => {
+    expect(withinTimeWindow({ day: 6, minute: 60 }, friNight)).toBe(true);
+  });
+
+  it("excludes FRIDAY's early hours, which belong to Thursday's window", () => {
+    expect(withinTimeWindow({ day: 5, minute: 60 }, friNight)).toBe(false);
+  });
+
+  it("excludes the middle of Friday", () => {
+    expect(withinTimeWindow({ day: 5, minute: 12 * 60 }, friNight)).toBe(false);
+  });
+
+  it("wraps the week boundary: Sunday's window reaches into Monday", () => {
+    const sunNight = { days: [0], startMinute: 23 * 60, endMinute: 60 };
+    expect(withinTimeWindow({ day: 1, minute: 30 }, sunNight)).toBe(true);
+    // …and Sunday's own early hours belong to Saturday's window, not its own.
+    expect(withinTimeWindow({ day: 0, minute: 30 }, sunNight)).toBe(false);
+  });
+
+  it("never matches with no days selected", () => {
+    expect(
+      withinTimeWindow(
+        { day: 3, minute: 600 },
+        { days: [], startMinute: 0, endMinute: 1439 },
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("storeLocalTime", () => {
+  it("resolves the store's own day and minute", () => {
+    // 18:45 UTC Monday = 00:15 IST TUESDAY — the day rolls over, which a
+    // naive UTC read would miss entirely.
+    expect(
+      storeLocalTime(new Date("2026-09-07T18:45:00.000Z"), "Asia/Kolkata"),
+    ).toEqual({ day: 2, minute: 15 });
+  });
+
+  it("handles a zone observing daylight saving", () => {
+    // 2026-09-07 is inside US DST, so New York is UTC-4: 12:00Z = 08:00.
+    expect(
+      storeLocalTime(new Date("2026-09-07T12:00:00.000Z"), "America/New_York"),
+    ).toEqual({ day: 1, minute: 8 * 60 });
+    // In January it is UTC-5: 12:00Z = 07:00. Hand-rolled offsets get this
+    // wrong at exactly the boundaries a happy-hour offer cares about.
+    expect(
+      storeLocalTime(new Date("2026-01-05T12:00:00.000Z"), "America/New_York"),
+    ).toEqual({ day: 1, minute: 7 * 60 });
+  });
+
+  it("returns null rather than falling back to UTC on a bad zone", () => {
+    expect(storeLocalTime(NOW, "Mars/Olympus")).toBeNull();
+    expect(storeLocalTime(NOW, "")).toBeNull();
+  });
+
+  it("reads midnight as minute zero, not 1440", () => {
+    expect(
+      storeLocalTime(new Date("2026-09-07T18:30:00.000Z"), "Asia/Kolkata"),
+    ).toEqual({ day: 2, minute: 0 });
   });
 });

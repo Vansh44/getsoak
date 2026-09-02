@@ -768,7 +768,7 @@ Group **Offers**, section `promotions` — the existing permission key (§2).
 | **B** | ✅ **DONE** — product/category scoping, `fixed_price`, `contains_*` conditions, badges on cards                                                                                                                                                                                                                                                                                                                    | **M** |
 | **C** | ✅ **DONE** — buy X get Y (the four presets), unit-based sets, cheapest-free, group vs per-line competition                                                                                                                                                                                                                                                                                                        | **M** |
 | **D** | ✅ **DONE** — spend ladders (`tiered`, highest rung wins) and quantity ladders (`volume_break`, units counted across scope), the tier-upgrade nudge, and the shared reward decoder that fixed two silently-inert Phase B/C reward types                                                                                                                                                                            | **M** |
-| **E** | The extra conditions: payment method, fulfilment type, customer group, first order, time window, location subset                                                                                                                                                                                                                                                                                                   | **M** |
+| **E** | ✅ **DONE** — an additive `conditions` list (payment method, fulfilment type, first order, day/time window), all ANDed. Customer group and location subset were already SCOPE (§5) and were not rebuilt                                                                                                                                                                                                            | **M** |
 | **F** | Free shipping — the reward, the cheapest-wins reconciliation with `store_shipping_settings`, and the near-miss nudge's main use (§14, §14b)                                                                                                                                                                                                                                                                        | **M** |
 | **G** | Gift with purchase — stock reservation, ₹0 line, **GST treatment confirmed first**                                                                                                                                                                                                                                                                                                                                 | **M** |
 | **H** | Bundles and cashback-as-credit                                                                                                                                                                                                                                                                                                                                                                                     | **L** |
@@ -991,3 +991,156 @@ every plan**. There is no per-type gate to add.
 Both applied to staging and production; the two databases share
 `schema_sha256=34b11afa30324c3ac8593f05c09d809c927aab2950c9353d66cda7cb09da0a94`
 at 65/65.
+
+---
+
+## 20. Phase E as built (2026-09-03)
+
+### Conditions are a LIST, not more trigger types
+
+`offers.conditions` is a jsonb array; every entry must hold. The primary
+`trigger_type` stays the shape the merchant chose from the preset list, and a
+condition refines it.
+
+**★★ The reason is the offer merchants actually want.** "₹50 off prepaid orders
+over ₹500" needs a payment rule AND a threshold. As alternative `trigger_type`
+values that offer is inexpressible — you would have to pick one.
+
+**★ AND, never OR.** An OR needs grouping and precedence, and a merchant
+reading their own offer back could not tell which they had built. Two
+alternatives are two offers, which best-offer-wins already resolves correctly.
+The editor says "**All** of them must be true" above the list, because two
+conditions read as alternatives to most people.
+
+| Condition         | Judged against                      | Where it works |
+| ----------------- | ----------------------------------- | -------------- |
+| `payment_method`  | the method the shopper CHOSE        | website only   |
+| `fulfilment_type` | delivery or collection              | website only   |
+| `first_order`     | order history, resolved server-side | everywhere     |
+| `time_window`     | the STORE's clock                   | everywhere     |
+
+**`customer_group` and location subset were already built** as SCOPE (§5 is
+explicit that scope is not a trigger, because modelling location as one invites
+reading it from the cart). They were not rebuilt as conditions.
+
+### ★★ Two conditions cannot work at a register, and are refused at save
+
+`payment_method` cannot: `lib/pos/totals.ts` exists because the till screen and
+`placePosSale` must agree on **one** total (CODEBASE §22), and the till's flow is
+total-**then**-tender — the cashier reads the total, then stages payment against
+it. A discount that depended on the tender would change the total after it had
+been quoted to the customer. Inverting that is a checkout redesign, not a
+condition.
+
+`fulfilment_type` cannot either, for a plainer reason: a register sale is
+neither a delivery nor a collection, and `orders.fulfilment_type` carries the
+legacy `delivery` default for POS rows that never meant a courier promise.
+
+Both are **refused at save** for a POS-inclusive offer — including one with _no_
+channels, since that means every channel — rather than saved and silently never
+matching. §23's rule: a control that always fails is worse than no control.
+Enforced in the pure validator, in the server action, and in the database
+trigger, which also re-fires when an offer's **channels** change (widening a
+website-only offer to the register is exactly how a saved condition becomes
+unenforceable).
+
+### ★ Failing closed, in five places
+
+| Missing input                                   | Result                         |
+| ----------------------------------------------- | ------------------------------ |
+| no payment method stated                        | condition does not hold        |
+| no fulfilment type stated                       | condition does not hold        |
+| `isFirstOrder` is `null` (guest, or unreadable) | not a first order              |
+| no store timezone, or an invalid one            | outside the window             |
+| a stored condition could not be parsed          | **the whole offer is refused** |
+
+The last one is the important one. Dropping an unreadable condition and applying
+the offer anyway would silently **widen** it: an offer restricted to first orders
+would start discounting every order, with nothing to see. `decodeConditions`
+returns what it understood plus whether anything was discarded, and the engine
+refuses rather than running looser than the merchant configured. Failing closed
+costs a discount somebody expected; failing open gives away money nobody
+authorised — the lenient-on-read posture of `resolveStoreSettings` is for values
+that only affect display, and a restriction is not one of those.
+
+### `first_order` — what counts as a prior order
+
+All of them, **except a cancellation whose payment failed**. Ignoring cancelled
+orders looks kinder and opens the obvious farm (order, cancel, order again with
+the discount, indefinitely). Counting all of them punishes the customer whose
+first attempt was auto-cancelled by the pending-payment reaper — they received
+nothing and would lose the offer through our own timeout. Excluding exactly the
+failed-payment cancellations closes both holes instead of trading one for the
+other.
+
+A guest never qualifies: there is no history to check, so answering "first"
+would hand every guest the new-customer discount on every order forever.
+
+### `time_window` — the store's clock, and windows that wrap
+
+Resolved with `Intl` in the store's IANA zone (`settings.business.timeZone`,
+falling back to `Asia/Kolkata` like `lib/analytics/range.ts` — never the
+container's UTC, which would put every Indian happy hour 5½ hours early).
+`Intl` does the offset arithmetic because offsets change twice a year in many
+zones, and hand-rolled minutes get it wrong at exactly the boundaries a happy
+hour cares about.
+
+**★★ A wrapped window belongs to the day it BEGINS on.** "Friday 22:00–02:00"
+is one four-hour evening, so 01:00 on **Saturday** is inside it and 01:00 on
+Friday is not. Checking the current day's bit against a wrapped range gives the
+opposite answer and cuts every late-night offer in half, silently, on the one
+day the merchant chose. Ranges are half-open: the start minute is inside, the
+end minute is not.
+
+### ★★ And it closed an existing preview gap
+
+The client cannot derive `groupIds` (needs a membership read) or `isFirstOrder`
+(needs order history), so the storefront bundle now carries both as
+server-resolved `viewer` facts. **Group-restricted offers had exactly this gap
+before Phase E:** `loadOffersForStorefront` filtered them to the ones the viewer
+qualifies for, and `useCartOffers` then re-rejected every one by passing an empty
+group list. So a member's group offer never appeared in the cart and then applied
+at `placeOrder` — the total dropped at the last step, and the offer they were
+promised looked broken right up until they committed.
+
+The shopper's live `paymentMethod` / `fulfilmentType` come from the checkout UI
+instead, which is not a trust problem: `placeOrder` re-prices against what it is
+actually going to **record**, so a client claiming otherwise changes only its own
+preview. The cart drawer passes neither, so a prepaid-only offer appears once the
+shopper reaches checkout and picks a method — promising it in the drawer would be
+promising a discount on terms nobody has agreed to.
+
+At the till, `isFirstOrder` rides along with the customer lookup exactly as
+`exhaustedOfferIds` does, and is **gated on a customer actually being attached**:
+a stale `true` with nobody attached would quote a discount the server refuses,
+making the total go **up** at completion — the one direction of divergence that
+is indefensible in front of a customer.
+
+### A blocked offer is never nudged
+
+Conditions are checked in `disqualify`, **before** the trigger, so an offer
+blocked by one returns its own named reason and never reaches the near-miss
+collector. "You're ₹200 from an offer you cannot have because you chose cash" is
+worse than saying nothing. One skip reason per condition, not a shared
+`condition_unmet`: that list is what an operator reads to answer "why didn't my
+offer apply?", and a single reason on an offer carrying three conditions answers
+nothing.
+
+### Migration
+
+`20260903_0065_offers_phase_e.sql` adds the column (default `[]`, so every
+existing offer is unchanged and nothing is backfilled), a scalar shape CHECK, and
+the `offers_conditions_valid` constraint trigger for the per-element and
+website-only rules. Element validation needs `jsonb_array_elements`, a subquery,
+which Postgres refuses in a CHECK — the same wall 0063 hit.
+
+**★ The NULL trap for a third time**, so it is written into the migration:
+`jsonb_array_length(conditions) <= 4` is satisfied when `conditions` is not an
+array, so the type is asserted first and every branch is written so an absent or
+wrong-typed value fails.
+
+Verified by **21 adversarial inserts** against real Postgres — 15 refused with
+precise messages, 6 accepted, including the case that matters most: a
+payment-method condition on an offer with _no_ channels is refused, because empty
+means every channel. Applied to staging and production; both at 66/66 with
+`schema_sha256=68add8621aead1e79e5852dffdd5f6332479646f6a4ffff2cc12ecb0dc8b5792`.

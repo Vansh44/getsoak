@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
+  decodeConditions,
   decodeReward,
+  validateOfferConditions,
   validateOfferRule,
   rewardLevel,
   isGroupReward,
@@ -223,5 +225,158 @@ describe("decodeReward — the round trip that was silently lossy", () => {
       decodeReward("tiered", { tiers: [{ minSubtotal: 1, value: 10 }] })
         .tierMode,
     ).toBeUndefined();
+  });
+});
+
+describe("offer conditions — decoding", () => {
+  it("keeps every supported condition", () => {
+    const { conditions, dropped } = decodeConditions([
+      { type: "first_order" },
+      { type: "payment_method", methods: ["razorpay", "cod"] },
+      { type: "fulfilment_type", fulfilment: ["pickup"] },
+      { type: "time_window", days: [1, 5], startMinute: 600, endMinute: 720 },
+    ]);
+    expect(dropped).toBe(false);
+    expect(conditions).toHaveLength(4);
+  });
+
+  it("★ FLAGS an unknown type rather than treating it as no condition", () => {
+    // Dropping it silently would WIDEN the offer: one restricted to first
+    // orders would start discounting every order, with nothing to see. The
+    // engine refuses an offer whose conditions could not be read.
+    const { conditions, dropped } = decodeConditions([{ type: "astrology" }]);
+    expect(conditions).toEqual([]);
+    expect(dropped).toBe(true);
+  });
+
+  it("flags a non-array value", () => {
+    expect(decodeConditions({ type: "first_order" }).dropped).toBe(true);
+  });
+
+  it("treats an empty allowlist as broken, not as unrestricted", () => {
+    // ★ An empty list can never hold, so reading it as "any method" would
+    // apply an offer the merchant meant to restrict.
+    for (const bad of [
+      { type: "payment_method", methods: [] },
+      { type: "payment_method" },
+      { type: "fulfilment_type", fulfilment: [] },
+    ]) {
+      const r = decodeConditions([bad]);
+      expect(r.conditions).toEqual([]);
+      expect(r.dropped).toBe(true);
+    }
+  });
+
+  it("drops unknown values inside a known allowlist", () => {
+    const { conditions } = decodeConditions([
+      { type: "payment_method", methods: ["razorpay", "bitcoin"] },
+    ]);
+    expect(conditions).toEqual([
+      { type: "payment_method", methods: ["razorpay"] },
+    ]);
+  });
+
+  it("normalises a time window and rejects an impossible one", () => {
+    const { conditions } = decodeConditions([
+      {
+        type: "time_window",
+        days: [5, 1, 1, 9],
+        startMinute: 60,
+        endMinute: 120,
+      },
+    ]);
+    expect(conditions[0]).toEqual({
+      type: "time_window",
+      days: [1, 5],
+      startMinute: 60,
+      endMinute: 120,
+    });
+
+    for (const bad of [
+      { type: "time_window", days: [], startMinute: 0, endMinute: 60 },
+      { type: "time_window", days: [1], startMinute: 600, endMinute: 600 },
+      { type: "time_window", days: [1], startMinute: 0, endMinute: 1440 },
+      { type: "time_window", days: [1] },
+    ]) {
+      expect(decodeConditions([bad]).dropped).toBe(true);
+    }
+  });
+
+  it("reads no conditions as no conditions, not as broken", () => {
+    for (const empty of [null, undefined, []]) {
+      expect(decodeConditions(empty)).toEqual({
+        conditions: [],
+        dropped: false,
+      });
+    }
+  });
+});
+
+describe("offer conditions — validation", () => {
+  const problems = (
+    conditions: Parameters<typeof validateOfferConditions>[0],
+    channels: string[] = ["storefront"],
+  ) => validateOfferConditions(conditions, channels).map((i) => i.message);
+
+  it("accepts a website-only condition on a website offer", () => {
+    expect(
+      problems([{ type: "payment_method", methods: ["razorpay"] }]),
+    ).toEqual([]);
+  });
+
+  it("★ REFUSES a payment-method condition that reaches the register", () => {
+    // The till quotes the total BEFORE payment is staged, so a tender-dependent
+    // discount would make the screen and the sale disagree.
+    const [msg] = problems(
+      [{ type: "payment_method", methods: ["razorpay"] }],
+      ["pos"],
+    );
+    expect(msg).toContain("only works on your website");
+  });
+
+  it("★ REFUSES it for an offer with NO channels, because that means every channel", () => {
+    const [msg] = problems(
+      [{ type: "payment_method", methods: ["razorpay"] }],
+      [],
+    );
+    expect(msg).toContain("only works on your website");
+  });
+
+  it("refuses a fulfilment condition at the register — a sale there is neither", () => {
+    const [msg] = problems(
+      [{ type: "fulfilment_type", fulfilment: ["pickup"] }],
+      ["pos"],
+    );
+    expect(msg).toContain("register sale is neither");
+  });
+
+  it("allows first-order and time conditions at the register", () => {
+    expect(
+      problems(
+        [
+          { type: "first_order" },
+          { type: "time_window", days: [1], startMinute: 60, endMinute: 120 },
+        ],
+        ["pos"],
+      ),
+    ).toEqual([]);
+  });
+
+  it("refuses the same kind twice", () => {
+    const [msg] = problems([{ type: "first_order" }, { type: "first_order" }]);
+    expect(msg).toContain("only be added once");
+  });
+
+  it("refuses an empty-window and an empty-day condition", () => {
+    expect(
+      problems([
+        { type: "time_window", days: [], startMinute: 60, endMinute: 120 },
+      ]).length,
+    ).toBeGreaterThan(0);
+    expect(
+      problems([
+        { type: "time_window", days: [1], startMinute: 600, endMinute: 600 },
+      ]).length,
+    ).toBeGreaterThan(0);
   });
 });

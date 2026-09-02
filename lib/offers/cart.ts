@@ -32,11 +32,17 @@ import {
 } from "./apply";
 import {
   loadCustomerGroupIds,
+  loadFirstOrderState,
   loadLiveOffers,
   loadOfferPolicy,
 } from "./resolve";
 import { getStoreSettings } from "@/lib/settings/resolve";
-import type { Offer, OfferChannel } from "./types";
+import type {
+  Offer,
+  OfferChannel,
+  OfferFulfilmentType,
+  OfferPaymentMethod,
+} from "./types";
 
 export interface ResolveOffersInput {
   storeId: string;
@@ -49,6 +55,14 @@ export interface ResolveOffersInput {
   /** Injected so a caller can price a cart "as of" a moment — the historical
    *  replay in the offer editor needs exactly this. */
   now?: Date;
+
+  // --- Phase E: what the extra conditions are judged against ---------------
+
+  /** The payment method the shopper has CHOSEN, for a `payment_method`
+   *  condition. Website only — see `isWebsiteOnlyCondition`. */
+  paymentMethod?: OfferPaymentMethod | null;
+  /** Delivery or collection, for a `fulfilment_type` condition. */
+  fulfilmentType?: OfferFulfilmentType | null;
 }
 
 /**
@@ -63,7 +77,7 @@ export async function resolveOffersForCart(
 ): Promise<OfferResult | null> {
   if (input.lines.length === 0) return null;
   try {
-    const [policy, { offers, groupIds }] = await Promise.all([
+    const [policy, { offers, groupIds, isFirstOrder }] = await Promise.all([
       loadOfferPolicy(),
       withService(async (db) => ({
         offers: await loadLiveOffers(
@@ -72,41 +86,41 @@ export async function resolveOffersForCart(
           input.customerId ?? null,
         ),
         groupIds: await loadCustomerGroupIds(db, input.customerId ?? null),
+        // ★ Resolved server-side from order history, never taken from the
+        // caller: "is this your first order" is exactly the claim a client
+        // would like to make about itself.
+        isFirstOrder: await loadFirstOrderState(
+          db,
+          input.storeId,
+          input.customerId ?? null,
+        ),
       })),
     ]);
+
+    // ★ ONE CONTEXT, BUILT ONCE. The two branches below differ only in whether
+    // any offers were loaded; building the context twice is how one of them
+    // ends up missing a condition input and silently ignoring a restriction.
+    const context: OfferContext = {
+      ...policy,
+      channel: input.channel,
+      locationId: input.locationId ?? null,
+      customerId: input.customerId ?? null,
+      groupIds,
+      code: input.code ?? null,
+      now: input.now ?? new Date(),
+      paymentMethod: input.paymentMethod ?? null,
+      fulfilmentType: input.fulfilmentType ?? null,
+      isFirstOrder,
+    };
 
     if (offers.length === 0) {
       // A store with no offers is the common case; returning a real (empty)
       // result rather than null keeps the caller on the offer path, so a
       // storefront can still say "no offer applied" rather than falling back.
-      return applyOffers({
-        lines: input.lines,
-        offers: [],
-        context: {
-          ...policy,
-          channel: input.channel,
-          locationId: input.locationId ?? null,
-          customerId: input.customerId ?? null,
-          groupIds,
-          code: input.code ?? null,
-          now: input.now ?? new Date(),
-        },
-      });
+      return applyOffers({ lines: input.lines, offers: [], context });
     }
 
-    return applyOffers({
-      lines: input.lines,
-      offers,
-      context: {
-        ...policy,
-        channel: input.channel,
-        locationId: input.locationId ?? null,
-        customerId: input.customerId ?? null,
-        groupIds,
-        code: input.code ?? null,
-        now: input.now ?? new Date(),
-      },
-    });
+    return applyOffers({ lines: input.lines, offers, context });
   } catch (err) {
     if (isSchemaNotReady(err)) {
       // Expected between the application deploy and the migration. Warn, not
@@ -413,11 +427,44 @@ export async function loadOffersForStorefront(
   showNearMiss: boolean;
   policy: Pick<
     OfferContext,
-    "onSalePrice" | "maxTotalDiscountPercent" | "autoApply"
+    "onSalePrice" | "maxTotalDiscountPercent" | "autoApply" | "timeZone"
   >;
+  /**
+   * Facts about THIS viewer, resolved server-side so the cart's preview can
+   * reach the same answer the charge will.
+   *
+   * ★★ WITHOUT THIS THE PREVIEW SILENTLY UNDER-PROMISES. The client cannot
+   * derive any of it — `groupIds` needs a membership read, `isFirstOrder`
+   * needs order history — so a cart that omitted them would price every
+   * group-restricted and first-order offer as NOT APPLYING, then have
+   * `placeOrder` apply it: the total drops at the last step, and the offer the
+   * shopper was promised looks broken right up until they commit.
+   * (Group-restricted offers had exactly that gap before Phase E: the bundle
+   * filtered them to the ones the viewer qualifies for, and the client then
+   * re-rejected them by passing an empty group list.)
+   *
+   * ★ NOT A LEAK. These are facts about the viewer themselves, and the offers
+   * shipped alongside have already been filtered by them.
+   */
+  viewer: {
+    groupIds: string[];
+    isFirstOrder: boolean | null;
+  };
 }> {
-  const bundle = await loadOffersForRegister(storeId, customerId);
-  const settings = await getStoreSettings().catch(() => null);
+  // ★ CONCURRENT, NOT SEQUENTIAL. `withService` takes its own pool client per
+  // call, so separate calls genuinely overlap — while statements INSIDE one
+  // transaction share a client and run serially (CODEBASE §22, Step 20). Three
+  // independent reads awaited in turn is ~140ms at Mumbai's ~46ms RTT, paid on
+  // every cart hydration, for nothing.
+  const [bundle, isFirstOrder, settings] = await Promise.all([
+    loadOffersForRegister(storeId, customerId),
+    withService((db) => loadFirstOrderState(db, storeId, customerId)).catch(
+      // Fails to "not first", the closed direction: a blip must not hand the
+      // new-customer discount to every returning customer at once.
+      () => false,
+    ),
+    getStoreSettings().catch(() => null),
+  ]);
   // The nudge switch is RESOLVED here and travels with the bundle, so the
   // client is told the answer rather than reading the setting itself — the
   // rule the register follows for `canDiscount`.
@@ -433,6 +480,7 @@ export async function loadOffersForStorefront(
   return {
     ...bundle,
     showNearMiss,
+    viewer: { groupIds: [...groupIds], isFirstOrder },
     offers: bundle.offers
       .filter((o) => o.delivery === "automatic")
       .filter(

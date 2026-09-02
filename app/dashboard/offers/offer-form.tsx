@@ -11,11 +11,15 @@ import {
   type OfferFormData,
   type OfferRow,
 } from "@/app/actions/offer-actions";
-import type {
-  OfferChannel,
-  OfferDelivery,
-  OfferRewardType,
-  OfferTriggerType,
+import {
+  OFFER_CONDITIONS,
+  isWebsiteOnlyCondition,
+  type OfferChannel,
+  type OfferCondition,
+  type OfferConditionType,
+  type OfferDelivery,
+  type OfferRewardType,
+  type OfferTriggerType,
 } from "@/lib/offers/types";
 
 // ★ THE SAME CLASSES `coupon-form.tsx` USES, not new `dash-*` ones. Neither
@@ -99,6 +103,306 @@ const BREAK_PRESETS: {
 ];
 
 const MAX_RUNGS = 10;
+
+const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+const CONDITION_LABELS: Record<
+  OfferConditionType,
+  { title: string; hint: string }
+> = {
+  payment_method: {
+    title: "Payment method",
+    hint: "Website only. The register shows the total before payment is taken, so it cannot change once a method is chosen.",
+  },
+  fulfilment_type: {
+    title: "Delivery or pickup",
+    hint: "Website only. A register sale is neither a delivery nor a collection.",
+  },
+  first_order: {
+    title: "First order only",
+    hint: "Needs a signed-in customer — there is no order history to check for a guest, so a guest checkout will not qualify.",
+  },
+  time_window: {
+    title: "Days and times",
+    hint: "Uses your store's timezone, so the window means the same thing to every customer. An end time earlier than the start runs past midnight, and counts as the day it began on.",
+  },
+};
+
+const minuteToTime = (m: number) =>
+  `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+const timeToMinute = (v: string) => {
+  const [h, m] = v.split(":").map(Number);
+  return Number.isFinite(h) && Number.isFinite(m) ? h * 60 + m : 0;
+};
+
+/**
+ * The extra conditions on an offer.
+ *
+ * ★ ADDED ONE AT A TIME FROM A LIST OF WHAT IS LEFT, rather than four
+ * permanently-visible switches. Most offers carry none, and four dormant panels
+ * make the common case look complicated — while the "add" list is also where
+ * the one-of-each rule is enforced without an error message.
+ *
+ * ★ IT SAYS "ALL of these must be true" ABOVE THE LIST. Two conditions read as
+ * alternatives to most people, and a merchant who believes they built "prepaid
+ * OR pickup" has built an offer that almost never fires.
+ */
+function ConditionsEditor({
+  form,
+  setForm,
+}: {
+  form: OfferFormData;
+  setForm: React.Dispatch<React.SetStateAction<OfferFormData>>;
+}) {
+  const present = new Set(form.conditions.map((c) => c.type));
+  const remaining = OFFER_CONDITIONS.filter((t) => !present.has(t));
+  const reachesPos =
+    form.channels.length === 0 || form.channels.includes("pos");
+
+  const write = (next: OfferCondition[]) =>
+    setForm((f) => ({ ...f, conditions: next }));
+
+  const update = (i: number, next: OfferCondition) =>
+    write(form.conditions.map((c, j) => (i === j ? next : c)));
+
+  const add = (type: OfferConditionType) => {
+    const fresh: OfferCondition =
+      type === "payment_method"
+        ? { type, methods: ["razorpay"] }
+        : type === "fulfilment_type"
+          ? { type, fulfilment: ["pickup"] }
+          : type === "time_window"
+            ? {
+                type,
+                days: [1, 2, 3, 4, 5],
+                startMinute: 16 * 60,
+                endMinute: 19 * 60,
+              }
+            : { type };
+    write([...form.conditions, fresh]);
+  };
+
+  return (
+    <div className="mt-5 border-t border-[#f0f0f0] pt-5">
+      <h3 className="text-sm font-medium">Extra conditions</h3>
+      <p className={hintClass}>
+        Optional. <strong>All</strong> of them must be true for the offer to
+        apply — they narrow it, never widen it. For &ldquo;either of two
+        situations&rdquo;, make two offers; the better one is chosen
+        automatically.
+      </p>
+
+      {form.conditions.length > 0 ? (
+        <div className="mt-3 space-y-3">
+          {form.conditions.map((c, i) => {
+            const meta = CONDITION_LABELS[c.type];
+            const blocked = reachesPos && isWebsiteOnlyCondition(c.type);
+            return (
+              <div
+                key={c.type}
+                className="rounded-lg border border-[#e5e7eb] p-3"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <span className="text-sm font-medium">{meta.title}</span>
+                    <span className={hintClass}>{meta.hint}</span>
+                  </div>
+                  <button
+                    type="button"
+                    aria-label={`Remove the ${meta.title.toLowerCase()} condition`}
+                    onClick={() =>
+                      write(form.conditions.filter((_, j) => j !== i))
+                    }
+                    className="rounded-md border border-[#e5e7eb] p-1.5 text-[#6b7280]"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+
+                {blocked ? (
+                  <p className="mt-2 text-xs text-[#b45309]">
+                    This offer includes the register, where this condition
+                    cannot work. Set the offer to your website only, or remove
+                    the condition.
+                  </p>
+                ) : null}
+
+                {c.type === "payment_method" ? (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {(
+                      [
+                        ["razorpay", "Paid online"],
+                        ["cod", "Cash on delivery"],
+                        ["pay_at_store", "Pay at the shop"],
+                      ] as const
+                    ).map(([value, label]) => {
+                      const on = c.methods.includes(value);
+                      return (
+                        <button
+                          key={value}
+                          type="button"
+                          onClick={() =>
+                            update(i, {
+                              ...c,
+                              methods: on
+                                ? c.methods.filter((m) => m !== value)
+                                : [...c.methods, value],
+                            })
+                          }
+                          className={`rounded-full border px-3 py-1 text-xs ${
+                            on
+                              ? "border-[#4f46e5] bg-[#eef2ff] text-[#4f46e5]"
+                              : "border-[#e5e7eb] text-[#6b7280]"
+                          }`}
+                        >
+                          {label}
+                        </button>
+                      );
+                    })}
+                    {c.methods.length === 0 ? (
+                      <span className="text-xs text-[#b45309]">
+                        Choose at least one, or the offer can never apply.
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                {c.type === "fulfilment_type" ? (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {(
+                      [
+                        ["delivery", "Delivered"],
+                        ["pickup", "Collected from a shop"],
+                      ] as const
+                    ).map(([value, label]) => {
+                      const on = c.fulfilment.includes(value);
+                      return (
+                        <button
+                          key={value}
+                          type="button"
+                          onClick={() =>
+                            update(i, {
+                              ...c,
+                              fulfilment: on
+                                ? c.fulfilment.filter((f) => f !== value)
+                                : [...c.fulfilment, value],
+                            })
+                          }
+                          className={`rounded-full border px-3 py-1 text-xs ${
+                            on
+                              ? "border-[#4f46e5] bg-[#eef2ff] text-[#4f46e5]"
+                              : "border-[#e5e7eb] text-[#6b7280]"
+                          }`}
+                        >
+                          {label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : null}
+
+                {c.type === "time_window" ? (
+                  <div className="mt-2">
+                    <div className="flex flex-wrap gap-1.5">
+                      {DAY_LABELS.map((label, day) => {
+                        const on = c.days.includes(day);
+                        return (
+                          <button
+                            key={label}
+                            type="button"
+                            aria-pressed={on}
+                            onClick={() =>
+                              update(i, {
+                                ...c,
+                                days: on
+                                  ? c.days.filter((d) => d !== day)
+                                  : [...c.days, day],
+                              })
+                            }
+                            className={`w-11 rounded-md border px-2 py-1 text-xs ${
+                              on
+                                ? "border-[#4f46e5] bg-[#eef2ff] text-[#4f46e5]"
+                                : "border-[#e5e7eb] text-[#6b7280]"
+                            }`}
+                          >
+                            {label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="mt-2 flex flex-wrap items-end gap-3">
+                      <label className="block">
+                        <span className={hintClass}>From</span>
+                        <input
+                          type="time"
+                          className={fieldClass}
+                          value={minuteToTime(c.startMinute)}
+                          onChange={(e) =>
+                            update(i, {
+                              ...c,
+                              startMinute: timeToMinute(e.target.value),
+                            })
+                          }
+                        />
+                      </label>
+                      <label className="block">
+                        <span className={hintClass}>To</span>
+                        <input
+                          type="time"
+                          className={fieldClass}
+                          value={minuteToTime(c.endMinute)}
+                          onChange={(e) =>
+                            update(i, {
+                              ...c,
+                              endMinute: timeToMinute(e.target.value),
+                            })
+                          }
+                        />
+                      </label>
+                    </div>
+                    {c.days.length === 0 ? (
+                      <p className="mt-2 text-xs text-[#b45309]">
+                        Choose at least one day.
+                      </p>
+                    ) : null}
+                    {c.startMinute === c.endMinute ? (
+                      <p className="mt-2 text-xs text-[#b45309]">
+                        The start and end are the same, so the offer would never
+                        apply. For all day, remove this condition.
+                      </p>
+                    ) : c.endMinute < c.startMinute ? (
+                      <p className={hintClass}>
+                        This runs past midnight, and counts as the day it starts
+                        on — {DAY_LABELS[c.days[0] ?? 0]}{" "}
+                        {minuteToTime(c.startMinute)} reaches into the next
+                        morning.
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+
+      {remaining.length > 0 ? (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {remaining.map((type) => (
+            <button
+              key={type}
+              type="button"
+              onClick={() => add(type)}
+              className="inline-flex items-center gap-1 rounded-md border border-[#e5e7eb] px-3 py-1.5 text-xs text-[#374151]"
+            >
+              <Plus size={13} /> {CONDITION_LABELS[type].title}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 /**
  * The rung editor for both ladders.
@@ -341,6 +645,7 @@ export function OfferForm({
     tierMode: offer?.tierMode ?? "percent",
     tiers: offer?.tiers ?? [{ minSubtotal: 1000, value: 5 }],
     breaks: offer?.breaks ?? [{ minQuantity: 6, percent: 10 }],
+    conditions: offer?.conditions ?? [],
     channels: offer?.channels ?? [],
     validFrom: dateValue(offer?.validFrom ?? null),
     validUntil: dateValue(offer?.validUntil ?? null),
@@ -443,7 +748,33 @@ export function OfferForm({
       form.delivery === "automatic"
         ? ", applied automatically"
         : `, when a customer enters ${form.code ? form.code.toUpperCase() : "a code"}`;
-    return `${gives}${when}${how}.`;
+    // ★ CONDITIONS APPEAR IN THE SENTENCE, because they are the part most
+    // likely to be set by accident and never noticed: an offer that quietly
+    // requires a first order applies to almost nobody, and the offers list
+    // shows it as plainly "Active".
+    const extras = form.conditions
+      .map((c) =>
+        c.type === "first_order"
+          ? "first orders only"
+          : c.type === "payment_method"
+            ? `paid by ${c.methods
+                .map((m) =>
+                  m === "razorpay"
+                    ? "card or UPI"
+                    : m === "cod"
+                      ? "cash on delivery"
+                      : "payment at the shop",
+                )
+                .join(" or ")}`
+            : c.type === "fulfilment_type"
+              ? c.fulfilment.join(" or ")
+              : `${c.days.map((d) => DAY_LABELS[d]).join("/")} ${minuteToTime(
+                  c.startMinute,
+                )}–${minuteToTime(c.endMinute)}`,
+      )
+      .filter(Boolean);
+    const only = extras.length > 0 ? `, ${extras.join(", and ")}` : "";
+    return `${gives}${when}${only}${how}.`;
   }, [form]);
 
   const submit = () =>
@@ -977,7 +1308,9 @@ export function OfferForm({
           </fieldset>
         )}
 
-        <div className="mb-5 flex flex-wrap items-end gap-4">
+        <ConditionsEditor form={form} setForm={setForm} />
+
+        <div className="mb-5 mt-5 flex flex-wrap items-end gap-4">
           <label className="block">
             <span className={labelClass}>Status</span>
             <select

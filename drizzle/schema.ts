@@ -7504,6 +7504,16 @@ export const offers = pgTable(
     triggerConfig: jsonb("trigger_config").default({}).notNull(),
     rewardType: text("reward_type").notNull(),
     rewardConfig: jsonb("reward_config").default({}).notNull(),
+    /**
+     * Extra requirements, ALL of which must hold. `[]` = none.
+     *
+     * ★ A LIST, so "₹50 off prepaid orders over ₹500" is expressible — that
+     * offer needs a payment rule AND a threshold, which alternative
+     * `trigger_type` values cannot both hold. The catalogue of condition types
+     * is in code (`OFFER_CONDITIONS`), so the payloads live in jsonb for the
+     * same reason the reward's do.
+     */
+    conditions: jsonb().default([]).notNull(),
     /** Empty = every channel. */
     channels: text().array().default([]).notNull(),
     validFrom: timestamp("valid_from", { withTimezone: true, mode: "string" }),

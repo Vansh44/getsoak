@@ -88,6 +88,7 @@ import {
 } from "@/lib/pos/session";
 import { posStaff, posStaffLocations } from "@/drizzle/schema";
 import { posTotals } from "@/lib/pos/totals";
+import { loadFirstOrderState } from "@/lib/offers/resolve";
 import {
   loadExhaustedOfferIds,
   loadOffersForRegister,
@@ -806,6 +807,21 @@ export async function resolvePosCustomerByPhone(mobile: string): Promise<{
    * completion, in front of the customer.
    */
   exhaustedOfferIds?: string[];
+  /**
+   * Whether this is the customer's first order here.
+   *
+   * ★ THE SAME REASON `exhaustedOfferIds` RIDES ALONG. A register opens with
+   * nobody attached, so a first-order offer cannot be resolved then — and
+   * without this the till would quote a total WITHOUT the new-customer
+   * discount while `placePosSale` charges WITH it, so the screen and the sale
+   * would disagree. `lib/pos/totals.ts` exists precisely to stop that
+   * (CODEBASE §22), and the fix is to give the quote the same fact the charge
+   * has, not to let the two diverge and hope the difference is favourable.
+   *
+   * `undefined` on a failed read, which the engine treats as not-first — the
+   * fail-closed direction.
+   */
+  isFirstOrder?: boolean;
   error?: string;
 }> {
   const op = await resolvePosOperator();
@@ -884,9 +900,10 @@ export async function resolvePosCustomerByPhone(mobile: string): Promise<{
           email: null,
           storeCredit: 0,
         },
-        // A customer created seconds ago has redeemed nothing, so this needs
-        // no read at all.
+        // A customer created seconds ago has redeemed nothing and ordered
+        // nothing, so neither of these needs a read at all.
         exhaustedOfferIds: [],
+        isFirstOrder: true,
       };
     }
     const row = result.row;
@@ -904,7 +921,20 @@ export async function resolvePosCustomerByPhone(mobile: string): Promise<{
       // Fails silently to an empty list on its own: the atomic reservation
       // still refuses at completion, and this must never block attaching a
       // customer to a sale.
-      exhaustedOfferIds: await loadExhaustedOfferIds(op.storeId, row.id),
+      // Both fail silently on their own: the atomic reservation still refuses
+      // at completion, and neither must ever block attaching a customer.
+      ...(await (async () => {
+        const [exhaustedOfferIds, firstOrder] = await Promise.all([
+          loadExhaustedOfferIds(op.storeId, row.id),
+          withService((db) =>
+            loadFirstOrderState(db, op.storeId, row.id),
+          ).catch(() => false),
+        ]);
+        return {
+          exhaustedOfferIds,
+          isFirstOrder: firstOrder === true,
+        };
+      })()),
     };
   } catch (err) {
     return { error: dbErrorMessage(err, "Couldn't resolve that customer.") };

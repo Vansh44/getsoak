@@ -63,6 +63,7 @@ const form = (over: Partial<OfferFormData> = {}): OfferFormData => ({
   tierMode: "percent",
   tiers: [],
   breaks: [],
+  conditions: [],
   channels: [],
   validFrom: "",
   validUntil: "",
@@ -299,6 +300,94 @@ describe("offer actions", () => {
       const res = await createOffer(form({ delivery: "code", code: "DUPE" }));
       expect(res.error).toBeTruthy();
       expect(res.error).not.toMatch(/violates|constraint/i);
+    });
+  });
+
+  describe("extra conditions (Phase E)", () => {
+    it("stores the conditions it understands", async () => {
+      await createOffer(
+        form({
+          channels: ["storefront"],
+          conditions: [
+            { type: "first_order" },
+            { type: "payment_method", methods: ["razorpay"] },
+          ],
+        }),
+      );
+      expect(written().conditions).toEqual([
+        { type: "first_order" },
+        { type: "payment_method", methods: ["razorpay"] },
+      ]);
+    });
+
+    it("defaults to no conditions", async () => {
+      await createOffer(form());
+      expect(written().conditions).toEqual([]);
+    });
+
+    it("★ REFUSES a website-only condition on an offer that reaches the register", async () => {
+      // Not saved-and-silently-ignored: §23's rule that a control which always
+      // fails is worse than no control. The till quotes the total before
+      // payment is staged, so a tender-dependent discount cannot work there.
+      const res = await createOffer(
+        form({
+          channels: ["pos"],
+          conditions: [{ type: "payment_method", methods: ["razorpay"] }],
+        }),
+      );
+      expect(res.error).toMatch(/only works on your website/i);
+    });
+
+    it("★ REFUSES it when NO channel is set, because that means every channel", async () => {
+      const res = await createOffer(
+        form({
+          channels: [],
+          conditions: [{ type: "fulfilment_type", fulfilment: ["pickup"] }],
+        }),
+      );
+      expect(res.error).toMatch(/only works on your website/i);
+    });
+
+    it("allows first-order and time conditions on a register offer", async () => {
+      const res = await createOffer(
+        form({
+          channels: ["pos"],
+          conditions: [
+            { type: "first_order" },
+            {
+              type: "time_window",
+              days: [1, 2],
+              startMinute: 600,
+              endMinute: 720,
+            },
+          ],
+        }),
+      );
+      expect(res.error).toBeUndefined();
+    });
+
+    it("refuses the same condition twice", async () => {
+      const res = await createOffer(
+        form({
+          channels: ["storefront"],
+          conditions: [{ type: "first_order" }, { type: "first_order" }],
+        }),
+      );
+      expect(res.error).toMatch(/once/i);
+    });
+
+    it("★ reports the CONDITION problem before an unrelated reward one", async () => {
+      // A form that reports the wrong problem first sends people to fix the
+      // wrong field.
+      const res = await createOffer(
+        form({
+          channels: ["pos"],
+          conditions: [{ type: "payment_method", methods: ["razorpay"] }],
+          rewardType: "percent_off",
+          percent: 0,
+        }),
+      );
+      expect(res.error).toMatch(/only works on your website/i);
     });
   });
 

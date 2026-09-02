@@ -14,7 +14,7 @@
 // ---------------------------------------------------------------------------
 
 import "server-only";
-import { and, asc, count, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, not } from "drizzle-orm";
 import { withService, type Db } from "@/lib/db/client";
 import {
   offerLocations,
@@ -22,11 +22,17 @@ import {
   offerRedemptions,
   offerUserGroups,
   offers,
+  orders,
   stores,
   userGroupMembers,
 } from "@/drizzle/schema";
 import { getStoreSettings } from "@/lib/settings/resolve";
-import { decodeReward, normalizeOnSalePriceMode } from "./types";
+import { getCurrentStore } from "@/lib/store/resolve";
+import {
+  decodeConditions,
+  decodeReward,
+  normalizeOnSalePriceMode,
+} from "./types";
 import type { Offer, OfferChannel } from "./types";
 import { MAX_EVALUATED_OFFERS } from "./apply";
 import type { OfferContext } from "./apply";
@@ -71,6 +77,7 @@ export async function loadLiveOffers(
       channels: offers.channels,
       triggerType: offers.triggerType,
       triggerConfig: offers.triggerConfig,
+      conditions: offers.conditions,
       rewardType: offers.rewardType,
       rewardConfig: offers.rewardConfig,
       maxRedemptions: offers.maxRedemptions,
@@ -177,6 +184,7 @@ export async function loadLiveOffers(
   return rows.map((r) => {
     const trigger = (r.triggerConfig ?? {}) as Record<string, unknown>;
     const reward = (r.rewardConfig ?? {}) as Record<string, unknown>;
+    const decoded = decodeConditions(r.conditions);
     const scope = scopeBy.get(r.id);
 
     const globalHit =
@@ -206,6 +214,10 @@ export async function loadLiveOffers(
         type: r.triggerType === "min_subtotal" ? "min_subtotal" : "always",
         minSubtotal: num(trigger.minSubtotal),
       },
+      conditions: decoded.conditions,
+      // ★ An unreadable condition REFUSES the offer rather than running it
+      // without the restriction — see `Offer.conditionsUnreadable`.
+      conditionsUnreadable: decoded.dropped,
       reward: decodeReward(r.rewardType, reward),
       productIds: scope?.productIds ?? [],
       variantIds: scope?.variantIds ?? [],
@@ -243,8 +255,66 @@ export async function loadCustomerGroupIds(
  * reading settings itself, which is what keeps it pure and what stops a second
  * consumer resolving the same setting differently.
  */
+/**
+ * Has this customer ordered here before? `null` when we cannot know.
+ *
+ * ★★ `null` FOR A GUEST, AND THE ENGINE TREATS IT AS NOT-FIRST. A guest
+ * checkout has no history to check, so answering `true` would hand every guest
+ * the new-customer discount on every order forever — which is the entire abuse
+ * this condition exists to prevent. Returning `null` rather than `false` keeps
+ * "nobody to check" distinguishable from "checked, and they have ordered", so a
+ * future surface can explain the difference instead of implying a decision.
+ *
+ * ★★ A CANCELLED ORDER STILL COUNTS, WITH ONE EXCEPTION. Ignoring cancelled
+ * orders looks kinder and opens the obvious farm: order, cancel, order again
+ * with the discount, indefinitely. But counting ALL of them punishes the
+ * customer whose FIRST attempt was auto-cancelled by the pending-payment reaper
+ * — they never received anything and would lose the new-customer offer through
+ * our own timeout. So a cancellation whose payment FAILED does not count, and
+ * every other order does. That closes both holes rather than trading one for
+ * the other.
+ *
+ * ★ FAILS CLOSED. An unreadable history returns `false`, not `null` and not
+ * `true`: refusing a discount is recoverable, and granting one on an unknown
+ * history is how a blip becomes a discount for every returning customer at
+ * once.
+ */
+export async function loadFirstOrderState(
+  db: Db,
+  storeId: string,
+  customerId: string | null,
+): Promise<boolean | null> {
+  if (!customerId) return null;
+  try {
+    // EXISTS with a limit, not a COUNT: the question is "any?", and a customer
+    // with 400 orders must not cost a full scan on every cart price.
+    const [prior] = await db
+      .select({ id: orders.id })
+      .from(orders)
+      .where(
+        and(
+          eq(orders.storeId, storeId),
+          eq(orders.customerId, customerId),
+          not(
+            and(
+              eq(orders.status, "cancelled"),
+              eq(orders.paymentStatus, "failed"),
+            )!,
+          ),
+        ),
+      )
+      .limit(1);
+    return prior === undefined;
+  } catch {
+    return false;
+  }
+}
+
 export async function loadOfferPolicy(): Promise<
-  Pick<OfferContext, "onSalePrice" | "maxTotalDiscountPercent" | "autoApply">
+  Pick<
+    OfferContext,
+    "onSalePrice" | "maxTotalDiscountPercent" | "autoApply" | "timeZone"
+  >
 > {
   const settings = await getStoreSettings();
   const ceiling = settings["offers.maxTotalDiscountPercent"];
@@ -256,8 +326,45 @@ export async function loadOfferPolicy(): Promise<
     // Exactly the `pos.maxDiscountPercent` trap.
     maxTotalDiscountPercent: typeof ceiling === "number" ? ceiling : 50,
     autoApply: settings["offers.autoApply"] === true,
+    // ★ THE SAME ZONE ANALYTICS USES, from the same place, so "Monday" means
+    // one thing across the product. A store that has never set one gets the
+    // India-first default rather than the container's UTC — which would put
+    // every Indian happy hour 5½ hours early.
+    timeZone: await loadStoreTimeZone(),
   };
 }
+
+/**
+ * The store's IANA timezone, for a `time_window` condition.
+ *
+ * ★ VALIDATED, NOT TRUSTED. `settings.business.timeZone` is merchant-entered
+ * and anon-readable, and `Intl` throws on an unknown zone — inside the pure
+ * engine that would turn one bad settings value into a crashed cart. An
+ * unparseable value falls back to the default, which is what the analytics
+ * range parser already does with the same column.
+ */
+async function loadStoreTimeZone(): Promise<string> {
+  try {
+    const store = await getCurrentStore();
+    const business = (store.settings as Record<string, unknown> | null)
+      ?.business as Record<string, unknown> | undefined;
+    const zone = business?.timeZone;
+    if (typeof zone === "string" && zone.trim()) {
+      new Intl.DateTimeFormat("en-US", { timeZone: zone });
+      return zone;
+    }
+  } catch {
+    // Unreadable store row, or an invalid stored zone. Either way the default
+    // is a better answer than the server's own zone.
+  }
+  return DEFAULT_STORE_TIME_ZONE;
+}
+
+/**
+ * ★ India-first, matching `lib/analytics/range.ts`. Not the container's zone:
+ * Cloud Run runs in UTC, which would shift every Indian window by 5½ hours.
+ */
+export const DEFAULT_STORE_TIME_ZONE = "Asia/Kolkata";
 
 /**
  * How many active offers this store has and may have. DISPLAY ONLY —

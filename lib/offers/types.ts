@@ -37,6 +37,87 @@ export const OFFER_TRIGGERS = [
 ] as const;
 export type OfferTriggerType = (typeof OFFER_TRIGGERS)[number];
 
+/**
+ * Extra requirements layered ON TOP of the trigger. Every one must hold.
+ *
+ * ★★ A LIST, NOT MORE TRIGGER TYPES, and the reason is the offer merchants
+ * actually want. "₹50 off prepaid orders over ₹500" is the commonest form of a
+ * payment-method offer, and as alternative trigger types it is inexpressible —
+ * you would have to pick between the threshold and the payment rule. The
+ * primary trigger stays the shape the merchant chose from the preset list; a
+ * condition refines it.
+ *
+ * ★ EVERY ONE MUST HOLD (AND, never OR). An OR would need grouping and
+ * precedence, and a merchant reading their own offer back could not tell which
+ * they had built. Two alternatives are two offers, which best-offer-wins
+ * already resolves correctly.
+ *
+ * ★ CONDITIONS ARE CHECKED IN `disqualify`, alongside channel and location —
+ * not in the claim pass. They answer "may this offer be considered", so a
+ * failing one must produce a NAMED skip reason an operator can read, rather
+ * than an offer that silently claims nothing.
+ */
+export const OFFER_CONDITIONS = [
+  "payment_method",
+  "fulfilment_type",
+  "first_order",
+  "time_window",
+] as const;
+export type OfferConditionType = (typeof OFFER_CONDITIONS)[number];
+
+/** The methods a shopper can actually CHOOSE at checkout. */
+export const OFFER_PAYMENT_METHODS = [
+  "cod",
+  "razorpay",
+  "pay_at_store",
+] as const;
+export type OfferPaymentMethod = (typeof OFFER_PAYMENT_METHODS)[number];
+
+export const OFFER_FULFILMENT_TYPES = ["delivery", "pickup"] as const;
+export type OfferFulfilmentType = (typeof OFFER_FULFILMENT_TYPES)[number];
+
+export type OfferCondition =
+  | { type: "payment_method"; methods: OfferPaymentMethod[] }
+  | { type: "fulfilment_type"; fulfilment: OfferFulfilmentType[] }
+  | { type: "first_order" }
+  | {
+      type: "time_window";
+      /** 0 = Sunday … 6 = Saturday, in the STORE's timezone. */
+      days: number[];
+      /** Minutes from midnight, store-local. `start > end` wraps past
+       *  midnight, and the window is attributed to the day it BEGINS on. */
+      startMinute: number;
+      endMinute: number;
+    };
+
+export const MINUTES_PER_DAY = 24 * 60;
+
+/**
+ * Is this condition one only the website can answer?
+ *
+ * ★★ THE TILL CANNOT PRICE A TENDER-DEPENDENT DISCOUNT, and that is a hard
+ * constraint rather than unfinished work. `lib/pos/totals.ts` exists because
+ * the register screen and `placePosSale` must agree on one total (CODEBASE
+ * §22) — and the till's flow is total-THEN-tender: the cashier reads the total,
+ * then stages payment against it. A discount that depended on the tender would
+ * change the total after it had been quoted to the customer, so the screen and
+ * the sale would disagree by construction. Inverting that flow is a checkout
+ * redesign, not a condition.
+ *
+ * `fulfilment_type` is website-only for a plainer reason: a register sale is
+ * neither a delivery nor a collection. `orders.fulfilment_type` carries the
+ * legacy `delivery` default for POS rows, which never meant a courier promise
+ * (CODEBASE §22), so matching on it at a till would be matching on a
+ * placeholder.
+ *
+ * Offers carrying one of these are REFUSED at save for a POS-inclusive
+ * channel, rather than saved and silently never matching — §23's rule that a
+ * control which always fails is worse than no control.
+ */
+export function isWebsiteOnlyCondition(type: OfferConditionType): boolean {
+  return type === "payment_method" || type === "fulfilment_type";
+}
+
 export interface OfferTrigger {
   type: OfferTriggerType;
   /** `min_subtotal` only: rupees. ★ Tested against the UNDISCOUNTED
@@ -171,10 +252,7 @@ export function isGroupReward(type: OfferRewardType): boolean {
  * compiler is what notices next time — and `types.test.ts` asserts every field
  * the editor can write survives the round trip.
  */
-export function decodeReward(
-  rewardType: string,
-  config: unknown,
-): OfferReward {
+export function decodeReward(rewardType: string, config: unknown): OfferReward {
   const c = (config ?? {}) as Record<string, unknown>;
   const num = (v: unknown): number | undefined => {
     const n = Number(v);
@@ -183,7 +261,9 @@ export function decodeReward(
   const ladder = <K extends string>(
     raw: unknown,
     key: K,
-  ): ({ [P in K]: number } & { value?: number; percent?: number })[] | undefined => {
+  ):
+    | ({ [P in K]: number } & { value?: number; percent?: number })[]
+    | undefined => {
     if (!Array.isArray(raw)) return undefined;
     const out = raw
       .map((entry) => {
@@ -224,6 +304,183 @@ export function decodeReward(
     tiers: ladder(c.tiers, "minSubtotal") as OfferReward["tiers"],
     breaks: ladder(c.breaks, "minQuantity") as OfferReward["breaks"],
   };
+}
+
+/**
+ * `offers.conditions` (jsonb) → typed conditions, dropping anything malformed.
+ *
+ * ★ LENIENT ON READ, STRICT ON WRITE — the `resolveStoreSettings` posture. A
+ * condition type retired in a later release must stop applying rather than
+ * making its offer unloadable, and an unrecognised one must never be treated as
+ * "no condition" on an offer that was saved WITH one, which would silently
+ * widen the offer to everybody. So an unknown type is dropped and the offer is
+ * flagged: `decodeConditions` returns what it understood plus whether anything
+ * was discarded, and the caller refuses the offer rather than running it looser
+ * than the merchant configured it.
+ */
+export function decodeConditions(raw: unknown): {
+  conditions: OfferCondition[];
+  dropped: boolean;
+} {
+  if (raw === null || raw === undefined)
+    return { conditions: [], dropped: false };
+  if (!Array.isArray(raw)) return { conditions: [], dropped: true };
+
+  const out: OfferCondition[] = [];
+  let dropped = false;
+
+  for (const entry of raw) {
+    const e = (entry ?? {}) as Record<string, unknown>;
+    const type = e.type;
+    if (type === "first_order") {
+      out.push({ type: "first_order" });
+      continue;
+    }
+    if (type === "payment_method") {
+      const methods = (Array.isArray(e.methods) ? e.methods : []).filter(
+        (m): m is OfferPaymentMethod =>
+          (OFFER_PAYMENT_METHODS as readonly unknown[]).includes(m),
+      );
+      // An empty allowlist is not "every method" — it is a condition that can
+      // never hold, which would make the offer dead rather than unrestricted.
+      if (methods.length === 0) {
+        dropped = true;
+        continue;
+      }
+      out.push({ type: "payment_method", methods: [...new Set(methods)] });
+      continue;
+    }
+    if (type === "fulfilment_type") {
+      const fulfilment = (
+        Array.isArray(e.fulfilment) ? e.fulfilment : []
+      ).filter((f): f is OfferFulfilmentType =>
+        (OFFER_FULFILMENT_TYPES as readonly unknown[]).includes(f),
+      );
+      if (fulfilment.length === 0) {
+        dropped = true;
+        continue;
+      }
+      out.push({
+        type: "fulfilment_type",
+        fulfilment: [...new Set(fulfilment)],
+      });
+      continue;
+    }
+    if (type === "time_window") {
+      const days = (Array.isArray(e.days) ? e.days : [])
+        .map((d) => Number(d))
+        .filter((d) => Number.isInteger(d) && d >= 0 && d <= 6);
+      const startMinute = Number(e.startMinute);
+      const endMinute = Number(e.endMinute);
+      const validMinute = (m: number) =>
+        Number.isInteger(m) && m >= 0 && m < MINUTES_PER_DAY;
+      if (
+        days.length === 0 ||
+        !validMinute(startMinute) ||
+        !validMinute(endMinute) ||
+        startMinute === endMinute
+      ) {
+        dropped = true;
+        continue;
+      }
+      out.push({
+        type: "time_window",
+        days: [...new Set(days)].sort((a, b) => a - b),
+        startMinute,
+        endMinute,
+      });
+      continue;
+    }
+    dropped = true;
+  }
+
+  return { conditions: out, dropped };
+}
+
+/** Validation issues for a set of conditions, for the editor and the action. */
+export function validateOfferConditions(
+  conditions: readonly OfferCondition[],
+  channels: readonly string[],
+): OfferValidationIssue[] {
+  const issues: OfferValidationIssue[] = [];
+
+  if (conditions.length > OFFER_CONDITIONS.length) {
+    issues.push({
+      field: "conditions",
+      message: "That is more conditions than there are kinds of condition.",
+    });
+    return issues;
+  }
+
+  // ★ ONE OF EACH KIND. Two payment-method conditions would have to be ANDed,
+  // and the intersection of two allowlists is either one of them or nothing —
+  // so the second is at best redundant and at worst silently kills the offer.
+  const seen = new Set<string>();
+  for (const c of conditions) {
+    if (seen.has(c.type)) {
+      issues.push({
+        field: "conditions",
+        message: "Each kind of condition can only be added once.",
+      });
+      return issues;
+    }
+    seen.add(c.type);
+  }
+
+  // Empty channels means every channel, so it includes POS.
+  const reachesPos = channels.length === 0 || channels.includes("pos");
+
+  for (const c of conditions) {
+    if (reachesPos && isWebsiteOnlyCondition(c.type)) {
+      issues.push({
+        field: "conditions",
+        message:
+          c.type === "payment_method"
+            ? "A payment-method condition only works on your website. The register shows the total before payment is taken, so it cannot change once a method is chosen. Set the offer to your website only."
+            : "A delivery or pickup condition only works on your website — a register sale is neither. Set the offer to your website only.",
+      });
+      continue;
+    }
+
+    if (c.type === "payment_method" && c.methods.length === 0) {
+      issues.push({
+        field: "conditions",
+        message: "Choose at least one payment method.",
+      });
+    }
+    if (c.type === "fulfilment_type" && c.fulfilment.length === 0) {
+      issues.push({
+        field: "conditions",
+        message: "Choose delivery, pickup, or both.",
+      });
+    }
+    if (c.type === "time_window") {
+      if (c.days.length === 0) {
+        issues.push({
+          field: "conditions",
+          message: "Choose at least one day.",
+        });
+      }
+      if (c.startMinute === c.endMinute) {
+        issues.push({
+          field: "conditions",
+          message:
+            "The start and end times are the same, so the offer would never apply. For all day, leave the time condition off.",
+        });
+      }
+      for (const m of [c.startMinute, c.endMinute]) {
+        if (!Number.isInteger(m) || m < 0 || m >= MINUTES_PER_DAY) {
+          issues.push({
+            field: "conditions",
+            message: "Enter a valid start and end time.",
+          });
+          break;
+        }
+      }
+    }
+  }
+
+  return issues;
 }
 
 export function sortedTiers<T extends { minSubtotal: number }>(
@@ -299,6 +556,21 @@ export interface Offer {
   /** Empty = every customer. Non-empty = members of these groups only. */
   groupIds: readonly string[];
   trigger: OfferTrigger;
+  /** Extra requirements, ALL of which must hold. Empty = none. */
+  conditions?: readonly OfferCondition[];
+  /**
+   * A stored condition could not be understood — an unknown type, or a
+   * malformed payload.
+   *
+   * ★★ THE OFFER IS THEN REFUSED, NOT RUN LOOSER. Dropping an unreadable
+   * condition and applying the offer anyway would silently widen it to
+   * everybody: an offer the merchant restricted to first orders would start
+   * discounting every order, with nothing to see. Failing closed costs a
+   * discount somebody expected; failing open gives away money nobody
+   * authorised. The `resolveStoreSettings` rule is lenient on READ for values
+   * that only affect display — a restriction is not one of those.
+   */
+  conditionsUnreadable?: boolean;
   reward: OfferReward;
   /** Line scoping for a line-level reward. All three empty = every line. */
   productIds: readonly string[];

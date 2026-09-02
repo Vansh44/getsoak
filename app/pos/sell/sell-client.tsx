@@ -152,6 +152,9 @@ export function SellClient({
   // Charge. Empty until somebody is identified — a register opens with nobody
   // attached, so a per-customer cap cannot be known before then.
   const [exhaustedOfferIds, setExhaustedOfferIds] = useState<string[]>([]);
+  // `null` until a customer is identified: nobody attached means no history to
+  // check, which the engine treats as not-first.
+  const [isFirstOrder, setIsFirstOrder] = useState<boolean | null>(null);
   const [customer, setCustomer] = useState<PosCustomer | null>(
     exchange?.customer ?? null,
   );
@@ -482,6 +485,21 @@ export function SellClient({
         groupIds: [],
         now: new Date(),
         code: null,
+        // ★ FROM THE CUSTOMER LOOKUP, like `exhaustedOfferIds`. Without it the
+        // screen would quote a total without the new-customer discount while
+        // `placePosSale` charges with it — and `lib/pos/totals.ts` exists so
+        // the screen and the sale agree on ONE total (CODEBASE §22), which a
+        // favourable-to-the-customer divergence still breaks.
+        // ★ GATED ON A CUSTOMER ACTUALLY BEING ATTACHED. Detaching one leaves
+        // this state behind (as it does `exhaustedOfferIds`), and a stale
+        // `true` with nobody attached would quote a new-customer discount the
+        // server then refuses — the total would go UP at completion, which is
+        // the one direction of divergence that is indefensible in front of a
+        // customer. `placePosSale` resolves from the attached customer, so
+        // mirroring that here keeps the quote and the charge identical.
+        isFirstOrder: customer ? (isFirstOrder ?? null) : null,
+        // `timeZone` arrives inside offerPolicy, so a time-window offer is
+        // quoted against the STORE's clock rather than this till's.
         ...config.offerPolicy,
       },
     });
@@ -490,8 +508,9 @@ export function SellClient({
     config.offers,
     config.offerPolicy,
     config.locationId,
-    customer?.id,
+    customer,
     exhaustedOfferIds,
+    isFirstOrder,
   ]);
 
   const offerByLine = useMemo(() => {
@@ -1295,6 +1314,7 @@ export function SellClient({
             // without this the till keeps quoting an offer the server will
             // refuse at completion — with the customer watching.
             setExhaustedOfferIds(result.exhaustedOfferIds ?? []);
+            setIsFirstOrder(result.isFirstOrder ?? null);
             return result;
           }}
           gstin={gstin}

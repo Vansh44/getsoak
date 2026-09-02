@@ -56,6 +56,9 @@ import {
   isGroupReward,
   sortedTiers,
   sortedBreaks,
+  type OfferCondition,
+  type OfferFulfilmentType,
+  type OfferPaymentMethod,
   isPercentReward,
   normalizeOfferCode,
   rewardLevel,
@@ -120,6 +123,39 @@ export interface OfferContext {
   /** `offers.autoApply`. Off ⇒ only code/link offers can apply, which is the
    *  backfill state for every existing store. */
   autoApply: boolean;
+
+  // --- Phase E: what the extra conditions are judged against ----------------
+
+  /**
+   * The method the shopper has CHOSEN, for a `payment_method` condition.
+   *
+   * ★ THE CHOICE, NOT THE EVENTUAL RECORDED LABEL. A fully credit-covered
+   * order is relabelled `store_credit` after the fact, and an unpaid gateway
+   * order is cancelled — but the cart preview and the charge must agree, and
+   * what both see is the selection. Undefined ⇒ the condition cannot hold.
+   */
+  paymentMethod?: OfferPaymentMethod | null;
+  /** Delivery or collection, for a `fulfilment_type` condition. */
+  fulfilmentType?: OfferFulfilmentType | null;
+  /**
+   * Whether this is the customer's first order, resolved SERVER-SIDE.
+   *
+   * ★ `null` MEANS UNKNOWN AND NEVER QUALIFIES. A guest has no history to
+   * check, so treating unknown as "first" would hand every guest the
+   * new-customer discount on every order forever — which is the entire abuse
+   * this condition exists to prevent.
+   */
+  isFirstOrder?: boolean | null;
+  /**
+   * The STORE's IANA timezone, for a `time_window` condition.
+   *
+   * ★★ THE STORE'S, NEVER THE BROWSER'S. Happy hour is a fact about the shop,
+   * so a shopper in another timezone must see the same window as one standing
+   * in it — and a client-supplied zone would let anyone shift the window to
+   * whenever suited them. Absent ⇒ the condition cannot hold, which fails
+   * closed.
+   */
+  timeZone?: string | null;
 }
 
 // --- Outputs ----------------------------------------------------------------
@@ -138,6 +174,14 @@ export type SkipReason =
   | "exhausted"
   | "no_budget"
   | "trigger_unmet"
+  // ★ ONE REASON PER CONDITION, not a shared `condition_unmet`. This list is
+  // what an operator reads to answer "why didn't my offer apply?", and
+  // "condition not met" on an offer carrying three conditions answers nothing.
+  | "wrong_payment_method"
+  | "wrong_fulfilment_type"
+  | "not_first_order"
+  | "outside_time_window"
+  | "conditions_unreadable"
   | "no_eligible_lines"
   | "beyond_candidate_cap"
   | "outscored";
@@ -280,6 +324,110 @@ function offerCoversLine(offer: Offer, pl: PricedLine): boolean {
     return true;
   }
   return false;
+}
+
+/**
+ * Where a moment falls in the store's own week: day 0–6 and minutes from
+ * midnight, resolved in the given IANA timezone.
+ *
+ * ★ `Intl` DOES THE ZONE ARITHMETIC, not us. Offsets change twice a year in
+ * many zones and India's has changed historically; hand-rolling minutes from a
+ * UTC timestamp gets it wrong at exactly the boundaries a happy-hour offer
+ * cares about. Returns null on an unknown zone so the caller fails closed
+ * rather than silently using UTC.
+ */
+export function storeLocalTime(
+  now: Date,
+  timeZone: string,
+): { day: number; minute: number } | null {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      weekday: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }).formatToParts(now);
+    const get = (t: string) => parts.find((p) => p.type === t)?.value;
+    const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const day = days.indexOf(get("weekday") ?? "");
+    const hour = Number(get("hour"));
+    const minute = Number(get("minute"));
+    if (day < 0 || !Number.isFinite(hour) || !Number.isFinite(minute)) {
+      return null;
+    }
+    return { day, minute: hour * 60 + minute };
+  } catch {
+    // An invalid timeZone throws a RangeError. Unknown zone ⇒ unknown time.
+    return null;
+  }
+}
+
+/**
+ * Is the store-local moment inside the window?
+ *
+ * ★★ A WINDOW THAT WRAPS PAST MIDNIGHT IS ATTRIBUTED TO THE DAY IT BEGINS ON.
+ * "Friday 22:00–02:00" is one four-hour evening, not two hours on Friday plus
+ * two unrelated hours before dawn — so 01:00 on SATURDAY is inside Friday's
+ * window, and 01:00 on Friday is not (unless Thursday is also selected).
+ * Checking the current day's bit against a wrapped range would give the
+ * opposite answer and cut every late-night offer in half, silently, on the one
+ * day of the week the merchant actually chose.
+ */
+export function withinTimeWindow(
+  local: { day: number; minute: number },
+  window: { days: readonly number[]; startMinute: number; endMinute: number },
+): boolean {
+  const { day, minute } = local;
+  const { days, startMinute, endMinute } = window;
+  if (days.length === 0) return false;
+
+  if (startMinute < endMinute) {
+    return days.includes(day) && minute >= startMinute && minute < endMinute;
+  }
+
+  // Wrapped. The evening portion belongs to today's bit; the early-morning
+  // portion belongs to YESTERDAY's.
+  if (minute >= startMinute) return days.includes(day);
+  if (minute < endMinute) {
+    const yesterday = (day + 6) % 7;
+    return days.includes(yesterday);
+  }
+  return false;
+}
+
+/** Why this condition does not hold, or null if it does. */
+function conditionUnmet(
+  condition: OfferCondition,
+  ctx: OfferContext,
+): SkipReason | null {
+  switch (condition.type) {
+    case "payment_method": {
+      const chosen = ctx.paymentMethod ?? null;
+      // Fails closed on an unknown method: a discount for paying online must
+      // not be granted to a caller that declined to say how it is paying.
+      if (!chosen || !condition.methods.includes(chosen)) {
+        return "wrong_payment_method";
+      }
+      return null;
+    }
+    case "fulfilment_type": {
+      const chosen = ctx.fulfilmentType ?? null;
+      if (!chosen || !condition.fulfilment.includes(chosen)) {
+        return "wrong_fulfilment_type";
+      }
+      return null;
+    }
+    case "first_order":
+      return ctx.isFirstOrder === true ? null : "not_first_order";
+    case "time_window": {
+      const zone = ctx.timeZone;
+      if (!zone) return "outside_time_window";
+      const local = storeLocalTime(ctx.now, zone);
+      if (!local) return "outside_time_window";
+      return withinTimeWindow(local, condition) ? null : "outside_time_window";
+    }
+  }
 }
 
 /**
@@ -1084,6 +1232,21 @@ function disqualify(
       (pl) => lineEligible(pl, mode) && offerCoversLine(offer, pl),
     );
     if (!matches) return "trigger_unmet";
+  }
+
+  // ★★ AN UNREADABLE CONDITION REFUSES THE OFFER. Running it without the
+  // condition would silently widen it to everybody — an offer restricted to
+  // first orders would start discounting every order, with nothing to see.
+  if (offer.conditionsUnreadable) return "conditions_unreadable";
+
+  // ★ CONDITIONS ARE CHECKED HERE, with the channel and location rules, and
+  // BEFORE the trigger — so a `trigger_unmet` refusal always means what it
+  // says. Routed into the near-miss collector only via `trigger_unmet`, which
+  // is deliberate: "you are ₹200 from an offer you cannot have because you
+  // chose cash" is worse than saying nothing.
+  for (const condition of offer.conditions ?? []) {
+    const unmet = conditionUnmet(condition, ctx);
+    if (unmet) return unmet;
   }
 
   // ★ A LADDER WHOSE LOWEST RUNG IS OUT OF REACH IS REFUSED HERE, not left to

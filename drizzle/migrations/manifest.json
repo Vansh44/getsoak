@@ -2530,6 +2530,77 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260903_0065_offers_phase_e",
+      "description": "Add the offers conditions list (payment method, fulfilment type, first order, time window) with shape and website-only enforcement",
+      "file": "sql/20260903_0065_offers_phase_e.sql",
+      "checksum": "c509accace955f5c5db6e2202c117116cc25fdd3f4c82580ed1de15b6276d652",
+      "transaction": true,
+      "requires": ["20260903_0064_offers_ladder_null_guard"],
+      "verify": {},
+      "applyVerify": {
+        "constraints": ["offers_conditions_shape_check"],
+        "functions": ["offers_conditions_valid()"],
+        "queries": [
+          {
+            "name": "offers carry a conditions list, defaulting to none",
+            "sql": "select count(*)::text from information_schema.columns where table_schema='public' and table_name='offers' and column_name='conditions' and data_type='jsonb' and is_nullable='NO'",
+            "equals": "1"
+          },
+          {
+            "name": "a non-array conditions value is refused, not read as NULL",
+            "sql": "select count(*)::text from pg_constraint where conname='offers_conditions_shape_check' and pg_get_constraintdef(oid) ilike '%jsonb_typeof%'",
+            "equals": "1"
+          },
+          {
+            "name": "website-only conditions are refused for a register offer",
+            "sql": "select count(*)::text from pg_proc where proname='offers_conditions_valid' and prosrc like '%only works on the website%' and prosrc like '%v_reaches_pos%'",
+            "equals": "1"
+          },
+          {
+            "name": "widening an offer's channels re-checks its conditions",
+            "sql": "select count(*)::text from pg_trigger t join pg_proc p on p.oid=t.tgfoid where t.tgname='offers_conditions_valid' and t.tgrelid='public.offers'::regclass and NOT t.tgisinternal and p.proname='offers_conditions_valid'",
+            "equals": "1"
+          },
+          {
+            "name": "the offers guide explains AND semantics, store timezone and the website-only limit",
+            "sql": "select count(*)::text from public.help_articles where slug='create-and-manage-offers' and status='published' and body like '%<h2>Extra conditions</h2>%' and body like '%<strong>All of them must be true</strong>%' and body like '%use your store''s timezone%' and body like '%work on your website only%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "constraints": ["offers_conditions_shape_check"],
+        "functions": ["offers_conditions_valid()"],
+        "queries": [
+          {
+            "name": "offers carry a conditions list, defaulting to none",
+            "sql": "select count(*)::text from information_schema.columns where table_schema='public' and table_name='offers' and column_name='conditions' and data_type='jsonb' and is_nullable='NO'",
+            "equals": "1"
+          },
+          {
+            "name": "a non-array conditions value is refused, not read as NULL",
+            "sql": "select count(*)::text from pg_constraint where conname='offers_conditions_shape_check' and pg_get_constraintdef(oid) ilike '%jsonb_typeof%'",
+            "equals": "1"
+          },
+          {
+            "name": "website-only conditions are refused for a register offer",
+            "sql": "select count(*)::text from pg_proc where proname='offers_conditions_valid' and prosrc like '%only works on the website%' and prosrc like '%v_reaches_pos%'",
+            "equals": "1"
+          },
+          {
+            "name": "widening an offer's channels re-checks its conditions",
+            "sql": "select count(*)::text from pg_trigger t join pg_proc p on p.oid=t.tgfoid where t.tgname='offers_conditions_valid' and t.tgrelid='public.offers'::regclass and NOT t.tgisinternal and p.proname='offers_conditions_valid'",
+            "equals": "1"
+          },
+          {
+            "name": "the offers guide explains AND semantics, store timezone and the website-only limit",
+            "sql": "select count(*)::text from public.help_articles where slug='create-and-manage-offers' and status='published' and body like '%<h2>Extra conditions</h2>%' and body like '%<strong>All of them must be true</strong>%' and body like '%use your store''s timezone%' and body like '%work on your website only%'",
+            "equals": "1"
+          }
+        ]
+      }
     }
   ]
 }

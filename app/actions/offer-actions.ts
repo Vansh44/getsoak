@@ -60,8 +60,11 @@ import {
   type OfferStatus,
   type OfferTriggerType,
   decodeReward,
+  decodeConditions,
+  validateOfferConditions,
   sortedTiers,
   sortedBreaks,
+  type OfferCondition,
 } from "@/lib/offers/types";
 
 export interface OfferFormData {
@@ -89,6 +92,8 @@ export interface OfferFormData {
   tiers: { minSubtotal: number; value: number }[];
   /** `volume_break`: the quantity ladder. Highest qualifying rung wins. */
   breaks: { minQuantity: number; percent: number }[];
+  /** Extra requirements, ALL of which must hold. Empty = none. */
+  conditions: OfferCondition[];
   /** Empty = every channel. */
   channels: OfferChannel[];
   validFrom: string;
@@ -126,6 +131,7 @@ export interface OfferRow {
   tierMode: "percent" | "amount";
   tiers: { minSubtotal: number; value: number }[];
   breaks: { minQuantity: number; percent: number }[];
+  conditions: OfferCondition[];
   channels: OfferChannel[];
   validFrom: string | null;
   validUntil: string | null;
@@ -200,6 +206,16 @@ function validateForm(form: OfferFormData): string | null {
       (form.variantIds?.length ?? 0) +
       (form.categoryIds?.length ?? 0) >
     0;
+
+  // ★ CONDITIONS ARE VALIDATED BEFORE THE RULE, so the website-only message
+  // ("this only works on your website") is what a merchant sees rather than an
+  // unrelated complaint about the reward — a form that reports the wrong
+  // problem first sends people to fix the wrong field.
+  const conditionIssues = validateOfferConditions(
+    decodeConditions(form.conditions ?? []).conditions,
+    form.channels ?? [],
+  );
+  if (conditionIssues.length > 0) return conditionIssues[0].message;
 
   const issues = validateOfferRule(
     {
@@ -316,6 +332,9 @@ function buildRow(form: OfferFormData, userId: string, creating: boolean) {
                       : {}),
                   }
                 : { percent: Number(form.percent) },
+    // Normalised through the decoder on the way IN as well, so a stray field
+    // from an older client cannot reach the column.
+    conditions: decodeConditions(form.conditions ?? []).conditions,
     channels: form.channels ?? [],
     validFrom: toTimestamp(form.validFrom),
     validUntil: toTimestamp(form.validUntil),
@@ -620,6 +639,10 @@ function mapRow(row: typeof offers.$inferSelect): OfferRow {
       minQuantity: b.minQuantity,
       percent: b.percent,
     })),
+    // ★ Through the same decoder the engine uses, so the editor cannot show a
+    // condition the engine reads differently — or, worse, show none where the
+    // engine sees one it cannot parse and refuses the offer for.
+    conditions: decodeConditions(row.conditions).conditions,
     channels: (row.channels ?? []) as OfferChannel[],
     validFrom: row.validFrom,
     validUntil: row.validUntil,

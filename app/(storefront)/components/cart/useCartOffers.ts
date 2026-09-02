@@ -2,7 +2,12 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { applyOffers, type OfferResult } from "@/lib/offers/apply";
-import type { Offer, OnSalePriceMode } from "@/lib/offers/types";
+import type {
+  Offer,
+  OfferFulfilmentType,
+  OfferPaymentMethod,
+  OnSalePriceMode,
+} from "@/lib/offers/types";
 import { getStorefrontOffers } from "@/app/actions/checkout-actions";
 import { lineKey, type CartItem } from "./CartProvider";
 
@@ -26,7 +31,11 @@ interface Bundle {
     onSalePrice: OnSalePriceMode;
     maxTotalDiscountPercent: number;
     autoApply: boolean;
+    /** The STORE's zone, for a time-window condition — never the browser's. */
+    timeZone?: string | null;
   };
+  /** Server-resolved facts about this viewer; the client cannot derive them. */
+  viewer: { groupIds: string[]; isFirstOrder: boolean | null };
 }
 
 export function useCartOffers(
@@ -49,6 +58,24 @@ export function useCartOffers(
         categoryId: string | null;
       }[]
     | null,
+  /**
+   * The shopper's live selections, for `payment_method` and `fulfilment_type`
+   * conditions.
+   *
+   * ★ FROM THE UI, BECAUSE THEY ARE THE UI'S OWN STATE — and unlike the
+   * viewer facts above, that is not a trust problem: `placeOrder` re-prices
+   * against the method and fulfilment it is actually going to RECORD, so a
+   * client claiming otherwise changes only its own preview.
+   *
+   * ★ ABSENT ⇒ THE CONDITION FAILS CLOSED, which is right for the cart drawer:
+   * nothing there has chosen a payment method yet, so a prepaid-only offer
+   * appears once the shopper reaches checkout and picks one. Showing it in the
+   * drawer would be promising a discount on terms nobody has agreed to.
+   */
+  selections?: {
+    paymentMethod?: OfferPaymentMethod | null;
+    fulfilmentType?: OfferFulfilmentType | null;
+  },
 ): OfferResult | null {
   const [bundle, setBundle] = useState<Bundle | null>(null);
 
@@ -98,7 +125,15 @@ export function useCartOffers(
         // server refuses.
         locationId: null,
         customerId: null,
-        groupIds: [],
+        // ★ THE VIEWER'S REAL MEMBERSHIP, not an empty list. The bundle has
+        // already filtered offers to the groups this viewer belongs to, and
+        // passing `[]` here re-rejected every one of them — so a
+        // group-restricted offer never appeared in the cart and then applied
+        // at checkout, dropping the total at the last step.
+        groupIds: bundle.viewer.groupIds,
+        isFirstOrder: bundle.viewer.isFirstOrder,
+        paymentMethod: selections?.paymentMethod ?? null,
+        fulfilmentType: selections?.fulfilmentType ?? null,
         now: new Date(),
         code: null,
         ...bundle.policy,
@@ -108,5 +143,11 @@ export function useCartOffers(
     // engine always computes near misses (the pricing path needs the same
     // loop), so this is where the setting actually takes effect.
     return bundle.showNearMiss ? result : { ...result, nearMiss: [] };
-  }, [bundle, items, categoryByLine]);
+  }, [
+    bundle,
+    items,
+    categoryByLine,
+    selections?.paymentMethod,
+    selections?.fulfilmentType,
+  ]);
 }
