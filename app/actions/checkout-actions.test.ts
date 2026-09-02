@@ -11,7 +11,13 @@ vi.mock("@/lib/store/resolve", () => ({
   getCurrentStoreId: vi.fn(async () => STORE),
   getCurrentStore: vi.fn(async () => ({ id: STORE, name: "Test Store" })),
 }));
-vi.mock("@/lib/rate-limit", () => ({ rateLimit: vi.fn() }));
+vi.mock("@/lib/rate-limit", () => ({
+  rateLimit: vi.fn(),
+  // Only getCartTaxRates reads these two; placeOrder never calls either,
+  // so stubbing them changes nothing for the tests above.
+  clientIp: vi.fn(() => "203.0.113.1"),
+}));
+vi.mock("next/headers", () => ({ headers: vi.fn(async () => new Headers()) }));
 // Store credit is a separate concern from what these tests assert (pricing,
 // stock, coupons). Mocked so it neither adds a query to their fixture queues
 // nor changes any amount — a 0 balance is exactly today's behaviour. Its own
@@ -90,6 +96,7 @@ vi.mock("@/lib/offers/cart", () => ({
 import {
   placeOrder,
   getCartStock,
+  getCartTaxRates,
   confirmOnlinePayment,
   reconcileMyOrderPayment,
   type CheckoutFormData,
@@ -115,7 +122,7 @@ import {
   verifyCheckoutSignature,
 } from "@/lib/payments/razorpay";
 import { makeDbMock, sqlText, sqlParamValues } from "./_test-helpers";
-import { orders, orderItems } from "@/drizzle/schema";
+import { orders, orderItems, productVariants } from "@/drizzle/schema";
 import { emitEvent } from "@/lib/notifications/record";
 import type { CartItem } from "@/app/(storefront)/components/cart/CartProvider";
 import { quoteShippingForOrder } from "@/lib/shipping/quote";
@@ -304,6 +311,109 @@ describe("placeOrder", () => {
     expect(inserted.customerId).toBe("user-1");
     // Marked so cancellation restocks it exactly once (order-actions claim).
     expect(inserted.stockStatus).toBe("reserved");
+  });
+
+  // ---------------------------------------------------------------------
+  // ★ A VARIANT ON SALE MUST BE CHARGED ITS SALE PRICE.
+  //
+  // The storefront resolves a variant's price through
+  // lib/pricing.variantEffectiveSelling (special_price wins over
+  // selling_price) and the till applies the identical rule — but placeOrder
+  // used to read `selling_price` straight off the row and never even SELECT
+  // `special_price`. A variant at 450/500 therefore displayed ₹450, charged
+  // ₹450 in store, and billed ₹500 online. Both directions are pinned below:
+  // dropping the column, or bypassing the helper, fails one of them.
+  // ---------------------------------------------------------------------
+
+  // A variant row as placeOrder's aliased select returns it.
+  const variantRow = (o: Record<string, any> = {}) => ({
+    id: "v1",
+    name: "pack of 4",
+    selling_price: 500,
+    special_price: null,
+    cost_price: null,
+    track_inventory: false,
+    allow_backorder: false,
+    sku: "SKU1V01",
+    requires_shipping: false,
+    weight_grams: null,
+    length_cm: null,
+    width_cm: null,
+    height_cm: null,
+    ...o,
+  });
+
+  // products → billing → taxClasses → variants (readTaxConfig is two selects).
+  const variantSelectQueue = (v: Record<string, any>) => [
+    [productRow()],
+    [],
+    [],
+    [variantRow(v)],
+  ];
+
+  const variantLine = () =>
+    oneItem({ variantId: "v1", variantName: "pack of 4" });
+
+  it("★ charges a variant's special_price, not its selling_price", async () => {
+    dbHolder.current = makeDbMock({
+      selectQueue: variantSelectQueue({
+        selling_price: 500,
+        special_price: 450,
+      }),
+      executeQueue: [[{ reserved: true }]],
+      returning: [{ id: "order-1", order_ref: "ORD1" }],
+    });
+
+    const res = await placeOrder(validForm, [variantLine()]);
+    expect("success" in res && res.success).toBe(true);
+
+    // 450 × 2 — the price the PDP showed. At 500 the shopper is overcharged
+    // ₹100 on this order and ₹50 a unit.
+    const order = dbHolder.current.calls.values[0];
+    expect(order.subtotal).toBe(900);
+    expect(order.total).toBe(900);
+
+    // The per-line snapshot is what the invoice and the emailed receipt read,
+    // so it has to carry the sale price too — not just the order total.
+    const items = dbHolder.current.calls.values[1];
+    expect(items[0].price).toBe(450);
+    expect(items[0].total).toBe(900);
+
+    // ★ AND THE COLUMN IS ACTUALLY READ. The db mock returns canned rows, so
+    // it happily serves `special_price` whether or not the select asked for
+    // it — meaning the assertions above alone stay green if someone drops the
+    // column, and the bug returns in production only. Assert the projection
+    // itself, by column identity.
+    const projections = dbHolder.current.calls.select as Record<string, any>[];
+    expect(
+      projections.some(
+        (p) => p?.special_price === productVariants.specialPrice,
+      ),
+    ).toBe(true);
+  });
+
+  it("★ charges selling_price when the variant has no special_price", async () => {
+    // The other direction: the fix must not make every variant cheaper. A null
+    // special_price is "not on sale", and so are 0 and a negative — all of them
+    // fall back to selling_price rather than charging nothing.
+    for (const special of [null, 0, -10]) {
+      dbHolder.current = makeDbMock({
+        selectQueue: variantSelectQueue({
+          selling_price: 500,
+          special_price: special,
+        }),
+        executeQueue: [[{ reserved: true }]],
+        returning: [{ id: "order-1", order_ref: "ORD1" }],
+      });
+
+      const res = await placeOrder(validForm, [variantLine()]);
+      expect("success" in res && res.success).toBe(true);
+
+      const order = dbHolder.current.calls.values[0];
+      expect(order.subtotal).toBe(1000);
+      expect(order.total).toBe(1000);
+      expect(dbHolder.current.calls.values[1][0].price).toBe(500);
+    }
   });
 
   it("re-quotes a physical order and snapshots the selected shipping promise", async () => {
@@ -1275,5 +1385,64 @@ describe("placeOrder — offers", () => {
     await placeOrder(validForm, [oneItem()]);
     expect(recordOfferRedemptions).not.toHaveBeenCalled();
     expect(reserveOfferUses).not.toHaveBeenCalled();
+
+// ---------------------------------------------------------------------------
+// getCartTaxRates — the cart summary's tax BASIS
+//
+// ★ THIS PATH HAD THE SAME BUG, AND IT MADE THE CART SUMMARY DISAGREE WITH
+// ITSELF. `CartItem.price` is captured on the PDP through
+// variantEffectiveSelling, so the subtotal on screen used the sale price —
+// while the tax shown beside it was computed from this action's `price`, which
+// read `selling_price`. A variant at 450/500 therefore showed a ₹900 subtotal
+// with tax charged on ₹1,000. Display only (placeOrder re-prices
+// authoritatively), but it is the number the shopper is shown before paying.
+// ---------------------------------------------------------------------------
+describe("getCartTaxRates", () => {
+  // billing → taxClasses → products → variants.
+  const queue = (special: number | null) => [
+    [
+      {
+        tax_enabled: true,
+        prices_include_tax: false,
+        default_tax_class_id: null,
+      },
+    ],
+    [{ id: "tc1", name: "GST 18%", rate: 18, sort_order: 0 }],
+    [{ id: "p1", selling_price: 100, cost_price: null, tax_class_id: "tc1" }],
+    [{ id: "v1", selling_price: 500, special_price: special }],
+  ];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(rateLimit).mockResolvedValue({ allowed: true } as any);
+  });
+
+  it("★ taxes a variant on its special_price", async () => {
+    dbHolder.current = makeDbMock({ selectQueue: queue(450) });
+
+    const res = await getCartTaxRates([{ productId: "p1", variantId: "v1" }]);
+
+    expect(res.enabled).toBe(true);
+    // 450, matching what the PDP put in the cart — not the 500 the cart used
+    // to tax against.
+    expect(res.lines[0]).toMatchObject({ price: 450, rate: 18 });
+  });
+
+  it("★ taxes a variant on selling_price when it is not on sale", async () => {
+    dbHolder.current = makeDbMock({ selectQueue: queue(null) });
+
+    const res = await getCartTaxRates([{ productId: "p1", variantId: "v1" }]);
+
+    expect(res.lines[0]).toMatchObject({ price: 500, rate: 18 });
+  });
+
+  it("falls back to the product price for a variant-less line", async () => {
+    // Guards the branch either fix could have broken: a line with no variant
+    // must still price off the product row.
+    dbHolder.current = makeDbMock({ selectQueue: queue(450) });
+
+    const res = await getCartTaxRates([{ productId: "p1", variantId: null }]);
+
+    expect(res.lines[0]).toMatchObject({ price: 100, rate: 18 });
   });
 });

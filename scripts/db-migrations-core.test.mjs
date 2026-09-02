@@ -22,10 +22,10 @@ describe("database migration controls", () => {
   it("loads the repository manifest and checksums the enrolled SQL", async () => {
     const loaded = await loadManifest();
     expect(loaded.baseline.id).toBe("baseline:cloudsql-2026-08-14");
-    expect(loaded.migrations).toHaveLength(59);
+    expect(loaded.migrations).toHaveLength(60);
     expect(loaded.migrations.at(-1)).toMatchObject({
-      id: "20260902_0059_offers_phase_a",
-      requires: ["20260902_0058_mink_phase_6a_durable_workflows"],
+      id: "20260902_0060_variant_sale_price_help",
+      requires: ["20260902_0059_offers_phase_a"],
       transaction: true,
     });
     expect(loaded.migrations[0]).toMatchObject({
