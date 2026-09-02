@@ -38,6 +38,12 @@ export function AskAnything() {
         onChange={(e) => setText(e.target.value)}
         placeholder="Ask anything…"
         aria-label={`Message ${ASSISTANT_NAME}`}
+        // Same keyboard contract as the chat composer — see dashboard-chat.tsx.
+        // Submitting here opens the full view and sends, so Return is a send.
+        enterKeyHint="send"
+        autoComplete="off"
+        autoCapitalize="sentences"
+        autoCorrect="on"
         className="min-w-0 flex-1 bg-transparent text-base text-[var(--dash-text)] outline-none placeholder:text-[var(--dash-text-3)] sm:text-[15px]"
       />
       {text.trim() ? (

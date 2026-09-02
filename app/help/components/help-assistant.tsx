@@ -599,6 +599,13 @@ export function HelpAssistant() {
                   }
                 }}
                 placeholder="Ask how to do something…"
+                // Same keyboard contract as the dashboard composer — Return
+                // sends here too, and an un-hinted field in a <form> gets iOS's
+                // password/card/address bar instead of word suggestions.
+                enterKeyHint="send"
+                autoComplete="off"
+                autoCapitalize="sentences"
+                autoCorrect="on"
                 rows={1}
                 maxLength={HELP_ASSISTANT_MAX_MESSAGE_LENGTH}
                 disabled={pending}

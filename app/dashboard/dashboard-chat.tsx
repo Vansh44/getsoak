@@ -509,6 +509,21 @@ export function DashboardChat({
                   onKeyDown={composerKeyDown}
                   placeholder="Ask anything..."
                   aria-label={`Message ${ASSISTANT_NAME}`}
+                  // ★ THESE FOUR SHAPE THE PHONE KEYBOARD, and without them iOS
+                  // guesses. A field inside a <form> with no autocomplete hint
+                  // gets the AUTOFILL accessory bar — passwords, cards,
+                  // addresses — above the keys instead of QuickType word
+                  // suggestions: useless for a chat, and the reason the composer
+                  // reads as unfinished next to a native messaging app.
+                  //
+                  // `enterKeyHint` is honest rather than decorative. A phone has
+                  // no Shift, so shouldSubmitMinkComposer means Return ALWAYS
+                  // sends here, and the key should say so instead of showing a
+                  // generic newline arrow.
+                  enterKeyHint="send"
+                  autoComplete="off"
+                  autoCapitalize="sentences"
+                  autoCorrect="on"
                   className="min-h-6 max-h-40 min-w-0 flex-1 resize-none border-none bg-transparent py-0.5 text-base leading-6 text-[#1a1a1a] outline-none placeholder:text-[#8c9196] sm:text-sm sm:leading-5"
                 />
                 <div className="ml-1 flex shrink-0 items-center gap-1 self-end text-[#8c9196] sm:ml-2">
