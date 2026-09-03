@@ -2947,6 +2947,123 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260903_0072_mink_phase_6bc_workflows",
+      "description": "Add durable read-only revenue-decline investigation and product-launch preparation workflows",
+      "file": "sql/20260903_0072_mink_phase_6bc_workflows.sql",
+      "checksum": "a7ab06ac1bfe14a651479036edc8206ac1dee3e565e970da5e1f83a5b45a3e35",
+      "transaction": true,
+      "requires": ["20260903_0071_mink_offer_approval_tool"],
+      "verify": {},
+      "applyVerify": {
+        "constraints": ["mink_workflow_runs_template_check"],
+        "queries": [
+          {
+            "name": "workflow template constraint includes Phase 6B and 6C",
+            "sql": "select count(*)::text from pg_constraint where conname = 'mink_workflow_runs_template_check' and conrelid = 'public.mink_workflow_runs'::regclass and pg_get_constraintdef(oid) like '%revenue_decline_investigation%' and pg_get_constraintdef(oid) like '%product_launch_preparation%'",
+            "equals": "1"
+          },
+          {
+            "name": "the Mink guide documents revenue investigations and private launch packages",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%<h2>Investigate a revenue decline</h2>%' and body like '%reports evidence and correlations, not invented causes%' and body like '%<h2>Prepare a private product launch package</h2>%' and body like '%exact existing product or variant SKU%' and body like '%flags a location-level gap%' and body like '%does not generate an image%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "constraints": ["mink_workflow_runs_template_check"],
+        "queries": [
+          {
+            "name": "Phase 6B and 6C templates already exist",
+            "sql": "select count(*)::text from pg_constraint where conname = 'mink_workflow_runs_template_check' and conrelid = 'public.mink_workflow_runs'::regclass and pg_get_constraintdef(oid) like '%revenue_decline_investigation%' and pg_get_constraintdef(oid) like '%product_launch_preparation%'",
+            "equals": "1"
+          },
+          {
+            "name": "the Mink guide already documents Phase 6B and 6C",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%<h2>Investigate a revenue decline</h2>%' and body like '%<h2>Prepare a private product launch package</h2>%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260903_0073_mink_phase_6d_slow_inventory",
+      "description": "Add the durable location-aware slow-inventory promotion-recommendation workflow",
+      "file": "sql/20260903_0073_mink_phase_6d_slow_inventory.sql",
+      "checksum": "2af4a11c8bb1524881f75f74edfd55e8c14b2ecab4ef7fcfe0439526c5c28050",
+      "transaction": true,
+      "requires": ["20260903_0072_mink_phase_6bc_workflows"],
+      "verify": {},
+      "applyVerify": {
+        "constraints": ["mink_workflow_runs_template_check"],
+        "queries": [
+          {
+            "name": "workflow template constraint includes Phase 6D",
+            "sql": "select count(*)::text from pg_constraint where conname = 'mink_workflow_runs_template_check' and conrelid = 'public.mink_workflow_runs'::regclass and pg_get_constraintdef(oid) like '%slow_inventory_promotion%'",
+            "equals": "1"
+          },
+          {
+            "name": "the Mink guide documents guarded slow-inventory promotion recommendations",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%<h2>Find slow inventory and prepare a promotion</h2>%' and body like '%positive on-hand stock%' and body like '%Zero-stock and untracked items are not called slow inventory%' and body like '%at most 20 highest-priority SKU-location shelves%' and body like '%private recommendation only%' and body like '%not an offer-eligibility boundary%' and body like '%choose a total budget%' and body like '%approve activation in a separate human step%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "constraints": ["mink_workflow_runs_template_check"],
+        "queries": [
+          {
+            "name": "Phase 6D template already exists",
+            "sql": "select count(*)::text from pg_constraint where conname = 'mink_workflow_runs_template_check' and conrelid = 'public.mink_workflow_runs'::regclass and pg_get_constraintdef(oid) like '%slow_inventory_promotion%'",
+            "equals": "1"
+          },
+          {
+            "name": "the Mink guide already documents Phase 6D",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%<h2>Find slow inventory and prepare a promotion</h2>%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260903_0074_mink_phase_6e_delayed_pickups",
+      "description": "Add the durable PII-minimized delayed-pickup review and duplicate-safe communication-preparation workflow",
+      "file": "sql/20260903_0074_mink_phase_6e_delayed_pickups.sql",
+      "checksum": "0af1bfe006203da268d43aff39be2982016af0f97d17b4d8d9bf759b448c0d5b",
+      "transaction": true,
+      "requires": ["20260903_0073_mink_phase_6d_slow_inventory"],
+      "verify": {},
+      "applyVerify": {
+        "constraints": ["mink_workflow_runs_template_check"],
+        "queries": [
+          {
+            "name": "workflow template constraint includes Phase 6E",
+            "sql": "select count(*)::text from pg_constraint where conname = 'mink_workflow_runs_template_check' and conrelid = 'public.mink_workflow_runs'::regclass and pg_get_constraintdef(oid) like '%delayed_pickup_review%'",
+            "equals": "1"
+          },
+          {
+            "name": "the Mink guide documents private duplicate-safe delayed-pickup reviews",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%<h2>Review delayed pickups and prepare communication guidance</h2>%' and body like '%Orders Manage%' and body like '%48-hour reminder window%' and body like '%at most 25 highest-priority orders%' and body like '%Customer names, email addresses, phone numbers, postal addresses, notes and collection codes are never included%' and body like '%not a saved Mink draft%' and body like '%withholds duplicate collection-reminder copy%' and body like '%one-time reminder marker%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "constraints": ["mink_workflow_runs_template_check"],
+        "queries": [
+          {
+            "name": "Phase 6E template already exists",
+            "sql": "select count(*)::text from pg_constraint where conname = 'mink_workflow_runs_template_check' and conrelid = 'public.mink_workflow_runs'::regclass and pg_get_constraintdef(oid) like '%delayed_pickup_review%'",
+            "equals": "1"
+          },
+          {
+            "name": "the Mink guide already documents Phase 6E",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%<h2>Review delayed pickups and prepare communication guidance</h2>%'",
+            "equals": "1"
+          }
+        ]
+      }
     }
   ]
 }

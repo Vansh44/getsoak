@@ -1,6 +1,6 @@
 # Mink AI Dashboard Agent — Architecture and Delivery Plan
 
-> **Status:** Phases 0–4, Phases 5A–5F and Phase 6A are implemented in code. Phase 2
+> **Status:** Phases 0–4, Phases 5A–5F and Phases 6A–6E are implemented in code. Phase 2
 > remains the invited read-only merchant beta. Phase 3 adds a separate,
 > fail-closed operator opt-in
 > for private versioned drafts and atomic weighted credits through migration
@@ -38,18 +38,27 @@
 > leased workflow runs, idempotent step/event checkpoints, cancellation,
 > approval-resume state, completion notifications and the first deterministic
 > read-only weekly trading report template.
+> Migration `20260903_0072_mink_phase_6bc_workflows` adds the deterministic,
+> read-only revenue-decline investigation and private exact-SKU product-launch
+> preparation templates on the same runtime.
+> Migration `20260903_0073_mink_phase_6d_slow_inventory` adds a bounded,
+> location-aware slow-inventory analysis and private promotion recommendation
+> with cost/margin guardrails and a separate human offer/activation boundary.
+> Migration `20260903_0074_mink_phase_6e_delayed_pickups` adds a bounded,
+> PII-minimized delayed-pickup review with private preparation-delay copy and
+> duplicate-safe handoff to StoreMink's existing one-time reminder sweep.
 > No transfer,
-> cancellation, refund, payment/shipment/pickup/POS lifecycle, product/page/
+> cancellation, refund, payment/shipment/pickup/POS lifecycle mutation, product/page/
 > storefront or bulk publication, arbitrary-recipient or direct customer
 > contact, membership, unbounded catalogue repricing or arbitrary-code authority is
 > present.
 >
-> **Plan date:** 2026-09-01
+> **Plan date:** 2026-09-03
 >
 > **Platform constraint:** Mink AI must run on Google Cloud Vertex AI / Gemini
 > Enterprise Agent Platform. OpenAI models are out of scope.
 
-### Implementation checkpoint — 2026-09-01
+### Implementation checkpoint — 2026-09-03
 
 The current Phase 0/1/2 read slice, Phase 3 drafting slice and complete Phase 4
 guarded-action slice now include:
@@ -102,7 +111,7 @@ guarded-action slice now include:
 - a page-gated operator inspector at `/dashboard/mink` for redacted status,
   latency, retries, tool names, tokens and cost—never conversation content or
   provider reasoning;
-- a 50-case live evaluation corpus and `npm run mink:eval` gate for tool choice,
+- a 64-case live evaluation corpus and `npm run mink:eval` gate for tool choice,
   security refusals, malformed calls, latency and manual grounding review;
 - a phase-wise manual acceptance catalogue in
   `docs/mink-ai-test-prompts.md` covering read prompts, runtime UX, permissions,
@@ -1076,10 +1085,13 @@ Exit criteria:
 
 **Duration:** 5–7 weeks
 
-**Implementation split:** Phase 6A is now built. It establishes the durable
-runtime and weekly trading report without exposing live mutation authority.
-Phases 6B–6E will add the remaining templates one at a time after restart,
-lease-expiry, cancellation, owner/tenant and Scheduler acceptance passes.
+**Implementation split:** Phases 6A–6E are now built. Phase 6A establishes the
+durable runtime and weekly trading report without exposing live mutation
+authority. Phase 6B adds a revenue-decline investigation and Phase 6C adds a
+private exact-SKU launch-readiness package. Phase 6D adds location-aware slow
+inventory and a non-executable promotion recommendation. Phase 6E adds the
+remaining delayed-pickup review/communication-preparation template on the same
+restart-safe, lease-expiry, cancellation, owner/tenant and Scheduler runtime.
 
 Deliver:
 
@@ -1118,6 +1130,100 @@ Phase 6A delivered:
 - deterministic background reads with no additional Gemini calls or tokens;
 - the CRON_SECRET-only `/api/cron/mink-workflows` heartbeat, capped at 15 claims
   per invocation, plus explicit Cloud Scheduler rollout documentation.
+
+Phase 6B delivered:
+
+- a model-visible `start_revenue_decline_investigation` tool only for an
+  explicit investigate/diagnose/explain request and Analytics View permission;
+  quick totals stay on the synchronous sales tool;
+- exact 7-, 30- or 90-day windows anchored to request time and compared with
+  the preceding equal period, optionally narrowed through one exact accessible
+  location name;
+- two four-read batches covering exact current/previous sales, order volume,
+  average order value, units, channels, locations and the top-ten product sets,
+  with bounded movement lists and no background model tokens;
+- deterministic evidence summaries that label correlations rather than
+  claiming causation and explicitly disclose refunds, merchandise-line totals
+  and unavailable external traffic/advertising context.
+
+Phase 6C delivered:
+
+- a model-visible `start_product_launch_preparation` tool that appears only
+  with both Products View and Inventory View and accepts one exact existing
+  parent-product or variant SKU; tenant and target identity are resolved by the
+  server and persisted as trusted IDs;
+- a maximum-20-sellable-SKU snapshot of publication, parent/relevant variant
+  media, description/SEO coverage, price hierarchy, captured
+  accessible-location stock and thresholds, and shipping-measurement
+  completeness; missing shelf rows count as zero and combined stock cannot hide
+  a location-level gap;
+- deterministic blockers, warnings, ready checks, readiness score, location
+  stock, an ordered checklist and starter copy grounded only in stored
+  store/product/category names;
+- a private result with no image generation, publication, price/inventory
+  mutation, campaign/audience action, customer contact, code deployment or
+  other live side effect.
+
+Phase 6D delivered:
+
+- a model-visible `start_slow_inventory_promotion` tool only when Mink drafting
+  is enabled and the actor has Analytics View, Products View, Inventory View
+  and Offers Manage; one exact accessible location is optional and the durable
+  input captures physical location IDs rather than online/unassigned scope;
+- one bounded SQL evidence read over a complete 30- or 90-day lookback. It
+  admits only published, inventory-tracked, currently positive-stock shelves
+  whose product predates the full window, joins recognized order-item sales
+  to the same product/variant/location, and ranks no-sale shelves before stock
+  with at least two lookback periods of cover;
+- at most 20 SKU-location results with stock, units, sales, estimated days of
+  cover, sell-through and safe dashboard links. Shop and Delhi remain separate,
+  missing/zero stock and untracked items are excluded, and online/unassigned
+  orders are never invented as physical-shelf demand;
+- a deterministic maximum-five-SKU private promotion concept. It suggests at
+  most 10% and never above the store ceiling only when every target has saved
+  cost data supporting a five-point gross-margin buffer; otherwise it withholds
+  the discount and asks for margin review;
+- an explicit non-execution boundary: no offer is created or activated, no
+  price/inventory/campaign/customer record changes, and a merchant must verify
+  exact offer scope plus channel/audience rules, choose a total budget, save
+  disabled and approve activation separately in Offers; an analysed physical
+  location is evidence scope, never an inferred offer-eligibility boundary;
+- queue, worker and owner reads recheck drafting plus all four permissions,
+  invitation/store access, requester suspension and narrowed location authority;
+  background preparation remains deterministic and consumes no Gemini tokens.
+
+Phase 6E delivered:
+
+- a model-visible `start_delayed_pickup_review` tool only when Mink drafting is
+  enabled and the actor has Orders Manage. One exact accessible location is
+  optional; otherwise exact active physical location IDs are captured and each
+  returned order keeps its Shop/Delhi location explicit;
+- one bounded, PII-minimized read of at most 25 highest-priority live Awaiting
+  or Ready pickup orders. A pickup qualifies only when its immutable promised
+  ready time has passed or its future collection deadline is inside the
+  existing 48-hour reminder window; collected, expired, cancelled and fully
+  refunded orders are excluded;
+- deterministic cohorts for overdue preparation, unprepared/at-risk pickup and
+  ready/collection-due orders, with visible order references, lifecycle timing,
+  reminder state, safe Order links, complete-match counts and truncation;
+- generic preparation-delay copy that keeps order, location and revised-ready
+  time as explicit placeholders for human verification. Customer names, email,
+  phone, addresses, notes and collection codes are neither read nor persisted;
+- an explicit duplicate-contact boundary: when StoreMink's existing one-time
+  collection reminder is pending or already recorded, Mink withholds duplicate
+  copy. It never sends or queues a message, saves a Mink draft, claims/resets a
+  reminder, changes pickup/order state, extends a deadline, releases a hold or
+  moves inventory;
+- queue, worker and owner reads recheck drafting, Orders Manage, invitation,
+  requester suspension and narrowed location authority. The existing atomic
+  expiry/reminder sweeps remain authoritative and background preparation makes
+  no Gemini call.
+
+The shared runtime now derives permissions per template at queue, worker and
+owner-status boundaries. Active locations are revalidated before each step;
+scope may narrow after access removal but can never widen after queueing. All
+five templates retain the same checkpoint, retry, cancellation, notification
+and support-history guarantees.
 
 Evaluate managed Agent Runtime only here. Move a workflow only if it improves
 reliability, isolation or operations enough to justify a second deployment
@@ -1385,33 +1491,33 @@ would move risk into production rather than remove work.
 
 ## 21. Immediate next sprint
 
-The next sprint should validate and safely roll out Phase 6A before Phase 6B:
+The next sprint should validate and safely roll out Phase 6E before Phase 7A:
 
-1. Apply `20260902_0058_mink_phase_6a_durable_workflows` after 0057 in a
-   controlled environment and verify all three tables, constraints, RLS and
-   app_user revocations before deploying the application.
-2. Keep `storemink-mink-workflows` absent/paused until both DB and route are
-   live. Then create the one-minute CRON_SECRET job and prove missing/wrong
-   bearer credentials return 401 before any claim.
-3. Queue the same report twice through one forced provider/tool retry. Exactly
-   one run and three steps may exist for that origin run; a fresh user request
-   may create a separate report.
-4. Kill Cloud Run after each claim and after each expensive read, let the lease
-   expire, then restart. The run must resume without duplicate completion,
-   event or notification.
-5. Race two worker requests and multiple browser polls/cancels. SKIP LOCKED must
-   isolate claims; cancellation must stop before the next step; cancelled runs
-   must reject resume.
-6. Compare report range, timezone, exact captured locations, online/unassigned
-   inclusion, refunds, sales metrics, top products and channels with Analytics.
-   Add a new location after queueing and prove it does not enter that report;
-   remove an assigned location and prove the next read narrows to current scope.
-7. Remove Analytics permission, suspend/revoke the requester and test foreign
-   admin/store workflow IDs. Worker and browser reads must fail closed without
-   disclosing existence or report data.
-8. Run the complete P6A pack and inspect query plans, retry latency, queue age,
-   event reconstruction and notification fan-out. Only after this is stable,
-   begin Phase 6B's read-only revenue-decline investigation template.
+1. Apply `20260903_0074_mink_phase_6e_delayed_pickups` after 0073 and verify the
+   workflow-template constraint plus Help Centre section before deploying the
+   matching application revision.
+2. Create controlled Echos pickup fixtures at Shop and Delhi covering Awaiting
+   before/after the promised-ready time, Ready inside the 48-hour window,
+   reminder pending/already recorded, collected, expired, cancelled and fully
+   refunded states. Run the exact P6E prompt pack and verify every included and
+   excluded row at the card's data-as-of time.
+3. Confirm the complete-match cohort counts, severity ordering, 25-row bound,
+   truncation label, exact Shop/Delhi alias resolution and safe Order links.
+4. Confirm preparation copy keeps the revised-ready time as a staff-confirmed
+   placeholder. Ready pickups must use the existing automatic reminder state;
+   pending or recorded reminders must withhold duplicate collection copy.
+5. Verify the result never reads or persists customer name, email, phone,
+   address, notes or collection code and cannot send/queue/save a message,
+   claim/reset a reminder, change status/deadline, release a hold or move stock.
+6. Remove drafting or Orders Manage during a run; suspend/revoke the requester,
+   remove a location assignment and deactivate a captured location. The next
+   step must cancel or narrow, and later status reads must fail closed.
+7. Force worker overlap, lease expiry, cancellation and Cloud Run restart. One
+   originating request must retain one run, three steps, one result and one
+   notification, with zero background Gemini usage and no duplicate reminder.
+8. After these gates pass, begin Phase 7A with builder-context read tools and a
+   sandbox contract only; do not grant code save or publication authority in
+   the same step.
 
 The intended outcome is not “Gemini 3.7 answered impressively.” It is:
 

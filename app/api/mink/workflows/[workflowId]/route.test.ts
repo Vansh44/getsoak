@@ -28,6 +28,7 @@ vi.mock("@/lib/observability/logger", () => ({
 }));
 
 import { GET, POST } from "./route";
+import { MinkRequestError } from "@/lib/mink/errors";
 
 const WORKFLOW_ID = "11111111-1111-4111-8111-111111111111";
 const PARAMS = { params: Promise.resolve({ workflowId: WORKFLOW_ID }) };
@@ -113,6 +114,13 @@ describe("Mink workflow API", () => {
       isSuperadmin: false,
       permissions: {},
     });
+    holder.getWorkflow.mockRejectedValueOnce(
+      new MinkRequestError(
+        "mink_workflow_access_denied",
+        "You no longer have permission to view this workflow.",
+        403,
+      ),
+    );
     const response = await GET(
       new Request(
         `https://acme.storemink.com/api/mink/workflows/${WORKFLOW_ID}`,
@@ -120,7 +128,28 @@ describe("Mink workflow API", () => {
       PARAMS,
     );
     expect(response.status).toBe(403);
-    expect(holder.getWorkflow).not.toHaveBeenCalled();
+    expect(holder.getWorkflow).toHaveBeenCalledTimes(1);
+  });
+
+  it("delegates template-specific permission checks to the owner-scoped service", async () => {
+    holder.actor.mockResolvedValue({
+      storeId: "store-1",
+      adminId: "admin-1",
+      isSuperadmin: false,
+      permissions: { products: ["view"], inventory: ["view"] },
+    });
+    holder.getWorkflow.mockResolvedValueOnce({
+      ...workflow,
+      template: "product_launch_preparation",
+    });
+    const response = await GET(
+      new Request(
+        `https://acme.storemink.com/api/mink/workflows/${WORKFLOW_ID}`,
+      ),
+      PARAMS,
+    );
+    expect(response.status).toBe(200);
+    expect(holder.getWorkflow).toHaveBeenCalledTimes(1);
   });
 });
 

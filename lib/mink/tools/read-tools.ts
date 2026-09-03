@@ -13,7 +13,14 @@ import {
 } from "../catalog-health-read";
 import { MinkToolInputError } from "../errors";
 import type { MinkActorContext, MinkArtifact } from "../types";
-import { enqueueWeeklyTradingReport } from "../workflows";
+import {
+  enqueueDelayedPickupReview,
+  enqueueProductLaunchPreparation,
+  enqueueRevenueDeclineInvestigation,
+  enqueueSlowInventoryPromotion,
+  enqueueWeeklyTradingReport,
+} from "../workflows";
+import type { MinkWorkflowTemplate } from "../workflow-types";
 import { resolveMinkLocation } from "./location-scope";
 import { MinkToolRegistry, type MinkTool } from "./registry";
 import { currentOrderTool, listOrdersTool } from "./order-tools";
@@ -570,6 +577,219 @@ const startWeeklyTradingReport: MinkTool = {
   },
 };
 
+const REVENUE_INVESTIGATION_PERIODS = ["7d", "30d", "90d"] as const;
+
+const startRevenueDeclineInvestigation: MinkTool = {
+  declaration: {
+    name: "start_revenue_decline_investigation",
+    description:
+      "Queue a durable read-only investigation only when the user explicitly asks Mink to investigate, diagnose, or explain a revenue or sales decline. It compares one bounded 7, 30, or 90 day period with the preceding equal period and examines orders, average order value, units, channels, locations, and top-product movements. Omit location_name to use the signed-in admin's exact captured accessible scope, or pass one exact accessible dashboard location name. It reports correlations, not invented causation, makes no changes, and consumes no additional model tokens while queued. For a simple sales total or comparison, use get_sales_summary instead.",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {
+        period: {
+          type: "string",
+          enum: [...REVENUE_INVESTIGATION_PERIODS],
+          description:
+            "Bounded investigation window. Defaults to 30d and always compares the preceding equal period.",
+          default: "30d",
+        },
+        location_name: {
+          type: "string",
+          description:
+            "Optional exact accessible dashboard location name, such as Shop or Delhi warehouse. Never use or invent a location ID.",
+          minLength: 1,
+          maxLength: 100,
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  permission: { section: "analytics", action: "view" },
+  timeoutMs: 7_000,
+  artifact(output) {
+    return workflowArtifact(output, {
+      template: "revenue_decline_investigation",
+      title: "Revenue decline investigation",
+      description:
+        "A durable, evidence-labelled comparison of sales, orders, channels, locations and products.",
+    });
+  },
+  async execute(actor, args) {
+    const period = readEnum(
+      args.period,
+      REVENUE_INVESTIGATION_PERIODS,
+      "period",
+      "30d",
+    );
+    const workflow = await enqueueRevenueDeclineInvestigation(actor, {
+      period,
+      locationName: args.location_name,
+    });
+    return { workflow };
+  },
+};
+
+const startProductLaunchPreparation: MinkTool = {
+  declaration: {
+    name: "start_product_launch_preparation",
+    description:
+      "Queue a durable private launch-readiness package for one exact existing product or variant SKU only when the user explicitly asks Mink to prepare or assess a product launch. The workflow inspects at most 20 sellable SKUs, catalogue copy, media, SEO, valid pricing, captured accessible-location inventory, thresholds and shipping measurements. It returns grounded blockers, warnings, a checklist and clearly labelled starter copy. It never publishes, reprices, changes inventory, generates media, creates a campaign, selects recipients, or contacts customers. product_sku must be copied exactly from StoreMink; never infer or expand a product name.",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {
+        product_sku: {
+          type: "string",
+          description:
+            "One exact existing StoreMink parent-product or variant SKU.",
+          minLength: 1,
+          maxLength: 100,
+        },
+      },
+      required: ["product_sku"],
+      additionalProperties: false,
+    },
+  },
+  permission: { section: "products", action: "view" },
+  available: (actor) =>
+    can(actor.permissions, "inventory", "view", actor.isSuperadmin),
+  timeoutMs: 7_000,
+  artifact(output) {
+    return workflowArtifact(output, {
+      template: "product_launch_preparation",
+      title: "Product launch preparation",
+      description:
+        "A private, grounded readiness package for one exact StoreMink product or variant SKU.",
+    });
+  },
+  async execute(actor, args) {
+    const workflow = await enqueueProductLaunchPreparation(actor, {
+      productSku: args.product_sku,
+    });
+    return { workflow };
+  },
+};
+
+const SLOW_INVENTORY_PERIODS = ["30d", "90d"] as const;
+
+const startSlowInventoryPromotion: MinkTool = {
+  declaration: {
+    name: "start_slow_inventory_promotion",
+    description:
+      "Queue a durable private slow-inventory analysis and promotion recommendation only when the user explicitly asks Mink to identify slow-moving stock and prepare or draft a promotion. It accepts 30d or 90d and optionally one exact accessible dashboard location. It compares current positive on-hand, published, inventory-tracked SKU shelves with recognized sales attributed to that same physical location, requires the product to predate the complete lookback window, and returns at most 20 shelf candidates. The recommendation may suggest a conservative discount only when saved cost data supports a five-point gross-margin buffer. It never creates or activates an offer, changes price or inventory, attributes online/unassigned demand to a shelf, selects recipients, or contacts customers. A merchant must separately choose a budget and exact SKU scope in Offers, save the offer disabled, review it, and approve activation separately.",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {
+        period: {
+          type: "string",
+          enum: [...SLOW_INVENTORY_PERIODS],
+          description:
+            "Complete sales lookback used for shelf velocity. Defaults to 30d.",
+          default: "30d",
+        },
+        location_name: {
+          type: "string",
+          description:
+            "Optional exact accessible dashboard location name, such as Shop or Delhi warehouse. Never use or invent a location ID.",
+          minLength: 1,
+          maxLength: 100,
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  permission: { section: "analytics", action: "view" },
+  available: (actor) =>
+    actor.draftingEnabled === true &&
+    can(actor.permissions, "products", "view", actor.isSuperadmin) &&
+    can(actor.permissions, "inventory", "view", actor.isSuperadmin) &&
+    can(actor.permissions, "promotions", "manage", actor.isSuperadmin),
+  timeoutMs: 7_000,
+  artifact(output) {
+    return workflowArtifact(output, {
+      template: "slow_inventory_promotion",
+      title: "Slow-inventory promotion proposal",
+      description:
+        "A private, location-aware slow-stock analysis with a guarded promotion recommendation.",
+    });
+  },
+  async execute(actor, args) {
+    const period = readEnum(
+      args.period,
+      SLOW_INVENTORY_PERIODS,
+      "period",
+      "30d",
+    );
+    const workflow = await enqueueSlowInventoryPromotion(actor, {
+      period,
+      locationName: args.location_name,
+    });
+    return { workflow };
+  },
+};
+
+const startDelayedPickupReview: MinkTool = {
+  declaration: {
+    name: "start_delayed_pickup_review",
+    description:
+      "Queue a durable private review only when the user explicitly asks Mink to review delayed, overdue, unprepared, uncollected or at-risk pickup orders and prepare communication guidance. It optionally accepts one exact accessible dashboard location such as Shop or Delhi warehouse; otherwise it keeps accessible active physical locations separate. It includes only live awaiting/ready pickups whose promised ready time has passed or whose collection deadline is within StoreMink’s existing 48-hour reminder window, returns at most 25 orders, and excludes collected, expired, cancelled and fully refunded orders. It exposes order references and lifecycle timestamps only—never names, email, phone, address or collection codes. It may prepare generic delay copy for human review, but never sends, creates a saved draft, claims/resets a reminder marker, changes an order, deadline or stock, and withholds duplicate collection-reminder copy when StoreMink’s automatic reminder is pending or already recorded.",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {
+        location_name: {
+          type: "string",
+          description:
+            "Optional exact accessible dashboard location name, such as Shop or Delhi warehouse. Never use or invent a location ID.",
+          minLength: 1,
+          maxLength: 100,
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  permission: { section: "orders", action: "manage" },
+  available: (actor) => actor.draftingEnabled === true,
+  timeoutMs: 7_000,
+  artifact(output) {
+    return workflowArtifact(output, {
+      template: "delayed_pickup_review",
+      title: "Delayed pickup review",
+      description:
+        "A private, PII-minimized pickup review with duplicate-safe communication guidance.",
+    });
+  },
+  async execute(actor, args) {
+    const workflow = await enqueueDelayedPickupReview(actor, {
+      locationName: args.location_name,
+    });
+    return { workflow };
+  },
+};
+
+function workflowArtifact(
+  output: Record<string, unknown>,
+  copy: {
+    template: MinkWorkflowTemplate;
+    title: string;
+    description: string;
+  },
+): Extract<MinkArtifact, { type: "workflow" }> {
+  const workflow = (output.workflow ?? {}) as Record<string, unknown>;
+  return {
+    type: "workflow",
+    runId: String(workflow.id ?? ""),
+    template: copy.template,
+    title: copy.title,
+    description: copy.description,
+    status: (workflow.status ?? "queued") as Extract<
+      MinkArtifact,
+      { type: "workflow" }
+    >["status"],
+    currentStep: Number(workflow.currentStep ?? 0),
+    totalSteps: Number(workflow.totalSteps ?? 3),
+  };
+}
+
 function catalogSummaryArtifact(output: Record<string, unknown>): MinkArtifact {
   if (output.requiresClarification === true) {
     const choices = Array.isArray(output.choices)
@@ -870,6 +1090,10 @@ export const minkReadToolRegistry = new MinkToolRegistry([
   getSalesSummary,
   listLowStock,
   startWeeklyTradingReport,
+  startRevenueDeclineInvestigation,
+  startProductLaunchPreparation,
+  startSlowInventoryPromotion,
+  startDelayedPickupReview,
   listOrdersTool,
   currentOrderTool,
   searchHelpCentreTool,

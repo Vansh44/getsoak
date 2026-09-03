@@ -77,12 +77,14 @@ then it would 404 or query an incomplete table.** Also,
 until migration `20260901_0052_mink_phase_5d_blog_publication` and the matching
 route are deployed. Create it with the same CRON_SECRET bearer contract only
 after both application and database verification pass.** Also,
-**`storemink-mink-workflows` is new in Phase 6A and must stay absent/paused
-until migration `20260902_0058_mink_phase_6a_durable_workflows` and the matching
-route are deployed. Create it with the shared CRON_SECRET bearer contract only
-after the three workflow tables, constraints and service-only grants verify. A
-missing heartbeat leaves reports queued safely; it must never be worked around
-by opening the worker to unauthenticated traffic.** Also,
+**`storemink-mink-workflows` was introduced in Phase 6A and must stay
+absent/paused until migration `20260902_0058_mink_phase_6a_durable_workflows`
+and the matching route are deployed. Phase 6B/6C additionally requires
+`20260903_0072_mink_phase_6bc_workflows` before the matching application deploy.
+Create or resume it with the shared CRON_SECRET bearer contract only after the
+workflow tables, template constraint and service-only grants verify. A missing
+heartbeat leaves workflows queued safely; it must never be worked around by
+opening the worker to unauthenticated traffic.** Also,
 **the `storemink-send-emails` change from daily to once per minute belongs to
 Phase 5E. Apply it only after migration
 `20260901_0053_mink_phase_5e_campaigns` and the matching application are live;
