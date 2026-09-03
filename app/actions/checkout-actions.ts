@@ -1221,13 +1221,12 @@ export async function placeOrder(
   // The gift's own entry is therefore a genuine zero, which is true: it was
   // never discounted, it was added.
   //
-  // ⚠ NOT PINNED BY A TEST, and it should be. `makeDbMock` serves reads from a
-  // POSITIONAL `selectQueue`, and the gift's product read does not draw from it
-  // at any position — so a test cannot currently place a gift row for
-  // `placeOrder` to find. Routing the mock by TABLE rather than by call order
-  // would allow one, and is the follow-up. Until then this ordering is held by
-  // this comment and by `placePosSale`, whose identical append sits above its
-  // own `offerDiscounts` for the same reason.
+  // Pinned by "a free gift becomes a real ₹0 line with a REAL zero offer
+  // discount" in `checkout-actions.test.ts`, which fails with
+  // `expected undefined to be +0` if this append moves below the array. It
+  // needed `makeDbMock`'s `selectByTable` to exist: the gift's product read
+  // sits behind a conditional among reads whose count varies with the cart, so
+  // no position in the POSITIONAL `selectQueue` reaches it.
   //
   // ★ PRICED AND NAMED FROM THE DATABASE, never from the offer row. The offer
   // stores ids; what the line says and what it is worth come from the product

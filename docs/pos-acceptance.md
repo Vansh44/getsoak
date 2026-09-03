@@ -3957,13 +3957,6 @@ delivery cost in ways one approval screen cannot show honestly.
 
 Real and deliberate, so nobody files them as bugs:
 
-**A gift line's offer discount is not covered by a test.** `placeOrder` must
-append the gift before `offerDiscounts` is sized, or the gift's entry is
-`undefined` and the order fails to save with only "Failed to save order items"
-to show for it. The ordering is correct in both counters and is guarded by a
-comment; `makeDbMock` serves reads positionally and cannot place a gift row for
-`placeOrder` to find, so exercising PS-OF.34 by hand is the only current check.
-
 | Gap                                                                     | Status                                                                                                                                                                                                                                                                                                                                                                                                         |
 | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **An open register keeps quoting a changed offer until reopened**       | By design: offers arrive with `RegisterConfig` (like tax rates) so the till prices without the network. Reopen the register after editing an offer. PS-OF.5                                                                                                                                                                                                                                                    |

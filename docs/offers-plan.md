@@ -1303,19 +1303,29 @@ tables you expect.** That query returned three; enumerating by hand returned two
 All applied to staging and production, both at 72/72 (71 migrations plus the
 baseline) with matching `schema_sha256`.
 
-### ⚠ One thing built and deliberately left untested
+### ★★ The gift-line ordering, and the mock change it took to test it
 
-`placeOrder` must append the gift to `validItems` **before** `offerDiscounts`
-is sized, or the gift's entry is `undefined` and goes straight into
+`placeOrder` must append the gift to `validItems` **before** `offerDiscounts` is
+sized, or the gift's entry is `undefined` and goes straight into
 `order_items.offer_discount` — a NOT NULL column, and an explicit undefined does
 not fall back to a default. That is the `storeCreditUsed: null` failure
 (CODEBASE §22) exactly, and it would fail every order carrying a gift with
-nothing but "Failed to save order items" to show for it. **I introduced that bug
-and fixed it**; the ordering is now correct in both counters.
+nothing but "Failed to save order items" to show for it.
 
-It is **not pinned by a test**, and it should be. `makeDbMock` serves reads from
-a positional `selectQueue`, and the gift's product read does not draw from it at
-any position — verified across all eight. Routing the mock by TABLE rather than
-by call order would allow the test; until then the ordering is held by a comment
-at the site and by `placePosSale`, whose identical append already sat above its
-own `offerDiscounts`.
+It shipped correct but **unpinned**, because `makeDbMock` served reads from a
+POSITIONAL `selectQueue` — the Nth select gets the Nth entry — and the gift's
+product read sits behind a conditional after the offers resolve, among reads
+whose count varies with the cart. No position reaches it; all eight were tried.
+
+`makeDbMock` now also accepts **`selectByTable`**: a queue per table, drained
+independently of the positional one, so the two reads of `products` are simply
+"the cart, then the gift". A table-matched read consumes no positional entry, so
+the two modes mix; rows are chosen at `.from(table)` rather than at `select()`,
+which is safe because Drizzle always chains the two in one expression. All 101
+existing suites (2,411 tests) pass unchanged.
+
+The regression test asserts `offerDiscount` is strictly `0` — `toBe(0)` passes
+for neither `undefined` nor `null`, which is the whole reason it is asserted
+rather than the price. **Verified by reintroducing the bug**: it fails with
+`expected undefined to be +0`, and passes again once reverted. A test that
+passes without being able to fail would have been worth nothing here.

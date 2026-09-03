@@ -1264,6 +1264,83 @@ describe("placeOrder — offers", () => {
     expect(line.offerDiscount).toBe(30);
   });
 
+  it("★★ a free gift becomes a real ₹0 line with a REAL zero offer discount", async () => {
+    // ★★ THE BUG THIS PINS, which shipped unpinned until `selectByTable`
+    // existed. The gift is appended to `validItems`, and `offerDiscounts` is
+    // `validItems.map(() => 0)`. Size that array BEFORE the append and the
+    // gift's entry is UNDEFINED — and it goes straight into
+    // `order_items.offer_discount`, a NOT NULL column, where an explicit
+    // undefined does NOT fall back to the column default. Every order carrying
+    // a gift would fail on INSERT showing only "Failed to save order items".
+    // That is the `storeCreditUsed: null` failure (CODEBASE.md §22) exactly.
+    //
+    // ★ `selectByTable` IS WHAT MAKES THIS TESTABLE AT ALL. The gift's product
+    // read sits behind a conditional after the offers resolve, among reads
+    // whose count varies with the cart, so no position in `selectQueue`
+    // reaches it — all eight were tried. Keyed by table, the two reads of
+    // `products` are simply "the cart, then the gift".
+    vi.mocked(resolveOffersForCart).mockResolvedValue(
+      offerResult({
+        lines: [{ id: "0", offerDiscount: 0 }],
+        discount: 0,
+        applied: [],
+        allocations: [],
+        gift: {
+          offerId: "offer-gift",
+          offerName: "Free tumbler",
+          code: null,
+          productId: "gift-product",
+          variantId: null,
+          quantity: 1,
+        },
+      }) as any,
+    );
+    dbHolder.current = makeDbMock({
+      selectByTable: {
+        products: [
+          [productRow()],
+          // The gift, read store-scoped after the offers resolve. Snake-case
+          // keys, matching that query's own projection aliases.
+          [
+            {
+              id: "gift-product",
+              name: "Steel tumbler",
+              tax_class_id: null,
+              category_id: null,
+              sku: "SKU-GIFT",
+              hsn_code: null,
+              // False to match `productRow()`, which leaves it unset — every
+              // test in this block uses a cart that needs no courier, so the
+              // shipping quote is stubbed to fail. This test is about the
+              // line's offer discount, not logistics.
+              requires_shipping: false,
+              weight_grams: 100,
+              length_cm: 5,
+              width_cm: 5,
+              height_cm: 10,
+            },
+          ],
+        ],
+      },
+      // Two lines now reserve stock: the paid one and the gift. A gift is
+      // stock leaving the shelf, so it goes through the same RPC.
+      executeQueue: [[{ reserved: true }], [{ reserved: true }]],
+      returning: [{ id: "order-1", order_ref: "ORD1" }],
+    });
+
+    const result = await placeOrder(validForm, [oneItem()]);
+    expect("success" in result && result.success).toBe(true);
+
+    const rows = dbHolder.current.calls.values[1] as any[];
+    const gift = rows.find((r) => r.productId === "gift-product");
+    expect(gift).toBeDefined();
+    expect(gift.price).toBe(0);
+    expect(gift.total).toBe(0);
+    // ★ A REAL ZERO. `toBe(0)` passes for neither undefined nor null, which is
+    // the entire reason this is asserted rather than the price.
+    expect(gift.offerDiscount).toBe(0);
+  });
+
   it("★ never runs both discount systems for one order", async () => {
     vi.mocked(resolveOffersForCart).mockResolvedValue(offerResult() as any);
     dbHolder.current = makeDbMock({

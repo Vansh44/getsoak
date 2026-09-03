@@ -564,7 +564,23 @@ wholesip/
 │   │   │                      # upsertAddress (profile add/edit), setDefaultAddress,
 │   │   │                      # deleteAddress. Prefills checkout + /profile address book.
 │   │   ├── platform.ts        # Platform-admin actions
-│   │   └── _test-helpers.ts   # Shared mocks for action tests (co-located *.test.ts)
+│   │   └── _test-helpers.ts   # Shared mocks for action tests (co-located *.test.ts).
+│   │                          # ★ `makeDbMock` serves selects TWO ways:
+│   │                          # `selectQueue` is POSITIONAL (Nth select → Nth
+│   │                          # entry) and `selectByTable` is a queue PER TABLE
+│   │                          # (Nth read of that table → its Nth entry),
+│   │                          # drained independently so the two can be mixed.
+│   │                          # ★★ The table mode exists because a positional
+│   │                          # queue cannot reach a read you cannot COUNT — one
+│   │                          # behind a conditional, among reads whose number
+│   │                          # varies with the input. `placeOrder`'s gift-product
+│   │                          # read is the case that forced it: no position
+│   │                          # reached it, so a real bug (§38's gift line taking
+│   │                          # `undefined` into a NOT NULL column) shipped
+│   │                          # unpinned. Rows are chosen at `.from(table)`, not
+│   │                          # at `select()`, which is safe only because Drizzle
+│   │                          # always chains the two in one expression — check
+│   │                          # that still holds before deferring anything else.
 │   │
 │   └── api/
 │       ├── mink/stream/      # ★ Internal bounded Mink agent SSE boundary.
