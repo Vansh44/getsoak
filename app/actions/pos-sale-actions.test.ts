@@ -67,6 +67,37 @@ vi.mock("@/lib/offers/cart", () => ({
     },
   })),
   loadExhaustedOfferIds: vi.fn(async () => []),
+  // ★ NOT MOCKED — a pure function that decides WHICH offers claim their caps.
+  // Stubbing it would let the reserve/record wiring regress invisibly, which is
+  // exactly how gift and cashback offers came to bypass every cap.
+  bonusOffersToReserve: (
+    result: { gift?: unknown; credit?: unknown } | null,
+    giftValuePaise = 0,
+  ) => {
+    const out: unknown[] = [];
+    const r = result as any;
+    if (r?.gift) {
+      out.push({
+        offerId: r.gift.offerId,
+        offerName: r.gift.offerName,
+        code: r.gift.code ?? null,
+        rewardType: "free_item",
+        level: "gift",
+        amount: Math.max(0, Math.trunc(giftValuePaise)) / 100,
+      });
+    }
+    if (r?.credit && r.credit.amount > 0) {
+      out.push({
+        offerId: r.credit.offerId,
+        offerName: r.credit.offerName,
+        code: r.credit.code ?? null,
+        rewardType: "credit_back",
+        level: "credit",
+        amount: r.credit.amount,
+      });
+    }
+    return out;
+  },
 }));
 vi.mock("@/lib/db/client", () => ({
   withService: vi.fn((fn: any) => Promise.resolve(fn(dbHolder.current.db))),

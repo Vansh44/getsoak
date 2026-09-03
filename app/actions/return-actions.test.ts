@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { makeDbMock, sqlParamValues, sqlText } from "./_test-helpers";
+import { refundBreakdown } from "@/lib/pos/returns";
 import { resolveStoreSettings } from "@/lib/settings/registry";
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
@@ -58,6 +59,7 @@ import {
 } from "@/lib/inventory/reservations";
 import {
   cancelMyReturn,
+  getReturnableOrder,
   requestReturn,
   reviewReturn,
   receiveReturn,
@@ -953,5 +955,157 @@ describe("★ return photos must be files this platform stored", () => {
       "https://storage.googleapis.com/whatever/x.jpg",
     ]);
     expect(kept).toHaveLength(1);
+  });
+});
+
+// ★★ THE SHOPPER'S ESTIMATE IS COMPUTED, NOT APPROXIMATED.
+//
+// The form summed `unitPrice × qty`, which ignores every discount — coupons
+// included, so this predated offers. A customer was quoted the full LIST value
+// of the goods they were sending back and refunded the DISCOUNTED value, and
+// the gap became a support ticket. It also over-valued an exchange, so a swap
+// `requestReturn` would refuse could be presented on screen as allowed.
+//
+// The view now carries what `refundBreakdown` needs, and the form calls the
+// same function `requestReturn` settles with.
+describe("★★ getReturnableOrder gives the form what the SERVER prices with", () => {
+  it("★ exposes each line's billed total, tax and offer share", async () => {
+    seedOrder({
+      orderOver: { discount: 40 },
+      itemOver: { total: 200, tax_amount: 10, offer_discount: 40 },
+    });
+    const { view } = await getReturnableOrder("o1");
+    expect(view?.lines[0]).toMatchObject({
+      lineTotal: 200,
+      taxAmount: 10,
+      offerDiscount: 40,
+    });
+  });
+
+  it("★★ recovers the order-level REMAINDER, exactly as priceReturn does", async () => {
+    // `orders.discount` is line markdowns + offer shares + the remainder. A
+    // ₹40 discount that sits entirely on the line leaves nothing order-level;
+    // reporting the raw 40 would re-allocate an offer's share a second time.
+    seedOrder({
+      orderOver: { discount: 40 },
+      itemOver: { total: 200, tax_amount: 10, offer_discount: 40 },
+    });
+    expect((await getReturnableOrder("o1")).view?.orderDiscount).toBe(0);
+  });
+
+  it("★ a genuine order-level discount still survives to the form", async () => {
+    // A ₹30 coupon with no per-line offer IS order-level, and must reach the
+    // estimate or the shopper is quoted more than they will be paid.
+    seedOrder({
+      orderOver: { discount: 30 },
+      itemOver: { total: 200, tax_amount: 10, offer_discount: 0 },
+    });
+    expect((await getReturnableOrder("o1")).view?.orderDiscount).toBe(30);
+  });
+
+  it("★ never reports a negative remainder", async () => {
+    // Legacy rows can disagree; the floor keeps a bad row from inflating the
+    // estimate instead of shrinking it.
+    seedOrder({
+      orderOver: { discount: 10 },
+      itemOver: { total: 200, tax_amount: 10, offer_discount: 40 },
+    });
+    expect((await getReturnableOrder("o1")).view?.orderDiscount).toBe(0);
+  });
+});
+
+// ★★ THE ESTIMATE AND THE SETTLEMENT ARE ONE NUMBER, NOT TWO.
+//
+// This is the assertion the whole change exists for. The form used to sum
+// `unitPrice × qty` while `requestReturn` settled with `refundBreakdown`, so a
+// discounted order was quoted one figure and paid another. Both ends now feed
+// the same function the same data, and this drives BOTH to prove it — the
+// class of bug (two ends of one object disagreeing about money) that
+// `lib/pos/totals.ts` and the exchange-total fix were each written to end.
+describe("★★ the shopper is quoted what the server will actually pay", () => {
+  /** The form's own arithmetic, from exactly what `getReturnableOrder` ships. */
+  function estimateFromView(
+    view: NonNullable<Awaited<ReturnType<typeof getReturnableOrder>>["view"]>,
+    picks: Record<string, number>,
+  ) {
+    return refundBreakdown({
+      lines: view.lines.map((l) => ({
+        id: l.orderItemId,
+        quantity: l.quantity,
+        lineTotal: l.lineTotal,
+        taxAmount: l.taxAmount,
+        offerDiscount: l.offerDiscount,
+        alreadyReturned: l.returned,
+      })),
+      orderDiscount: view.orderDiscount,
+      request: Object.entries(picks).map(([id, quantity]) => ({
+        id,
+        quantity,
+      })),
+    });
+  }
+
+  it("★★ agrees on an order carrying a scoped offer", async () => {
+    // ₹200 of goods with ₹40 of offer on the line: the store owes ₹160 + ₹10
+    // tax. The old form quoted the full ₹200 — ₹40 more than it would pay.
+    const seed = {
+      orderOver: { discount: 40 },
+      itemOver: { total: 200, tax_amount: 10, offer_discount: 40 },
+    };
+    seedOrder(seed);
+    const { view } = await getReturnableOrder("o1");
+    const estimate = estimateFromView(view!, { "li-a": 2 });
+    expect(estimate.amount).toBe(160);
+
+    seedOrder(seed);
+    const res = await requestReturn({
+      orderId: "o1",
+      lines: [{ orderItemId: "li-a", quantity: 2 }],
+      reasonCode: "damaged",
+    });
+    // Goods 160 + tax 10, no fees on a merchant-fault reason.
+    expect(res.refundAmount).toBe(estimate.total);
+    expect(res.refundAmount).toBe(170);
+  });
+
+  it("★★ agrees on an ordinary COUPON order, which predates offers", async () => {
+    // The bug was never offer-specific: a ₹30 coupon was ignored just the same,
+    // so this held for every discounted order the store had ever taken.
+    const seed = {
+      orderOver: { discount: 30 },
+      itemOver: { total: 200, tax_amount: 10, offer_discount: 0 },
+    };
+    seedOrder(seed);
+    const { view } = await getReturnableOrder("o1");
+    const estimate = estimateFromView(view!, { "li-a": 2 });
+    expect(estimate.amount).toBe(170);
+
+    seedOrder(seed);
+    const res = await requestReturn({
+      orderId: "o1",
+      lines: [{ orderItemId: "li-a", quantity: 2 }],
+      reasonCode: "damaged",
+    });
+    expect(res.refundAmount).toBe(estimate.total);
+  });
+
+  it("★ and on a partial return of a discounted line", async () => {
+    // One of two units: half the goods, half the tax, half the discount.
+    const seed = {
+      orderOver: { discount: 40 },
+      itemOver: { total: 200, tax_amount: 10, offer_discount: 40 },
+    };
+    seedOrder(seed);
+    const { view } = await getReturnableOrder("o1");
+    const estimate = estimateFromView(view!, { "li-a": 1 });
+    expect(estimate.amount).toBe(80);
+
+    seedOrder(seed);
+    const res = await requestReturn({
+      orderId: "o1",
+      lines: [{ orderItemId: "li-a", quantity: 1 }],
+      reasonCode: "damaged",
+    });
+    expect(res.refundAmount).toBe(estimate.total);
   });
 });

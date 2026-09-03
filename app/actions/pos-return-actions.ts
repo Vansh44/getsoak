@@ -100,6 +100,9 @@ export interface ReturnableSaleLine {
   unitPrice: number;
   lineTotal: number;
   taxAmount: number;
+  /** This line's own share of an offer, as allocated at sale time. Subtracted
+   *  from the line, never spread — see `lib/pos/returns.ts`. */
+  offerDiscount: number;
   eligible: boolean;
   blockedCopy: string | null;
   returnUntil: string | null;
@@ -111,8 +114,9 @@ export interface ReturnableSale {
   orderRef: string;
   createdAt: string;
   total: number;
-  /** The order-level discount only — line markdowns are already inside each
-   *  line's total (see lib/pos/returns.ts). */
+  /** The order-level REMAINDER only — line markdowns are already inside each
+   *  line's total, and each line's offer share rides on the line itself
+   *  (see lib/pos/returns.ts). */
   orderDiscount: number;
   paymentMethod: string;
   lines: ReturnableSaleLine[];
@@ -449,6 +453,7 @@ export async function getReturnableSale(
           price: orderItems.price,
           total: orderItems.total,
           line_discount: orderItems.lineDiscount,
+          offer_discount: orderItems.offerDiscount,
           tax_amount: orderItems.taxAmount,
           product_returnable: products.returnable,
           product_window: products.returnWindowDays,
@@ -500,16 +505,22 @@ export async function getReturnableSale(
       priorRows.map((p) => [p.order_item_id, Number(p.qty) || 0]),
     );
 
-    // orders.discount holds line markdowns AND the order-level discount; the
-    // markdowns are already inside each line's total, so only the remainder is
-    // the order-level part to re-allocate.
+    // ★★ `orders.discount` HOLDS THREE THINGS: the line markdowns (already
+    // inside each line's total), each line's `offer_discount`, and the
+    // order-level remainder. Only the remainder may be re-allocated — an
+    // offer's share belongs to the line that received it, so spreading it
+    // refunds one line money it never paid and short-changes another.
     const lineDiscounts = items.reduce(
       (a, i) => a + (Number(i.line_discount) || 0),
       0,
     );
+    const offerDiscounts = items.reduce(
+      (a, i) => a + (Number(i.offer_discount) || 0),
+      0,
+    );
     const orderDiscount = Math.max(
       0,
-      (Number(order.discount) || 0) - lineDiscounts,
+      (Number(order.discount) || 0) - lineDiscounts - offerDiscounts,
     );
 
     // ── May this counter take it? ────────────────────────────────────────
@@ -617,6 +628,7 @@ export async function getReturnableSale(
             unitPrice: Number(i.price) || 0,
             lineTotal: Number(i.total) || 0,
             taxAmount: Number(i.tax_amount) || 0,
+            offerDiscount: Number(i.offer_discount) || 0,
             eligible: eligibility.eligible,
             blockedCopy: eligibility.reason
               ? RETURN_BLOCKED_COPY[eligibility.reason]
@@ -870,6 +882,7 @@ export async function processReturn(
           quantity: orderItems.quantity,
           total: orderItems.total,
           line_discount: orderItems.lineDiscount,
+          offer_discount: orderItems.offerDiscount,
           tax_amount: orderItems.taxAmount,
         })
         .from(orderItems)
@@ -908,11 +921,18 @@ export async function processReturn(
         (a, i) => a + (Number(i.line_discount) || 0),
         0,
       );
+      // An offer's share is subtracted from its OWN line below, so it must
+      // come out of the order-level remainder here or it is counted twice.
+      const offerDiscounts = items.reduce(
+        (a, i) => a + (Number(i.offer_discount) || 0),
+        0,
+      );
       const returnable: ReturnableLine[] = items.map((i) => ({
         id: i.id,
         quantity: Number(i.quantity) || 0,
         lineTotal: Number(i.total) || 0,
         taxAmount: Number(i.tax_amount) || 0,
+        offerDiscount: Number(i.offer_discount) || 0,
         alreadyReturned: returnedBy.get(i.id) ?? 0,
       }));
 
@@ -920,7 +940,7 @@ export async function processReturn(
         lines: returnable,
         orderDiscount: Math.max(
           0,
-          (Number(locked[0]!.discount) || 0) - lineDiscounts,
+          (Number(locked[0]!.discount) || 0) - lineDiscounts - offerDiscounts,
         ),
         request: lines.map((l) => ({
           id: l.orderItemId,

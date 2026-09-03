@@ -56,6 +56,7 @@ export function useCartOffers(
         productId: string;
         variantId: string | null;
         categoryId: string | null;
+        regularUnitPrice?: number;
       }[]
     | null,
   /**
@@ -104,6 +105,24 @@ export function useCartOffers(
     return map;
   }, [rates]);
 
+  /**
+   * What each line is on sale FROM, from the same server read as the category.
+   *
+   * ★★ THE CART USED TO OMIT THIS, so every line read as not-on-sale while
+   * `placeOrder` passed the variant's `selling_price`. Under
+   * `offers.onSalePrice = "skip"` the cart therefore showed a discount the
+   * charge refused and the total ROSE at the last step; under `best` it
+   * overstated the saving. The preview and the charge must be given the same
+   * pair or they cannot agree.
+   */
+  const regularByLine = useMemo(() => {
+    const map = new Map<string, number | null>();
+    for (const r of rates ?? []) {
+      map.set(lineKey(r.productId, r.variantId), r.regularUnitPrice ?? null);
+    }
+    return map;
+  }, [rates]);
+
   return useMemo(() => {
     if (!bundle || items.length === 0) return null;
     const result = applyOffers({
@@ -115,6 +134,8 @@ export function useCartOffers(
           categoryByLine.get(lineKey(i.productId, i.variantId ?? null)) ?? null,
         quantity: i.quantity,
         unitPrice: i.price,
+        regularUnitPrice:
+          regularByLine.get(lineKey(i.productId, i.variantId ?? null)) ?? null,
       })),
       offers: bundle.offers,
       context: {
@@ -147,6 +168,7 @@ export function useCartOffers(
     bundle,
     items,
     categoryByLine,
+    regularByLine,
     selections?.paymentMethod,
     selections?.fulfilmentType,
   ]);

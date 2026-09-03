@@ -6,6 +6,7 @@ import {
   getSettingDef,
   normalizePlan,
   planAllows,
+  resolveRawNumberSetting,
   resolveStoreSettings,
 } from "./registry";
 import { getSection } from "@/app/dashboard/lib/permissions";
@@ -117,5 +118,41 @@ describe("settings registry", () => {
         "pages.customCode": true,
       });
     });
+  });
+});
+
+// ★★ A REAL 0 IS NOT AN ABSENT VALUE.
+//
+// `offers.maxTotalDiscountPercent` is declared `min: 0` and documented as "set
+// to 0 to stop offers discounting anything", so 0 is a deliberate choice. Two
+// Mink readers gated on `value > 0`, which reads that choice as unset and
+// substitutes the permissive 50% default — the merchant who locked it down
+// hardest silently got the loosest behaviour. Same trap as
+// `pos.maxDiscountPercent` (§22) and `products.return_window_days` (§28).
+describe("resolveRawNumberSetting", () => {
+  const KEY = "offers.maxTotalDiscountPercent" as const;
+
+  it("★★ keeps a deliberate zero", () => {
+    expect(resolveRawNumberSetting(KEY, 0)).toBe(0);
+  });
+
+  it("keeps an ordinary configured value", () => {
+    expect(resolveRawNumberSetting(KEY, 15)).toBe(15);
+  });
+
+  it("falls back to the registry default when nothing is stored", () => {
+    const fallback = getSettingDef(KEY)?.defaultValue;
+    expect(resolveRawNumberSetting(KEY, undefined)).toBe(fallback);
+    expect(resolveRawNumberSetting(KEY, null)).toBe(fallback);
+    // A wrong-typed jsonb value is not a configured value either.
+    expect(resolveRawNumberSetting(KEY, "20")).toBe(fallback);
+    expect(resolveRawNumberSetting(KEY, NaN)).toBe(fallback);
+  });
+
+  it("★ clamps to the setting's OWN bounds rather than a hardcoded pair", () => {
+    // The bounds were copied to each call site, so getting one wrong was a
+    // local edit nobody else could see.
+    expect(resolveRawNumberSetting(KEY, -5)).toBe(0);
+    expect(resolveRawNumberSetting(KEY, 250)).toBe(100);
   });
 });

@@ -26,6 +26,10 @@ vi.mock("@/lib/credit/store-credit", () => ({
   getCreditBalance: vi.fn(async () => 0),
   spendCredit: vi.fn(async () => true),
   reinstateCreditForOrder: vi.fn(async () => 0),
+  // ★ Cashback. Absent until the offer caps were fixed, which is itself the
+  // tell: nothing exercised the `credit_back` path, so an unmocked
+  // `issueCredit` was never reached and its offer's caps were never claimed.
+  issueCredit: vi.fn(async () => ({ ok: true })),
 }));
 vi.mock("./coupon-actions", () => ({ validateCoupon: vi.fn() }));
 // The fan-out is fire-and-forget, so stubbing it changes nothing about the
@@ -91,6 +95,37 @@ vi.mock("@/lib/offers/cart", () => ({
   reserveOfferUses: vi.fn(async () => ({ ok: true, reserved: [] })),
   releaseOfferUses: vi.fn(async () => {}),
   recordOfferRedemptions: vi.fn(async () => {}),
+  // ★ NOT MOCKED — a pure function that decides WHICH offers claim their caps.
+  // Stubbing it would let the reserve/record wiring regress invisibly, which is
+  // exactly how gift and cashback offers came to bypass every cap.
+  bonusOffersToReserve: (
+    result: { gift?: unknown; credit?: unknown } | null,
+    giftValuePaise = 0,
+  ) => {
+    const out: unknown[] = [];
+    const r = result as any;
+    if (r?.gift) {
+      out.push({
+        offerId: r.gift.offerId,
+        offerName: r.gift.offerName,
+        code: r.gift.code ?? null,
+        rewardType: "free_item",
+        level: "gift",
+        amount: Math.max(0, Math.trunc(giftValuePaise)) / 100,
+      });
+    }
+    if (r?.credit && r.credit.amount > 0) {
+      out.push({
+        offerId: r.credit.offerId,
+        offerName: r.credit.offerName,
+        code: r.credit.code ?? null,
+        rewardType: "credit_back",
+        level: "credit",
+        amount: r.credit.amount,
+      });
+    }
+    return out;
+  },
 }));
 
 import {
@@ -1341,6 +1376,176 @@ describe("placeOrder — offers", () => {
     expect(gift.offerDiscount).toBe(0);
   });
 
+  // ★★ A GIFT AND A CASHBACK OFFER MUST CLAIM THEIR CAPS TOO.
+  //
+  // `applied` is built from the per-line merchandise allocation, so a
+  // `free_item` or `credit_back` reward — which allocates nothing to a line —
+  // was never in it, and both counters only ever reserved `applied`. Every cap
+  // was decorative: "free tumbler, limited to 100" gave away unlimited
+  // tumblers, and "₹100 cashback, budget ₹5,000" issued unbounded store credit,
+  // which is a liability rather than a discount. No `offer_redemptions` row was
+  // written either, so `max_per_customer` could not bind even in principle.
+  describe("★★ the bonus axes claim their caps", () => {
+    const GIFT = {
+      offerId: "offer-gift",
+      offerName: "Free tumbler",
+      code: null,
+      productId: "gift-product",
+      variantId: null,
+      quantity: 1,
+    };
+
+    function seedGiftCart(giftSellingPrice = 250) {
+      dbHolder.current = makeDbMock({
+        selectByTable: {
+          products: [
+            [productRow()],
+            [
+              {
+                id: "gift-product",
+                name: "Steel tumbler",
+                selling_price: giftSellingPrice,
+                tax_class_id: null,
+                category_id: null,
+                sku: "SKU-GIFT",
+                hsn_code: null,
+                requires_shipping: false,
+                weight_grams: 100,
+                length_cm: 5,
+                width_cm: 5,
+                height_cm: 10,
+              },
+            ],
+          ],
+        },
+        executeQueue: [[{ reserved: true }], [{ reserved: true }]],
+        returning: [{ id: "order-1", order_ref: "ORD1" }],
+      });
+    }
+
+    /** Every offer id handed to `reserveOfferUses`, across all its calls. */
+    const reservedIds = () =>
+      vi
+        .mocked(reserveOfferUses)
+        .mock.calls.flatMap(([, applied]) =>
+          applied.map((a: any) => a.offerId),
+        );
+
+    it("★ reserves the gift, priced at what the shopper would have paid", async () => {
+      vi.mocked(resolveOffersForCart).mockResolvedValue(
+        offerResult({
+          lines: [{ id: "0", offerDiscount: 0 }],
+          discount: 0,
+          applied: [],
+          allocations: [],
+          gift: GIFT,
+        }) as any,
+      );
+      seedGiftCart(250);
+      expect("success" in (await placeOrder(validForm, [oneItem()]))).toBe(
+        true,
+      );
+
+      expect(reservedIds()).toContain("offer-gift");
+      // ★ The budget is charged the gift's RETAIL value — the same rule the
+      // shipping waiver's `offerWaivedAmount` follows: what the shopper would
+      // otherwise have paid. Reserving it at 0 would leave a budgeted gift
+      // offer running unbounded.
+      const giftClaim = vi
+        .mocked(reserveOfferUses)
+        .mock.calls.flatMap(([, applied]) => applied)
+        .find((a: any) => a.offerId === "offer-gift") as any;
+      expect(giftClaim.amount).toBe(250);
+      expect(giftClaim.level).toBe("gift");
+    });
+
+    it("★ reserves cashback at exactly the credit it will issue", async () => {
+      vi.mocked(resolveOffersForCart).mockResolvedValue(
+        offerResult({
+          lines: [{ id: "0", offerDiscount: 0 }],
+          discount: 0,
+          applied: [],
+          allocations: [],
+          credit: {
+            offerId: "offer-cash",
+            offerName: "₹100 back",
+            code: null,
+            amount: 100,
+          },
+        }) as any,
+      );
+      dbHolder.current = makeDbMock({
+        selectQueue: [[productRow()], [], []],
+        executeQueue: [[{ reserved: true }]],
+        returning: [{ id: "order-1", order_ref: "ORD1" }],
+      });
+      await placeOrder(validForm, [oneItem()]);
+
+      const claim = vi
+        .mocked(reserveOfferUses)
+        .mock.calls.flatMap(([, applied]) => applied)
+        .find((a: any) => a.offerId === "offer-cash") as any;
+      // Cashback's cost to the merchant IS the credit issued, so a budget cap
+      // on it binds exactly.
+      expect(claim.amount).toBe(100);
+    });
+
+    it("★★ records what it reserved, so max_per_customer can bind", async () => {
+      // `max_per_customer` is counted from `offer_redemptions`. A reward that
+      // moved `redemption_count` without writing a row left that cap unable to
+      // bind at all, however the merchant configured it.
+      vi.mocked(resolveOffersForCart).mockResolvedValue(
+        offerResult({
+          lines: [{ id: "0", offerDiscount: 0 }],
+          discount: 0,
+          applied: [],
+          allocations: [],
+          gift: GIFT,
+        }) as any,
+      );
+      seedGiftCart();
+      await placeOrder(validForm, [oneItem()]);
+
+      const recorded = vi.mocked(recordOfferRedemptions).mock.calls[0]?.[0];
+      expect(recorded?.redeemed.map((r: any) => r.offerId)).toContain(
+        "offer-gift",
+      );
+    });
+
+    it("★★ a gift cap DROPS the gift; it never refuses the sale", async () => {
+      // These caps are MEANT to be reached — "a tumbler with the first 100
+      // orders" hits its limit on order 101 by design. Failing the sale there
+      // would stop the shop selling anything at all until somebody noticed,
+      // which is far worse than the bug the reservation exists to fix. It is
+      // the rule the gift block already follows for a vanished product.
+      vi.mocked(resolveOffersForCart).mockResolvedValue(
+        offerResult({
+          lines: [{ id: "0", offerDiscount: 0 }],
+          discount: 0,
+          applied: [],
+          allocations: [],
+          gift: GIFT,
+        }) as any,
+      );
+      vi.mocked(reserveOfferUses).mockResolvedValue({
+        ok: false,
+        error: "“Free tumbler” has just reached its limit.",
+        reserved: [],
+      } as any);
+      seedGiftCart();
+
+      const result = await placeOrder(validForm, [oneItem()]);
+      expect("success" in result && result.success).toBe(true);
+
+      // And the tumbler is not handed over: the ₹0 line is gone from the order.
+      const rows = dbHolder.current.calls.values[1] as any[];
+      expect(rows.some((r) => r.productId === "gift-product")).toBe(false);
+      // The remaining line keeps its own offer discount — removing the gift
+      // must not shift `offerDiscounts` out of step with its lines.
+      expect(rows.every((r) => typeof r.offerDiscount === "number")).toBe(true);
+    });
+  });
+
   it("★ never runs both discount systems for one order", async () => {
     vi.mocked(resolveOffersForCart).mockResolvedValue(offerResult() as any);
     dbHolder.current = makeDbMock({
@@ -1587,6 +1792,42 @@ describe("getCartTaxRates", () => {
     const res = await getCartTaxRates([{ productId: "p1", variantId: "v1" }]);
 
     expect(res.lines[0]).toMatchObject({ price: 500, rate: 18 });
+  });
+
+  // ★★ THE CART MUST BE TOLD WHAT A LINE IS ON SALE FROM.
+  //
+  // The offer engine reads `regularUnitPrice` absent-or-equal as "not on sale".
+  // The cart passed nothing, so every line looked full-price while `placeOrder`
+  // passed the variant's `selling_price` — and the two then disagreed. Under
+  // `offers.onSalePrice = "skip"` the cart showed a discount the charge
+  // declined and the total ROSE at the last step; under `best` it overstated
+  // the saving. `CartItem.price` is the sale price captured at add time and
+  // nothing in the cart records what it was reduced from, so like `categoryId`
+  // this can only come from the server.
+  it("★★ reports the price a line is ON SALE FROM, not just what it costs", async () => {
+    dbHolder.current = makeDbMock({ selectQueue: queue(450) });
+
+    const res = await getCartTaxRates([{ productId: "p1", variantId: "v1" }]);
+
+    expect(res.lines[0]).toMatchObject({
+      price: 450,
+      // The non-sale price the engine measures `onSalePrice` against.
+      regularUnitPrice: 500,
+    });
+  });
+
+  it("★ an un-discounted line reports the two as EQUAL, which reads as no sale", async () => {
+    dbHolder.current = makeDbMock({ selectQueue: queue(null) });
+
+    const res = await getCartTaxRates([{ productId: "p1", variantId: "v1" }]);
+
+    // `priceLines` treats `regularUnitPrice <= unitPrice` as not-on-sale, so
+    // equality is how an ordinary line must arrive. A higher value here would
+    // wrongly mark every line on sale and make `skip` decline the whole cart.
+    expect(res.lines[0]).toMatchObject({
+      price: 500,
+      regularUnitPrice: 500,
+    });
   });
 
   it("falls back to the product price for a variant-less line", async () => {

@@ -107,6 +107,32 @@ describe("Mink workflow API", () => {
     );
   });
 
+  // ★★ A WRONG-TYPED VALUE IS NOT A VALID ACTION.
+  //
+  // `readAction` validated with `String(row.action)` and then returned
+  // `row.action` unconverted, so `["cancel"]` stringified to `"cancel"` and
+  // passed — and the dispatcher's `action === "cancel"` was FALSE, because an
+  // array is not a string, so the request fell through to RESUME. A body whose
+  // only stated intent was to cancel resumed the run instead, subverting the
+  // rule that a cancelled run can never come back. The strict-key check catches
+  // an extra key; it cannot catch a wrong type.
+  it("★★ refuses an array that merely stringifies to an action", async () => {
+    const arrayed = await POST(request({ action: ["cancel"] }), PARAMS);
+    expect(arrayed.status).toBe(400);
+    // And critically: neither branch ran. The old code called the WRONG one.
+    expect(holder.cancelWorkflow).not.toHaveBeenCalled();
+    expect(holder.resumeWorkflow).not.toHaveBeenCalled();
+  });
+
+  it("★ refuses other shapes that stringify to an action", async () => {
+    for (const value of [["resume"], { toString: () => "cancel" }, 123, null]) {
+      const res = await POST(request({ action: value }), PARAMS);
+      expect(res.status).toBe(400);
+    }
+    expect(holder.cancelWorkflow).not.toHaveBeenCalled();
+    expect(holder.resumeWorkflow).not.toHaveBeenCalled();
+  });
+
   it("fails closed when Analytics View was removed", async () => {
     holder.actor.mockResolvedValue({
       storeId: "store-1",

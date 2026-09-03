@@ -2,6 +2,9 @@ import { describe, it, expect } from "vitest";
 import {
   decodeConditions,
   decodeReward,
+  decodeTrigger,
+  isContentsTrigger,
+  OFFER_TRIGGERS,
   validateOfferConditions,
   validateOfferRule,
   rewardLevel,
@@ -378,5 +381,54 @@ describe("offer conditions — validation", () => {
         { type: "time_window", days: [1], startMinute: 600, endMinute: 600 },
       ]).length,
     ).toBeGreaterThan(0);
+  });
+});
+
+describe("decodeTrigger — the vocabulary that silently lost two members", () => {
+  /**
+   * ★★ THE REGRESSION THIS PINS. `loadLiveOffers` wrote the trigger by hand as
+   * `type === "min_subtotal" ? "min_subtotal" : "always"`. That was true while
+   * there were two trigger types and silently WRONG once Phase B added
+   * `contains_product`/`contains_category`: both collapsed to `always`, so
+   * `isContentsTrigger` was false, `disqualify` never ran the contents check,
+   * and "10% off your order when it includes a shake" discounted EVERY order.
+   *
+   * Nothing failed anywhere — the editor round-tripped it, the DB stored it,
+   * the summary sentence described it. The only symptom was money leaving.
+   * Two lines from `decodeReward`, which exists for exactly this reason.
+   */
+  it.each(OFFER_TRIGGERS)("keeps %s intact", (type) => {
+    expect(decodeTrigger(type, {}).type).toBe(type);
+  });
+
+  it("a contents trigger survives as a CONTENTS trigger", () => {
+    // The single assertion that would have caught it: the collapsed value was
+    // a legal `OfferTriggerType`, so only `isContentsTrigger` tells them apart.
+    expect(isContentsTrigger(decodeTrigger("contains_category", {}).type)).toBe(
+      true,
+    );
+    expect(isContentsTrigger(decodeTrigger("contains_product", {}).type)).toBe(
+      true,
+    );
+    expect(isContentsTrigger(decodeTrigger("min_subtotal", {}).type)).toBe(
+      false,
+    );
+  });
+
+  it("carries the threshold, and treats a missing one as absent", () => {
+    expect(decodeTrigger("min_subtotal", { minSubtotal: 1500 })).toEqual({
+      type: "min_subtotal",
+      minSubtotal: 1500,
+    });
+    expect(decodeTrigger("min_subtotal", {}).minSubtotal).toBeUndefined();
+    expect(
+      decodeTrigger("min_subtotal", { minSubtotal: "x" }).minSubtotal,
+    ).toBeUndefined();
+  });
+
+  it("falls back to the WIDEST trigger on an unknown stored value", () => {
+    // `always` can only make an offer easier to qualify for. Falling back to a
+    // narrower one would silently withdraw an offer the merchant configured.
+    expect(decodeTrigger("something_new", {}).type).toBe("always");
   });
 });

@@ -50,7 +50,6 @@ import {
   storeAllowsPlanFeature,
 } from "@/lib/plans/entitlements";
 import {
-  isPercentReward,
   normalizeOfferCode,
   rewardLevel,
   validateOfferRule,
@@ -60,6 +59,7 @@ import {
   type OfferStatus,
   type OfferTriggerType,
   decodeReward,
+  decodeTrigger,
   decodeConditions,
   validateOfferConditions,
   sortedTiers,
@@ -233,35 +233,13 @@ function validateForm(form: OfferFormData): string | null {
   );
   if (conditionIssues.length > 0) return conditionIssues[0].message;
 
+  // ★ VALIDATED OVER WHAT WILL BE STORED, through the same builders and the
+  // same decoder the engine reads with. The previous version assembled a second
+  // reward object here and omitted every gift, bundle and cashback field, so
+  // those three reward types could never be saved — see `rewardConfigFor`.
   const issues = validateOfferRule(
-    {
-      type: form.triggerType,
-      minSubtotal:
-        form.triggerType === "min_subtotal" ? form.minSubtotal : undefined,
-    },
-    {
-      type: form.rewardType,
-      tierMode: form.tierMode,
-      tiers: form.tiers ?? [],
-      breaks: form.breaks ?? [],
-      percent: isPercentReward(form.rewardType)
-        ? Number(form.percent)
-        : undefined,
-      amount:
-        form.rewardType === "amount_off" ? Number(form.amount) : undefined,
-      unitPrice:
-        form.rewardType === "fixed_price" ? Number(form.unitPrice) : undefined,
-      ...(form.rewardType === "buy_x_get_y"
-        ? {
-            buyQuantity: Number(form.buyQuantity),
-            getQuantity: Number(form.getQuantity),
-            getPercent: Number(form.getPercent) || 100,
-            // 0 in the form means "no limit", which is absent in the config —
-            // the same rule the usage caps follow.
-            maxSets: form.maxSets > 0 ? Number(form.maxSets) : undefined,
-          }
-        : {}),
-    },
+    decodeTrigger(form.triggerType, triggerConfigFor(form)),
+    decodeReward(form.rewardType, rewardConfigFor(form)),
     hasScope,
   );
   if (issues.length > 0) return issues[0].message;
@@ -297,6 +275,82 @@ function validateForm(form: OfferFormData): string | null {
   return null;
 }
 
+/**
+ * The exact `offers.trigger_config` / `offers.reward_config` this form will be
+ * STORED as.
+ *
+ * ★★ EXTRACTED SO VALIDATION AND PERSISTENCE CANNOT DISAGREE. `validateForm`
+ * used to hand `validateOfferRule` a reward object it assembled separately,
+ * field by field — and it never listed `giftProductId`, `giftQuantity`,
+ * `bundleQuantity`, `bundlePrice` or `creditAmount`. Those arrived as
+ * `undefined`, so the validator's own checks fired every time: a merchant who
+ * had correctly chosen a gift product was told "Choose the free gift", and
+ * `free_item`, `bundle_price` and `credit_back` offers could not be saved at
+ * all. Two hand-written copies of one growing vocabulary, exactly the shape
+ * `decodeReward` exists to abolish.
+ *
+ * Validation now runs over `decodeReward(type, rewardConfigFor(form))`, i.e.
+ * over the literal jsonb the row will carry, so a reward type added later is
+ * validated against what is stored rather than against a second list somebody
+ * has to remember to extend.
+ */
+function triggerConfigFor(form: OfferFormData): Record<string, unknown> {
+  return form.triggerType === "min_subtotal"
+    ? { minSubtotal: Number(form.minSubtotal) }
+    : {};
+}
+
+function rewardConfigFor(form: OfferFormData): Record<string, unknown> {
+  switch (form.rewardType) {
+    case "bundle_price":
+      return {
+        bundleQuantity: Math.trunc(form.bundleQuantity) || 0,
+        bundlePrice: Number(form.bundlePrice),
+        ...(form.maxSets > 0 ? { maxSets: Number(form.maxSets) } : {}),
+      };
+    case "credit_back":
+      return { creditAmount: Number(form.creditAmount) };
+    case "free_shipping":
+      return {};
+    case "free_item":
+      return {
+        giftProductId: form.giftProductId,
+        ...(form.giftVariantId ? { giftVariantId: form.giftVariantId } : {}),
+        giftQuantity: Math.max(1, Math.trunc(form.giftQuantity) || 1),
+      };
+    case "tiered":
+      return {
+        tierMode: form.tierMode === "amount" ? "amount" : "percent",
+        // Stored ordered and de-duplicated, so what the engine reads is what
+        // the editor's own preview showed.
+        tiers: sortedTiers(form.tiers ?? []).map((t) => ({
+          minSubtotal: Number(t.minSubtotal),
+          value: Number(t.value),
+        })),
+      };
+    case "volume_break":
+      return {
+        breaks: sortedBreaks(form.breaks ?? []).map((b) => ({
+          minQuantity: Math.trunc(Number(b.minQuantity)),
+          percent: Number(b.percent),
+        })),
+      };
+    case "amount_off":
+      return { amount: Number(form.amount) };
+    case "fixed_price":
+      return { unitPrice: Number(form.unitPrice) };
+    case "buy_x_get_y":
+      return {
+        buyQuantity: Number(form.buyQuantity),
+        getQuantity: Number(form.getQuantity),
+        getPercent: Number(form.getPercent) || 100,
+        ...(form.maxSets > 0 ? { maxSets: Number(form.maxSets) } : {}),
+      };
+    default:
+      return { percent: Number(form.percent) };
+  }
+}
+
 function buildRow(form: OfferFormData, userId: string, creating: boolean) {
   const rupeesToPaise = (n: number) =>
     n > 0 ? Math.round(Number(n) * 100) : null;
@@ -311,61 +365,9 @@ function buildRow(form: OfferFormData, userId: string, creating: boolean) {
         : normalizeOfferCode(form.code ?? ""),
     priority: Math.max(-1000, Math.min(1000, Math.trunc(form.priority) || 0)),
     triggerType: form.triggerType,
-    triggerConfig:
-      form.triggerType === "min_subtotal"
-        ? { minSubtotal: Number(form.minSubtotal) }
-        : {},
+    triggerConfig: triggerConfigFor(form),
     rewardType: form.rewardType,
-    rewardConfig:
-      form.rewardType === "bundle_price"
-        ? {
-            bundleQuantity: Math.trunc(form.bundleQuantity) || 0,
-            bundlePrice: Number(form.bundlePrice),
-            ...(form.maxSets > 0 ? { maxSets: Number(form.maxSets) } : {}),
-          }
-        : form.rewardType === "credit_back"
-          ? { creditAmount: Number(form.creditAmount) }
-          : form.rewardType === "free_shipping"
-            ? {}
-            : form.rewardType === "free_item"
-              ? {
-                  giftProductId: form.giftProductId,
-                  ...(form.giftVariantId
-                    ? { giftVariantId: form.giftVariantId }
-                    : {}),
-                  giftQuantity: Math.max(1, Math.trunc(form.giftQuantity) || 1),
-                }
-              : form.rewardType === "tiered"
-                ? {
-                    tierMode: form.tierMode === "amount" ? "amount" : "percent",
-                    // Stored ordered and de-duplicated, so what the engine reads is
-                    // what the editor's own preview showed.
-                    tiers: sortedTiers(form.tiers ?? []).map((t) => ({
-                      minSubtotal: Number(t.minSubtotal),
-                      value: Number(t.value),
-                    })),
-                  }
-                : form.rewardType === "volume_break"
-                  ? {
-                      breaks: sortedBreaks(form.breaks ?? []).map((b) => ({
-                        minQuantity: Math.trunc(Number(b.minQuantity)),
-                        percent: Number(b.percent),
-                      })),
-                    }
-                  : form.rewardType === "amount_off"
-                    ? { amount: Number(form.amount) }
-                    : form.rewardType === "fixed_price"
-                      ? { unitPrice: Number(form.unitPrice) }
-                      : form.rewardType === "buy_x_get_y"
-                        ? {
-                            buyQuantity: Number(form.buyQuantity),
-                            getQuantity: Number(form.getQuantity),
-                            getPercent: Number(form.getPercent) || 100,
-                            ...(form.maxSets > 0
-                              ? { maxSets: Number(form.maxSets) }
-                              : {}),
-                          }
-                        : { percent: Number(form.percent) },
+    rewardConfig: rewardConfigFor(form),
     // Normalised through the decoder on the way IN as well, so a stray field
     // from an older client cannot reach the column.
     conditions: decodeConditions(form.conditions ?? []).conditions,

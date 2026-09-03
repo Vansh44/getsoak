@@ -501,3 +501,110 @@ describe("offer actions", () => {
     });
   });
 });
+
+describe("★★ the reward types that could not be saved at all", () => {
+  /**
+   * `validateForm` assembled a SECOND reward object to hand `validateOfferRule`
+   * and never listed the gift, bundle or cashback fields. They arrived as
+   * `undefined`, so the validator's own checks fired every time: a merchant who
+   * had correctly picked a gift product was told "Choose the free gift", and
+   * Phase G plus half of Phase H could not be created or edited at all.
+   *
+   * Validation now runs over `decodeReward(type, rewardConfigFor(form))` — the
+   * literal jsonb the row will carry — so the two cannot disagree again.
+   */
+  beforeEach(() => {
+    vi.clearAllMocks();
+    dbHolder.current = makeDbMock({ returning: [{ id: "offer-1" }] });
+    vi.mocked(getManagerIdentity).mockResolvedValue({
+      uid: "admin-1",
+      email: "a@b.c",
+    } as any);
+    vi.mocked(storeAllowsPlanFeature).mockResolvedValue(true);
+    vi.mocked(assertCanActivateOffer).mockResolvedValue(undefined);
+  });
+
+  const GIFT = "11111111-2222-4333-8444-555555555555";
+
+  it("saves a free-gift offer, and stores the gift it was given", async () => {
+    const res = await createOffer(
+      form({
+        rewardType: "free_item",
+        giftProductId: GIFT,
+        giftQuantity: 2,
+        productIds: [GIFT],
+      }),
+    );
+    expect(res.error).toBeUndefined();
+    expect(written().rewardConfig).toEqual({
+      giftProductId: GIFT,
+      giftQuantity: 2,
+    });
+  });
+
+  it("saves a bundle price", async () => {
+    const res = await createOffer(
+      form({
+        rewardType: "bundle_price",
+        bundleQuantity: 3,
+        bundlePrice: 999,
+        maxSets: 0,
+        categoryIds: ["c1"],
+      }),
+    );
+    expect(res.error).toBeUndefined();
+    expect(written().rewardConfig).toMatchObject({
+      bundleQuantity: 3,
+      bundlePrice: 999,
+    });
+  });
+
+  it("saves cashback", async () => {
+    const res = await createOffer(
+      form({ rewardType: "credit_back", creditAmount: 100 }),
+    );
+    expect(res.error).toBeUndefined();
+    expect(written().rewardConfig).toEqual({ creditAmount: 100 });
+  });
+
+  it("★ still refuses a gift offer with no gift chosen", async () => {
+    // The fix must not be "stop validating" — an empty product is still the
+    // one thing this reward cannot be saved without.
+    const res = await createOffer(
+      form({ rewardType: "free_item", giftProductId: "", productIds: ["p1"] }),
+    );
+    expect(res.error).toBe("Choose the free gift.");
+  });
+
+  it("★ still refuses a bundle of one", async () => {
+    const res = await createOffer(
+      form({
+        rewardType: "bundle_price",
+        bundleQuantity: 1,
+        categoryIds: ["c"],
+      }),
+    );
+    expect(res.error).toBe("A bundle is between two and twenty items.");
+  });
+
+  it("★ still refuses cashback of zero", async () => {
+    const res = await createOffer(
+      form({ rewardType: "credit_back", creditAmount: 0 }),
+    );
+    expect(res.error).toBe("Enter how much store credit to give.");
+  });
+
+  it("★ validates the trigger the row will actually carry", async () => {
+    // A contents trigger with nothing scoped is refused, and the reason names
+    // the scope rather than some unrelated field.
+    const res = await createOffer(
+      form({
+        rewardType: "amount_off",
+        amount: 100,
+        triggerType: "contains_product",
+      }),
+    );
+    expect(res.error).toBeTruthy();
+    expect(written()).toBeUndefined();
+  });
+});

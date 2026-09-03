@@ -323,6 +323,41 @@ export function isGroupReward(type: OfferRewardType): boolean {
  * one discount and advertise another.
  */
 /**
+ * `offers.trigger_type` + `offers.trigger_config` (jsonb) → a typed
+ * `OfferTrigger`.
+ *
+ * ★★ THIS EXISTS FOR THE REASON `decodeReward` BELOW EXISTS, AND IT WAS THE
+ * SAME BUG POINTING THE OTHER WAY. `loadLiveOffers` wrote the trigger by hand
+ * as `type === "min_subtotal" ? "min_subtotal" : "always"`, which was true when
+ * there were two trigger types and silently WRONG the moment Phase B added
+ * `contains_product` and `contains_category`: both collapsed to `always`, so
+ * `isContentsTrigger` was false, `disqualify` never ran the contents check, and
+ * "10% off your order when it includes a shake" discounted EVERY order in the
+ * store. The editor round-tripped it correctly, the DB stored it correctly, the
+ * summary sentence described it correctly — only the engine never saw it.
+ *
+ * ★ A DECODER, NOT A TERNARY. The whole point of `decodeReward` was that a
+ * hand-written copy of a growing vocabulary forgets a member and the omission
+ * is invisible; leaving the trigger as a ternary two lines away from it left
+ * exactly that hole open. `OFFER_TRIGGERS` is the vocabulary, so an unknown
+ * stored value falls back to `always` — the widest trigger, which can only ever
+ * make an offer easier to qualify for, never grant one that was not configured.
+ */
+export function decodeTrigger(
+  triggerType: string,
+  config: unknown,
+): OfferTrigger {
+  const c = (config ?? {}) as Record<string, unknown>;
+  const minSubtotal = Number(c.minSubtotal);
+  return {
+    type: (OFFER_TRIGGERS as readonly string[]).includes(triggerType)
+      ? (triggerType as OfferTriggerType)
+      : "always",
+    minSubtotal: Number.isFinite(minSubtotal) ? minSubtotal : undefined,
+  };
+}
+
+/**
  * `offers.reward_config` (jsonb) → a typed `OfferReward`.
  *
  * ★★ THE ONE DECODER, BECAUSE THE HAND-WRITTEN ONE SILENTLY DISABLED TWO WHOLE

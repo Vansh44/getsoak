@@ -52,6 +52,25 @@ export interface EffectivePricing {
   selling: number; // price actually charged
   discount: number; // percent off, 0 when none
   hasVariants: boolean;
+  /**
+   * The price `selling` is ON SALE FROM — the chosen variant's
+   * `selling_price` when a `special_price` is being charged, and equal to
+   * `selling` otherwise.
+   *
+   * ★★ THIS IS NOT `base`, AND CONFUSING THE TWO BREAKS OFFER PRICING.
+   * `base` is the struck-through MRP, which is a list price rather than a
+   * price this product was recently sold at. The offer engine reads
+   * `regularUnitPrice` as "what this line is discounted from" and uses it to
+   * decide `onSalePrice` — so passing MRP marks EVERY product with an MRP set
+   * as on sale, and under the default `best` mode the offer is then measured
+   * against the MRP and scores nothing. The shop grid's badge did exactly that
+   * and silently showed no badge for most of a catalogue.
+   *
+   * Only `effectivePricing` knows which variant `selling` came from, so this is
+   * the only place that can answer it — computing it at a call site means
+   * re-deriving the default-variant choice and getting it wrong differently.
+   */
+  regularSelling: number;
 }
 
 // Normalize a single base/selling pair: fall back to base when no selling
@@ -78,6 +97,10 @@ export function effectivePricing(p: PricedLike): EffectivePricing {
       selling: pair.selling,
       discount: discountPercent(pair.base, pair.selling),
       hasVariants: false,
+      // A product carries no special price — `special_price` is variant-only —
+      // so what is charged IS the regular price, and the engine reads the two
+      // being equal as "not on sale".
+      regularSelling: pair.selling,
     };
   }
 
@@ -97,6 +120,10 @@ export function effectivePricing(p: PricedLike): EffectivePricing {
     selling: def.selling,
     discount: discountPercent(def.base, def.selling),
     hasVariants: true,
+    // ★ The chosen variant's REGULAR price, clamped the same way `selling` is
+    // so the pair cannot invert. Equal to `selling` when no special price is
+    // set, which is what "not on sale" looks like to the engine.
+    regularSelling: normalizePair(v.base_price, v.selling_price).selling,
   };
 }
 

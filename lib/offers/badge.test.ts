@@ -134,3 +134,29 @@ describe("offerBadgeFor", () => {
     ).toBeNull();
   });
 });
+
+// ★★ THE CALL SITE, GUARDED — because the failure is invisible.
+//
+// The shop grid passed `priced.base` (the struck-through MRP) as
+// `regularUnitPrice`. The engine reads that field as "what this line is
+// discounted FROM", so every product with an MRP set looked on sale, and under
+// the default `best` mode the offer was measured against the MRP and scored
+// nothing. No error, no wrong price — just no badge, across most of a
+// catalogue, present only on products that happened to have no MRP.
+//
+// Nothing about the rendered page says which field it read, so this is guarded
+// the way `send-coverage.test.ts` and `export-scope.test.ts` guard theirs: by
+// asserting the call site, not by hoping the next reader remembers.
+describe("★ the shop grid asks for the right price", () => {
+  it("passes the ON-SALE-FROM price, never the MRP", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const src = await readFile(
+      "app/(storefront)/(pages)/shop/page.tsx",
+      "utf8",
+    );
+    expect(src).toContain("regularUnitPrice: priced.regularSelling");
+    // `base` is the struck-through list price. Reaching for it here is the
+    // exact regression above.
+    expect(src).not.toContain("regularUnitPrice: priced.base");
+  });
+});

@@ -3064,6 +3064,57 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260904_0075_mink_offer_audit_resource_type",
+      "description": "Widen the audit resource-type allowlist 0070 missed, so an executed offer action can be recorded",
+      "file": "sql/20260904_0075_mink_offer_audit_resource_type.sql",
+      "checksum": "a025877c64013e72c136059440fc0c5e2f952a3118eadc42e21611b0055c9435",
+      "transaction": true,
+      "requires": ["20260903_0074_mink_phase_6e_delayed_pickups"],
+      "verify": {
+        "constraints": ["mink_action_audit_resource_type_check"],
+        "functions": [],
+        "queries": [
+          {
+            "name": "an executed offer action can be recorded in the audit trail",
+            "sql": "select count(*)::text from pg_constraint where conname = 'mink_action_audit_resource_type_check' and conrelid = 'public.mink_action_audit'::regclass and pg_get_constraintdef(oid) like '%offer%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "applyVerify": {
+        "constraints": ["mink_action_audit_resource_type_check"],
+        "functions": [],
+        "queries": [
+          {
+            "name": "an executed offer action can be recorded in the audit trail",
+            "sql": "select count(*)::text from pg_constraint where conname = 'mink_action_audit_resource_type_check' and conrelid = 'public.mink_action_audit'::regclass and pg_get_constraintdef(oid) like '%offer%'",
+            "equals": "1"
+          },
+          {
+            "name": "every resource-type allowlist agrees about offers",
+            "sql": "select count(*)::text from pg_constraint where contype = 'c' and pg_get_constraintdef(oid) like '%price_bulk%' and pg_get_constraintdef(oid) like '%inventory_bulk%' and pg_get_constraintdef(oid) not like '%offer%'",
+            "equals": "0"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "constraints": ["mink_action_audit_resource_type_check"],
+        "functions": [],
+        "queries": [
+          {
+            "name": "the audit trail already accepts an offer resource",
+            "sql": "select count(*)::text from pg_constraint where conname = 'mink_action_audit_resource_type_check' and conrelid = 'public.mink_action_audit'::regclass and pg_get_constraintdef(oid) like '%offer%'",
+            "equals": "1"
+          },
+          {
+            "name": "every resource-type allowlist agrees about offers",
+            "sql": "select count(*)::text from pg_constraint where contype = 'c' and pg_get_constraintdef(oid) like '%price_bulk%' and pg_get_constraintdef(oid) like '%inventory_bulk%' and pg_get_constraintdef(oid) not like '%offer%'",
+            "equals": "0"
+          }
+        ]
+      }
     }
   ]
 }

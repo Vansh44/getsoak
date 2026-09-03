@@ -349,6 +349,12 @@ export async function getCheckoutShippingOptions(input: {
                     special_price: variant.specialPrice,
                   })
                 : product.price,
+              // ★ The price this line is on sale FROM, so `onSalePrice` reads
+              // the same here as it does in `placeOrder`. Omitting it made
+              // every line look full-price, so a scoped free-shipping offer
+              // could quote ₹0 delivery in the preview and the real rate at
+              // checkout.
+              regularUnitPrice: variant ? variant.price : product.price,
             },
           ];
         }),

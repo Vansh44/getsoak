@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -53,6 +53,7 @@ function deliveryLabel(o: OfferRow): string {
 }
 
 export function OffersView({
+  emailableOfferIds,
   offers,
   loadError,
   limit,
@@ -62,6 +63,14 @@ export function OffersView({
   locationCount,
   canManage,
 }: {
+  /**
+   * Offers with a `coupons` row behind them, so the campaign page can find one.
+   *
+   * ★ RESOLVED SERVER-SIDE, because "does a coupon row exist for this id?" is a
+   * database question and rendering the action for every code offer would 404
+   * on any offer created here — campaigns are still coupon-keyed.
+   */
+  emailableOfferIds: string[];
   offers: OfferRow[];
   loadError?: string;
   limit: number | null;
@@ -76,6 +85,10 @@ export function OffersView({
   const [confirmDelete, setConfirmDelete] = useState<OfferRow | null>(null);
 
   const atCap = limit !== null && activeCount >= limit;
+  const emailable = useMemo(
+    () => new Set(emailableOfferIds),
+    [emailableOfferIds],
+  );
 
   const run = (fn: () => Promise<{ error?: string }>, ok: string) =>
     startTransition(async () => {
@@ -220,6 +233,15 @@ export function OffersView({
                     {canManage && (
                       <td className="dash-col-actions">
                         <div className="flex items-center gap-1">
+                          {emailable.has(o.id) && (
+                            <Link
+                              href={`/dashboard/marketing/coupons/${o.id}/email`}
+                              className="dash-btn dash-btn-ghost dash-btn-sm"
+                              title="Email this code to customers"
+                            >
+                              Email
+                            </Link>
+                          )}
                           <button
                             type="button"
                             disabled={

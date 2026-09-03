@@ -40,6 +40,7 @@ import type {
   WeeklyTradingReportInput,
   WeeklyTradingReportSnapshot,
 } from "./workflow-types";
+import { resolveRawNumberSetting } from "@/lib/settings/registry";
 
 const MAX_LAUNCH_SKUS = 20;
 const MAX_SLOW_INVENTORY_CANDIDATES = 20;
@@ -865,11 +866,11 @@ function readStoreDiscountCeiling(value: unknown): number {
     !Array.isArray(settings.features)
       ? (settings.features as Record<string, unknown>)
       : {};
-  const configured = features["offers.maxTotalDiscountPercent"];
-  return typeof configured === "number" &&
-    Number.isFinite(configured) &&
-    configured > 0 &&
-    configured <= 100
-    ? configured
-    : 50;
+  // ★ One reader, bounded by the setting's own definition. `configured > 0`
+  // read a deliberate 0 as unset and went on to recommend a discount for a
+  // store that had switched offer discounting off entirely.
+  return resolveRawNumberSetting(
+    "offers.maxTotalDiscountPercent",
+    features["offers.maxTotalDiscountPercent"],
+  );
 }

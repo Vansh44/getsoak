@@ -91,6 +91,7 @@ import { posStaff, posStaffLocations } from "@/drizzle/schema";
 import { posTotals } from "@/lib/pos/totals";
 import { loadFirstOrderState } from "@/lib/offers/resolve";
 import {
+  bonusOffersToReserve,
   loadExhaustedOfferIds,
   loadOffersForRegister,
   recordOfferRedemptions,
@@ -100,6 +101,9 @@ import {
   type ReservedOffer,
 } from "@/lib/offers/cart";
 import type { Offer, OnSalePriceMode } from "@/lib/offers/types";
+import type { AppliedOffer } from "@/lib/offers/apply";
+import { toPaise } from "@/lib/money/allocate";
+import { variantEffectiveSelling } from "@/lib/pricing";
 import { isPosDateRangeKey, posDateRange } from "@/lib/pos/date-range";
 import {
   accountTenderTotal,
@@ -1697,14 +1701,21 @@ export async function placePosSale(
   // ★ APPENDED BEFORE `offerDiscounts` is built, so the index alignment those
   // arrays rely on still holds; the gift's own offer discount is zero, which
   // is true — it was added, not discounted.
+  // The gift's worth, for its offer's budget cap only.
+  let giftValuePaise = 0;
+  let giftLineIndex = -1;
   if (offerResult?.gift) {
     const wanted = offerResult.gift;
+    let giftUnitPrice = 0;
     const giftLine = await (async () => {
       const rows = await withService((db) =>
         db
           .select({
             id: products.id,
             name: products.name,
+            // What the customer would OTHERWISE have paid — what the gift
+            // costs the offer's budget. The LINE stays ₹0.
+            sellingPrice: products.sellingPrice,
             taxClassId: products.taxClassId,
             categoryId: products.categoryId,
             hsnCode: products.hsnCode,
@@ -1725,7 +1736,11 @@ export async function placePosSale(
       if (wanted.variantId) {
         const vRows = await withService((db) =>
           db
-            .select({ name: productVariants.name })
+            .select({
+              name: productVariants.name,
+              selling_price: productVariants.sellingPrice,
+              special_price: productVariants.specialPrice,
+            })
             .from(productVariants)
             .where(
               and(
@@ -1737,8 +1752,10 @@ export async function placePosSale(
         );
         if (!vRows[0]) return null;
         variantName = vRows[0].name;
+        giftUnitPrice = variantEffectiveSelling(vRows[0]);
       }
 
+      if (!wanted.variantId) giftUnitPrice = row.sellingPrice;
       const giftCls = row.taxClassId
         ? classById.get(row.taxClassId)
         : billing.defaultTaxClassId
@@ -1769,7 +1786,9 @@ export async function placePosSale(
     })();
 
     if (giftLine) {
+      giftLineIndex = priced.length;
       priced.push(giftLine);
+      giftValuePaise = toPaise(giftUnitPrice * giftLine.quantity);
     } else {
       // Gone between resolution and here. A sale must never fail over a free
       // extra, so the gift is dropped and the sale completes.
@@ -1916,6 +1935,8 @@ export async function placePosSale(
   // answer they can act on, while an unreachable database must never stop the
   // till taking money (invariant 6).
   let reservedOffers: ReservedOffer[] = [];
+  // Exactly what was claimed, carried to the ledger so the two agree.
+  const redeemedOffers: AppliedOffer[] = [];
   if (offerResult && offerResult.applied.length > 0) {
     const claim = await reserveOfferUses(
       op.storeId,
@@ -1926,6 +1947,43 @@ export async function placePosSale(
     if (!claim.ok) {
       await releaseOfferUses(op.storeId, reservedOffers);
       return { error: claim.error ?? "That offer is no longer available." };
+    }
+    redeemedOffers.push(...offerResult.applied);
+  }
+
+  // ★★ A GIFT OR CASHBACK CAP DROPS THE EXTRA, NEVER THE SALE. These caps are
+  // meant to be reached, so refusing at the till would stop the shop selling
+  // with a customer standing at the counter — the same reason the gift block
+  // above drops a vanished gift instead of failing. The gift is already a ₹0
+  // line, so removing it changes no total the cashier has quoted.
+  const bonuses = offerResult
+    ? bonusOffersToReserve(offerResult, giftValuePaise)
+    : [];
+  for (const bonus of bonuses) {
+    const claim = await reserveOfferUses(
+      op.storeId,
+      [bonus],
+      customerId ?? null,
+    );
+    reservedOffers = [...reservedOffers, ...claim.reserved];
+    if (claim.ok) {
+      redeemedOffers.push(bonus);
+      continue;
+    }
+    if (bonus.level === "gift") {
+      // ★ THE EXACT INDEX RECORDED WHEN THE LINE WAS APPENDED, never a
+      // search. Matching on "this product at ₹0" would also match a genuinely
+      // free paid line, and removing the wrong element would silently shift
+      // `offerDiscounts` out of step with its lines.
+      if (giftLineIndex >= 0) {
+        priced.splice(giftLineIndex, 1);
+        offerDiscounts.splice(giftLineIndex, 1);
+      }
+      offerResult = offerResult ? { ...offerResult, gift: null } : offerResult;
+    } else {
+      offerResult = offerResult
+        ? { ...offerResult, credit: null }
+        : offerResult;
     }
   }
   const releaseOffers = async () => {
@@ -2270,12 +2328,16 @@ export async function placePosSale(
   // fully committed and best-effort: losing it is a reporting gap, while
   // failing here would have taken the customer's money and then told the
   // cashier the sale did not go through.
-  if (offerResult && offerResult.applied.length > 0) {
+  if (
+    offerResult &&
+    (offerResult.allocations.length > 0 || redeemedOffers.length > 0)
+  ) {
     await recordOfferRedemptions({
       storeId: op.storeId,
       orderId,
       customerId: customerId ?? null,
       result: offerResult,
+      redeemed: redeemedOffers,
       orderItemIdByLine: new Map(
         priced.map((_, idx) => [String(idx), orderItemIds[idx]]),
       ),

@@ -181,10 +181,25 @@ const nextConfig: NextConfig = {
         permanent: false,
       },
       {
-        source: "/dashboard/marketing/coupons/:path*",
-        destination: "/dashboard/offers",
+        // A new discount is an offer now, so this lands on the offer editor
+        // rather than bouncing to a list the merchant then has to act on.
+        source: "/dashboard/marketing/coupons/new",
+        destination: "/dashboard/offers/new",
         permanent: false,
       },
+      // ★★ NO CATCH-ALL. `/:path*` also swallowed `[id]/edit` and
+      // `[id]/email`, and BOTH are still live surfaces over the `coupons`
+      // TABLE, which offers has not replaced:
+      //   • coupon EMAIL CAMPAIGNS are keyed on a coupon row throughout
+      //     (`lib/mink/campaign-*`, `email_campaigns`), so `[id]/email` is the
+      //     only way to send one — the Pro feature had no reachable UI at all.
+      //   • Mink Phase 4C still CREATES `coupons`, and its own artifacts hand
+      //     the merchant `/dashboard/marketing/coupons/{id}/edit`
+      //     (`lib/mink/tools/draft-tools.ts`, `lib/mink/domain-actions.ts`).
+      //     That id may exist ONLY in `coupons`, so redirecting it to the
+      //     offers list dead-ends on a list that cannot contain it.
+      // Retiring those two means migrating campaigns off coupons first; until
+      // then this covers the destinations that genuinely moved.
       {
         source: "/dashboard/activity",
         destination: "/dashboard/logs",

@@ -84,11 +84,19 @@ import {
   quoteShippingForOrder,
   readShippingSettings,
 } from "@/lib/shipping/quote";
+vi.mock("@/lib/offers/cart", () => ({
+  // Returns null (no offers) by default, which is what every pre-existing test
+  // here already assumed. Mocked so the LINES handed to the engine are
+  // assertable — see the `regularUnitPrice` test below.
+  resolveOffersForCart: vi.fn(async () => null),
+}));
+
 import {
   products,
   storeLogisticsProviders,
   storeShippingSettings,
 } from "@/drizzle/schema";
+import { resolveOffersForCart } from "@/lib/offers/cart";
 import {
   getCheckoutShippingOptions,
   getProductDeliveryEstimate,
@@ -173,6 +181,8 @@ beforeEach(() => {
   vi.mocked(can).mockReturnValue(true);
   vi.mocked(rateLimit).mockResolvedValue({ allowed: true } as any);
   vi.mocked(readShippingSettings).mockResolvedValue(SETTINGS);
+  // No offer applies unless a test says one does — today's behaviour.
+  vi.mocked(resolveOffersForCart).mockResolvedValue(null as never);
   vi.mocked(quoteShippingForOrder).mockResolvedValue({
     options: [
       {
@@ -636,5 +646,37 @@ describe("getProductDeliveryEstimate", () => {
     expect(dbHolder.current.calls.select[0]).toBeTruthy();
     expect(products).toBeTruthy();
     expect(storeLogisticsProviders).toBeTruthy();
+  });
+});
+
+// ★★ THE SHIPPING QUOTE ASKS THE SAME ENGINE, SO IT MUST ASK THE SAME QUESTION.
+//
+// `resolveOffersForCart` is what decides whether a `free_shipping` offer waives
+// delivery here, and the engine reads `regularUnitPrice` absent-or-equal as
+// "not on sale". This call passed `unitPrice` and nothing else, so under
+// `offers.onSalePrice = "skip"` a scoped free-shipping offer could qualify in
+// the preview and be declined by `placeOrder`, which passes the pair — quoting
+// ₹0 delivery and then charging the real rate.
+describe("★★ the shipping quote prices offers with the same pair as checkout", () => {
+  it("★ tells the engine what a variant on sale is discounted FROM", async () => {
+    dbHolder.current = makeDbMock({
+      selectQueue: [[PRODUCT], [{ ...VARIANT, specialPrice: 150 }]],
+    });
+
+    await getCheckoutShippingOptions({
+      items: [cartItem({ variantId: VARIANT_ID, quantity: 1 })],
+      postalCode: "110001",
+      paymentMethod: "cod",
+    });
+
+    const call = vi.mocked(resolveOffersForCart).mock
+      .calls[0]?.[0] as never as {
+      lines: { unitPrice: number; regularUnitPrice?: number }[];
+    };
+    // Charged 150, on sale from 180 — the pair `placeOrder` passes.
+    expect(call.lines[0]).toMatchObject({
+      unitPrice: 150,
+      regularUnitPrice: 180,
+    });
   });
 });

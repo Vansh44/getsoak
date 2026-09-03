@@ -22,7 +22,7 @@ import { withService } from "@/lib/db/client";
 import { isSchemaNotReady, dbErrorMessage } from "@/lib/db/errors";
 import { logError, logWarn } from "@/lib/observability/logger";
 import { offerRedemptions, orderItemOffers } from "@/drizzle/schema";
-import { toPaise } from "@/lib/money/allocate";
+import { toPaise, toRupees } from "@/lib/money/allocate";
 import {
   applyOffers,
   type AppliedOffer,
@@ -139,6 +139,59 @@ export async function resolveOffersForCart(
   }
 }
 
+/**
+ * The GIFT and CASHBACK an order earned, as reservable offers.
+ *
+ * ★★ THEY WERE NEVER RESERVED AND NEVER RECORDED. `applied` is built from the
+ * per-line merchandise allocation, so a `free_item` or `credit_back` offer —
+ * which allocates nothing to a line — was absent from it, and both counters
+ * only ever reserved `applied`. Every cap was therefore decorative: "free
+ * tumbler, limited to 100" gave away unlimited tumblers, and "₹100 cashback,
+ * budget ₹5,000" issued unbounded store credit, which is a real liability. No
+ * `offer_redemptions` row was written either, so `max_per_customer` could not
+ * bind even in principle.
+ *
+ * ★ KEPT OUT OF `applied` ON PURPOSE. That array gates the legacy coupon
+ * fallback in `placeOrder` (`applied.length > 0`), so folding a gift into it
+ * would silently drop a shopper's coupon on any order that also won a gift.
+ * These are separate axes, exactly as shipping is.
+ *
+ * ★ A GIFT IS CHARGED AT WHAT THE SHOPPER WOULD OTHERWISE HAVE PAID — the same
+ * rule the shipping waiver uses for `offerWaivedAmount`. The engine is pure and
+ * never prices a gift, so the caller resolves it from the product row and
+ * passes it in; 0 means "unpriced", which still lets the redemption and
+ * per-customer caps bind.
+ */
+export function bonusOffersToReserve(
+  result: OfferResult,
+  giftValuePaise = 0,
+): AppliedOffer[] {
+  const out: AppliedOffer[] = [];
+  if (result.gift) {
+    out.push({
+      offerId: result.gift.offerId,
+      offerName: result.gift.offerName,
+      code: result.gift.code,
+      rewardType: "free_item",
+      level: "gift",
+      amount: toRupees(Math.max(0, Math.trunc(giftValuePaise))),
+    });
+  }
+  if (result.credit && result.credit.amount > 0) {
+    out.push({
+      offerId: result.credit.offerId,
+      offerName: result.credit.offerName,
+      code: result.credit.code,
+      rewardType: "credit_back",
+      level: "credit",
+      // Cashback's cost to the merchant is exactly the credit issued, so a
+      // budget cap on it binds precisely.
+      amount: result.credit.amount,
+    });
+  }
+  return out;
+}
+
 export interface ReservedOffer {
   offerId: string;
   amountPaise: number;
@@ -248,6 +301,17 @@ export interface RecordOffersInput {
   orderId: string;
   customerId: string | null;
   result: OfferResult;
+  /**
+   * Exactly what `reserveOfferUses` claimed for this order — merchandise, plus
+   * the gift, cashback and shipping waiver.
+   *
+   * ★★ PASSED IN RATHER THAN RE-DERIVED, so the ledger and the caps cannot
+   * describe different sets. Reading `result.applied` here is what left every
+   * gift, cashback and free-shipping redemption unrecorded while its
+   * `redemption_count` had already moved — and `max_per_customer` is counted
+   * from THIS table, so a cap the merchant set could never bind.
+   */
+  redeemed: readonly AppliedOffer[];
   /** Maps the engine's line id to the persisted `order_items.id`. */
   orderItemIdByLine: ReadonlyMap<string, string>;
 }
@@ -268,16 +332,16 @@ export interface RecordOffersInput {
 export async function recordOfferRedemptions(
   input: RecordOffersInput,
 ): Promise<void> {
-  const { result } = input;
-  if (result.allocations.length === 0 && result.applied.length === 0) return;
+  const { result, redeemed } = input;
+  if (result.allocations.length === 0 && redeemed.length === 0) return;
 
   try {
     await withService(async (db) => {
-      if (result.applied.length > 0) {
+      if (redeemed.length > 0) {
         await db
           .insert(offerRedemptions)
           .values(
-            result.applied.map((a) => ({
+            redeemed.map((a) => ({
               offerId: a.offerId,
               storeId: input.storeId,
               orderId: input.orderId,
@@ -301,7 +365,7 @@ export async function recordOfferRedemptions(
             // invoice says.
             offerName: a.offerName,
             rewardType:
-              result.applied.find((x) => x.offerId === a.offerId)?.rewardType ??
+              redeemed.find((x) => x.offerId === a.offerId)?.rewardType ??
               "percent_off",
             amount: a.amount,
           };

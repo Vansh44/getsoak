@@ -24,7 +24,7 @@ WITH phase6e(section) AS (
 <p>For an unprepared order, Mink can prepare generic delay copy with placeholders for the order reference, location and a staff-confirmed revised ready time. This copy remains inside the private workflow card for human review; it is not a saved Mink draft and is never sent or queued automatically. Staff must verify the live order and confirm a truthful revised time before adapting or sending anything manually.</p>
 <p>StoreMink's existing pickup reminder sweep remains authoritative. If a Ready pickup is inside the reminder window and its one-time reminder is pending or already recorded, Mink withholds duplicate collection-reminder copy. Mink never claims or resets the one-time reminder marker, sends a notification, changes pickup or order status, extends a deadline, cancels an order, releases a stock hold or moves inventory.</p>
 <p>The workflow captures exact active location IDs at queue time and rechecks store access, suspension, Orders Manage, Mink drafting and location authority before every background step. Removed access cancels or narrows the next step; a location added later never enters the run. Work is bounded, restart-safe, cancellable and completed without additional Gemini calls or tokens. Because pickup state can change after the snapshot, always verify the linked live order before manual contact.</p>
-$phase6e$)
+$phase6e$))
 UPDATE public.help_articles AS article
 SET excerpt = 'Use Mink AI for grounded answers, guarded actions and restart-safe trading, launch, inventory and pickup workflows.',
     seo_description = 'Use permission-aware Mink AI for grounded store work, guarded actions, durable investigations and private PII-minimized pickup reviews.',

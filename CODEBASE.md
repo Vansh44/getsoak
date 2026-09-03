@@ -1539,6 +1539,9 @@ wholesip/
 │                              # and private exact-SKU product-launch templates and their Help contract;
 │                              # 0073 adds the guarded slow-inventory promotion recommendation;
 │                              # 0074 adds the PII-minimized, duplicate-safe delayed-pickup review;
+│                              # 0075 widens the AUDIT resource-type allowlist 0070 missed, so an
+│                              # executed offer action can be recorded rather than rolled back by its
+│                              # own audit insert — 0071's lesson on the sibling table;
 │                              # missing/draft/empty guide drift is repaired before publication.
 │                              # It follows the 0049/0050 UX migrations.
 ├── scripts/
@@ -3344,11 +3347,34 @@ the trusted `store_id`, and direct customer PII is minimized/masked.
      RLS-enabled service-only operational tables. The CRON_SECRET-only
      `/api/cron/mink-workflows` route claims at most 15 short leases per minute
      with `FOR UPDATE SKIP LOCKED`; expired leases are reclaimable after a Cloud
-     Run restart. The weekly template checkpoints authoritative 7-day versus
+     Run restart. ★★ AN EMPTY QUEUE IS THE STEADY STATE, NOT AN ERROR:
+     `parseClaimedWorkflow` returns null when the claim CTE matches nothing and
+     still throws on a row it cannot trust. It used to throw on both, and
+     `claimWorkflow` is awaited OUTSIDE the worker's try (`if (!run) break` is
+     written for exactly that case) with no catch in the route either — so the
+     minute cron answered 500 on every idle tick, and because the loop only
+     exits by the queue draining, the completion fan-out below it was
+     unreachable: a workflow finished and nobody was ever told. Pinned in both
+     directions by `lib/mink/workflows.test.ts`; `route.test.ts` mocks the
+     worker wholesale, which is why nothing caught it. The weekly template checkpoints authoritative 7-day versus
      previous-period sales, then deterministic analysis, then final delivery.
      Every completed step and support event has a unique idempotency key.
-     Transient failures use bounded exponential retry, terminal failure clears
-     the lease, an exhausted expired lease is reaped rather than staying stuck,
+     Transient failures use bounded exponential retry PER STEP — ★★ the budget
+     is RESET when a step completes, and that is what stops a run stranding:
+     `claimWorkflow` increments `attempt_count` on every claim, so a run-level
+     budget is spent by ordinary progress as much as by retries, and a step that
+     SUCCEEDED on the last permitted attempt re-queued the run at the ceiling —
+     never claimable again (`attempt_count < max_attempts`) and never failed
+     either, since the reaper only looks at `running`. No result, no
+     notification, no error, and the card polling `queued` at 3s forever. The
+     schema had already implied the fix: `max_attempts BETWEEN total_steps AND
+     20` permits a budget EQUAL to the step count, at which a healthy run spends
+     every attempt just walking its steps, so one retry would strand it. A
+     budget that only works above its own legal minimum is a per-step budget
+     accounted per run. `resumeMinkWorkflow` resets it too — a run parked at
+     `waiting_approval` may already sit at the ceiling, and re-queueing it there
+     accepts the approval and then never acts on it. Terminal failure clears the
+     lease, an exhausted expired lease is reaped rather than staying stuck,
      and global/invitation revocation fails closed. The report range is anchored
      to the original request instant so retrying across local midnight cannot
      change the period. Background steps call no model and consume no additional
@@ -3356,6 +3382,23 @@ the trusted `store_id`, and direct customer PII is minimized/masked.
 
      `GET/POST /api/mink/workflows/[workflowId]` re-derives the authenticated
      actor, Analytics permission, invitation and exact owner/store predicates.
+     ★★ IT ALSO RE-CHECKS THE CAPTURED LOCATION SCOPE ON READ. The worker
+     narrows a run's locations to what the actor may still see before every
+     background step, but a COMPLETED run's figures sit in `result_json` and the
+     read returned them on owner + permission alone — so an unrestricted admin
+     could queue a store-wide trading report, be bound to one location by the
+     owner, and reopen the thread to read store-wide net sales, orders and top
+     products that `/dashboard/analytics` and the orders list would both now
+     refuse them (§23). It is REFUSED rather than narrowed: the figures were
+     computed ACROSS the captured scope and cannot be re-cut afterwards, and a
+     subset of a total presented as a total is worse than nothing. The actor's
+     own server-derived `locationIds` is the source, so it costs no query, and
+     `null`/`[]` both mean unrestricted — the contract `admin_locations` has
+     always had. ★ `readAction` also parses the ACTION AS A STRING before the
+     allowlist: it validated `String(row.action)` and returned the raw value, so
+     `{"action":["cancel"]}` passed the allowlist and then failed
+     `action === "cancel"` (an array is not a string) and fell through to
+     RESUME — a body whose only stated intent was to cancel resumed the run.
      The write boundary is same-origin, 1KB streamed-body limited, strict-key
      and rate-limited; it accepts only cancel or generic approval-resume.
      Queued/waiting reports cancel immediately, running reports set a durable
@@ -6252,6 +6295,22 @@ way — an entry there is a deliberate act, not a way to silence the guard.
         waives every fee, so auto-approving it lets anyone opt out of a store's
         return charges with a radio button. Not a setting — it is what makes
         `returns.autoApprove` safe to offer at all.
+      - **★★ THE SHOPPER'S ESTIMATE IS COMPUTED, NOT APPROXIMATED.** The form
+        summed `unitPrice × qty`, which ignores EVERY discount — so a customer
+        who had used a coupon was quoted the full LIST value of what they were
+        sending back and refunded the discounted value, and the gap became a
+        support ticket. Offers made it worse but did not cause it: this was
+        wrong for every discounted order the platform had ever taken. It also
+        over-valued an EXCHANGE, so a swap `requestReturn` would refuse could be
+        presented on screen as allowed. `ReturnableOrderView` now carries each
+        line's `lineTotal`/`taxAmount`/`offerDiscount` plus the order-level
+        remainder — recovered by the same formula `priceReturn` uses — and the
+        form calls `refundBreakdown`, the function the server settles with.
+        Pinned END TO END in `return-actions.test.ts`: the estimate derived
+        from the view must equal `requestReturn`'s stored `refundAmount`, which
+        is the assertion that makes "two ends of one object disagreeing about
+        money" (the §22 `posTotals` failure) impossible here rather than merely
+        currently correct.
       - **★ A REJECTION MUST CARRY A REASON**, refused server-side. The
         customer reads it verbatim; a silent no is the most complained-about
         thing a returns process does.
@@ -8141,11 +8200,47 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       **⚠ `/dashboard/promotions` had no route behind it at all**: the
       permission section pointed there, so every merchant granted it saw a
       sidebar link that 404'd.
+    - **★★ THE COUPON REDIRECT IS NARROW, AND A CATCH-ALL BROKE TWO LIVE
+      SURFACES.** `/dashboard/marketing/coupons/:path*` → `/dashboard/offers`
+      also swallowed `[id]/edit` and `[id]/email`, because Next applies
+      `redirects()` BEFORE filesystem routing — and neither had moved. Coupon
+      EMAIL CAMPAIGNS are keyed on a `coupons` row throughout (`email_campaigns`,
+      `lib/mink/campaign-*`), so `[id]/email` is the only way to send one and
+      the Pro feature had no reachable UI at all; and Mink Phase 4C still
+      CREATES `coupons`, handing the merchant
+      `/dashboard/marketing/coupons/{id}/edit` for a row that may exist ONLY
+      there, so the redirect dead-ended it on a list that cannot contain it.
+      Only the list and `new` redirect now (the latter to `/dashboard/offers/new`
+      — a new discount IS an offer). Pinned by `next-redirects.test.ts`, which
+      also asserts every dashboard redirect stays TEMPORARY.
+      **★ AND THE OFFERS LIST IS THE ENTRY POINT AGAIN**, for exactly the offers
+      that can be emailed: `page.tsx` resolves which listed ids have a `coupons`
+      row (one bounded `inArray`) and only those rows render **Email**. A
+      migrated coupon shares its offer's primary key and a Mink-written one has
+      its own row, but an offer created HERE has none — so rendering the action
+      for every code offer would 404 on half of them, which is §23's rule that a
+      control which always fails is worse than no control. ⚠ Campaigns are still
+      coupon-keyed; migrating them onto offers is what would retire those two
+      routes for good.
     - **★ THE PERMISSION KEY IS STILL `promotions`.** Roles store the KEY, so
       renaming it to `offers` silently revokes the grant on every saved role —
       the `navigation` precedent (§11). Label and href changed; key untouched.
       The `Coupons` CHILD was removed instead, which is safe for the opposite
       reason: a child carries no key.
+    - **★★ AND THE REFUND HAS TO UNDO IT THE SAME WAY.** `orders.discount` is
+      the sum of THREE things — the line markdowns (already inside each line's
+      `total`), each line's `offer_discount`, and the genuine order-level
+      remainder. Both refund paths subtracted only the markdowns, so an offer's
+      share stayed in the figure handed to `refundBreakdown`, which spreads it
+      PROPORTIONALLY. On "20% off shirts" over a ₹1,000 shirt and a ₹1,000
+      book, returning the shirt alone refunded ₹900 instead of ₹800 and
+      returning the book alone refunded ₹900 instead of ₹1,000 — real money,
+      both directions, on the same order. Migration 0059's own header had said
+      so ("over-refunds returns (a Buy-1-Get-1 free line comes back at full
+      price)"); the column existed and nothing read it. Both actions now select
+      `offer_discount`, pass it per line, and recover the remainder as
+      `orders.discount − Σ line_discount − Σ offer_discount`. The cashier's
+      preview subtracts it too, so the quote and the payout agree.
     - **★★ THE DISCOUNT LANDS ON LINES, NOT THE ORDER, and that is the whole
       design.** `computeTax` allocates `orders.discount` across lines
       **proportionally**, and `refundBreakdown` re-allocates it the same way. A
@@ -8174,6 +8269,18 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       against the **undiscounted** subtotal (testing after is circular), and
       the result reports the losing scenarios so a counter can explain the
       choice.
+    - **★★ AND EVERY SURFACE MUST BE GIVEN THE SAME PAIR.** The engine reads
+      `regularUnitPrice` absent-or-equal as "not on sale", so a caller that
+      omits it prices every line as full-price. `placeOrder` and `placePosSale`
+      pass it; the CART and the SHIPPING QUOTE did not, so under
+      `offers.onSalePrice = "skip"` the cart showed a discount the charge
+      declined and the total ROSE at the last step, and a scoped free-shipping
+      offer could quote ₹0 delivery in the preview and the real rate at
+      checkout. `getCartTaxRates` now returns `regularUnitPrice` beside
+      `categoryId` and for the same reason — `CartItem.price` is the sale price
+      captured at add time and nothing in the cart records what it was reduced
+      from, so only the server can answer it. ⚠ NOT `base_price`: an MRP is a
+      struck-through list price, not a sale price.
     - **★★ ONE PURE ENGINE, EVERY SURFACE.** `lib/offers/apply.ts` is called by
       `placeOrder`, `placePosSale`, `posTotals`, the cart/checkout summary and
       the register screen. This is the `posTotals` incident, not a preference:
@@ -8195,6 +8302,37 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       that best-offer-wins makes load-bearing, since the engine actively seeks
       out the most generous applicable rule. A cap refusal is reported; a
       transient failure fails OPEN (invariant 6).
+    - **★★ AND EVERY AXIS CLAIMS THEM, NOT ONLY THE MERCHANDISE ONE.**
+      `applied` is built from the per-line allocation, so a `free_item` or
+      `credit_back` reward — which allocates nothing to a line — was absent
+      from it, and both counters reserved only `applied`. Every cap on those
+      two was decorative: "free tumbler, limited to 100" gave away unlimited
+      tumblers and "₹100 cashback, budget ₹5,000" issued unbounded store
+      credit, which is a LIABILITY rather than a discount. Nothing wrote an
+      `offer_redemptions` row either, so `max_per_customer` could not bind even
+      in principle — including for the shipping waiver, which was reserved but
+      never recorded. `bonusOffersToReserve` (`lib/offers/cart.ts`) is the
+      shared list, and `recordOfferRedemptions` now takes `redeemed` — exactly
+      what was claimed — rather than re-deriving it, so the ledger and the caps
+      cannot describe different sets.
+      **★ THEY STAY OUT OF `applied`**, deliberately: that array gates the
+      legacy coupon fallback in `placeOrder` (`applied.length > 0`), so folding
+      a gift into it would silently drop a shopper's coupon on any order that
+      also won one. Separate axes, exactly as shipping is.
+      **★ A GIFT IS CHARGED AT ITS RETAIL VALUE** — what the shopper would
+      otherwise have paid, the same rule `offerWaivedAmount` follows for
+      shipping. The engine is pure and never prices a gift, so each counter
+      resolves it from the product row and passes it in; cashback is charged
+      exactly the credit it issues, so a budget on it binds precisely.
+      **★★ AND A BONUS CAP DROPS THE EXTRA, NEVER THE SALE.** These caps are
+      MEANT to be reached — a tumbler for the first 100 orders hits its limit
+      on order 101 by design — so treating one like a merchandise cap would
+      stop the shop selling anything at all until somebody noticed and disabled
+      the offer. That is far worse than the bug the reservation fixes, and it
+      is the rule the gift block already followed for a vanished product. The
+      ₹0 line is removed by the index recorded when it was appended, never by
+      searching for "this product at ₹0", which would also match a genuinely
+      free paid line and shift `offerDiscounts` out of step with its lines.
     - **★★ EVERY OFFER READ FAILS OPEN, and that is a deploy decision.** DDL is
       a separate release gate, so this code reaches production before
       20260902_0059 does. `isSchemaNotReady` (`lib/db/errors.ts`, 42P01/42883/ 42703) tells "the migration has not run" from a real outage, and either
@@ -8215,6 +8353,23 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       `getManagerIdentity("promotions")`, the `store_pages` draft pattern.
       Reading them with `withUser` returns nothing for the merchant who owns
       them.
+    - **★★ `offers.maxTotalDiscountPercent` OF 0 IS A REAL SETTING.** The
+      registry declares it `min: 0` and documents 0 as "stop offers discounting
+      anything". The live engine honoured it (`lib/offers/resolve.ts` reads
+      `typeof === "number"`), but two Mink readers gated on `value > 0` — which
+      reads a deliberate 0 as unset and substitutes the permissive 50% default,
+      so the merchant who locked it down hardest silently got the loosest
+      behaviour: `writeOffer` would accept a `percent_off` offer at up to 50%,
+      and the slow-inventory workflow would recommend a discount, for a store
+      that had switched offer discounting off. Same trap §22 records for
+      `pos.maxDiscountPercent` and §28 for `products.return_window_days`.
+      **★ ONE READER, BOUNDED BY THE DEFINITION.** `resolveRawNumberSetting`
+      (`lib/settings/registry.ts`) takes a RAW jsonb value and clamps it with
+      the setting's own `defaultValue`/`min`/`max` — for the callers that read
+      `stores.settings.features` directly, inside a transaction or where a
+      resolved read would cost a round trip, and therefore have nothing
+      validating for them. The default, floor and ceiling had been copied to
+      each call site, so getting one wrong was a local edit nobody else saw.
     - **★ `offers.onSalePrice` APPLIES IN BOTH CHANNELS**
       (`best` | `skip` | `stack`, default `best` — the only value that cannot
       give away more than intended, which matters because the engine seeks out
@@ -8247,7 +8402,25 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       activity feed. Revisit if the till ever takes a code — that IS a choice.
     - **Plan gating:** `maxActiveOffers` free 3 / Basic+ unlimited, every type
       on every plan. ★ It counts the MERGED pool, since coupons are offers now —
-      counting separately would hand a free store 3 + 3. Gating offers behind
+      counting separately would hand a free store 3 + 3.
+      **★★ AND FOR A WHILE IT DIDN'T.** `assertCanActivateOffer` counted
+      `offers` and `assertCanActivateCoupon` counted `coupons`, under DIFFERENT
+      advisory locks — so a Free store ran three of each and two simultaneous
+      writes could not see one another, while the docblock above claimed the
+      pool was merged. Both gates now delegate to one `assertCanActivateDiscount`
+      under the single `active-discounts` key.
+      **★ A UNION ON `id` IS EXACT, and not by luck:** migration 0059 inserts
+      each offer with `SELECT c.id`, so a migrated coupon and its offer SHARE a
+      primary key. The union counts it once, a coupon that never migrated (a
+      stored code not in normal form) or one written since (Mink Phase 4C still
+      creates `coupons`) counts once, and the same id excludes a row from both
+      halves when one is being edited. Summing two counts would double every
+      migrated coupon — verified against real Postgres: five distinct discounts
+      where the sum reports seven.
+      **★ IT PROBES WITH `to_regclass` FIRST.** DDL is a separate release gate,
+      so this runs in production before 0059 does, and naming a missing table
+      would abort the transaction and take COUPON creation down with it. Before
+      the migration the pool is simply the coupons, exactly as it was. Gating offers behind
       Basic would have removed the three active coupons free stores already
       have, which is invariant 1. `assertCanActivateOffer` takes the same
       per-store advisory lock and counts inside the writing transaction.
@@ -8355,6 +8528,18 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       one differ by three words. A quantity gap arrives as `kind: "units"` like
       a set, so the nudge branches on `rewardType` — "add 2 more and one is
       free" is flatly wrong for a case price.
+      ★★ AND IT WAS PASSED THE WRONG PRICE. The grid handed
+      `regularUnitPrice: priced.base` — the struck-through MRP — where the
+      engine expects the price a line is on sale FROM. Every product with an MRP
+      set therefore read as on sale, and under the default `best` mode the offer
+      was measured against that MRP and scored nothing: no badge across most of
+      a catalogue, present only on products with no MRP, with no error anywhere.
+      `effectivePricing` gained `regularSelling` (the chosen variant's own
+      pre-special price, equal to `selling` when nothing is on sale) because it
+      is the only thing that knows WHICH variant `selling` came from — deriving
+      it at a call site means re-doing the default-variant choice and getting it
+      wrong differently. The call site is guarded in `badge.test.ts` the way
+      `send-coverage.test.ts` guards its own, since an absent badge is invisible.
       ★ `offerBadgeFor` correctly badges NOTHING for a case price (it prices a
       one-unit cart): "15% off when you buy 10" is not a claim about buying one,
       and a card that promised the rung price would be exactly the
@@ -8375,6 +8560,37 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       reward differently, and `types.test.ts` asserts every editor-writable
       field survives the round trip. **A field-by-field copy out of a jsonb
       column is an invitation to forget one, and what you forget is invisible.**
+    - **★★ AND THE SAME SHAPE SAT TWO LINES AWAY, POINTING THE OTHER WAY.**
+      `loadLiveOffers` also wrote the TRIGGER by hand —
+      `type === "min_subtotal" ? "min_subtotal" : "always"` — which was true
+      with two trigger types and silently wrong the moment Phase B added
+      `contains_product`/`contains_category`. Both collapsed to `always`, so
+      `isContentsTrigger` was false, `disqualify` never ran the contents check,
+      and **"10% off your order when it includes a shake" discounted EVERY
+      order in the store**: the qualifying gate for an order-level contents
+      offer simply was not there. Same invisibility as the reward bug — the
+      editor round-tripped it, the DB CHECK stored it, the live summary
+      described it — and the opposite consequence: not an offer that does
+      nothing, but one that applies to everybody. `decodeTrigger` is the
+      matching exhaustive decoder, `types.test.ts` asserts every member of
+      `OFFER_TRIGGERS` survives, and an unknown stored value falls back to
+      `always` deliberately — the WIDEST trigger, which can only make an offer
+      easier to qualify for, never grant one nobody configured. **Extracting a
+      decoder for one enumerated field and leaving its neighbour a ternary
+      fixes half a bug.**
+    - **★★ AND THE VALIDATOR HELD A THIRD COPY, WHICH MADE THREE REWARD TYPES
+      UNSAVEABLE.** `validateForm` (`app/actions/offer-actions.ts`) assembled
+      its own reward object to hand `validateOfferRule` and never listed
+      `giftProductId`, `giftQuantity`, `bundleQuantity`, `bundlePrice` or
+      `creditAmount`. They arrived `undefined`, so the validator's own checks
+      fired on every save: a merchant who HAD chosen a gift product was told
+      "Choose the free gift", and `free_item`, `bundle_price` and `credit_back`
+      — all of Phase G and half of Phase H — could not be created or edited at
+      all. `triggerConfigFor`/`rewardConfigFor` are now the one place a form
+      becomes stored jsonb, and validation runs over
+      `decodeReward(type, rewardConfigFor(form))` — the literal payload the row
+      will carry — so validation and persistence cannot disagree about a reward
+      again.
     - **★★ THE NULL TRAP, A SECOND TIME, IN A DIFFERENT LANGUAGE.** Phase C's
       CHECK needed `coalesce` because a CHECK is SATISFIED by NULL. Phase D's
       rung validation cannot be a CHECK at all — examining every rung needs

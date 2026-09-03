@@ -57,6 +57,10 @@ export function ReturnClient({ sale }: { sale: ReturnableSale }) {
           quantity: l.quantity,
           lineTotal: l.lineTotal,
           taxAmount: l.taxAmount,
+          // The cashier's preview must quote what the server will hand back,
+          // so it subtracts each line's offer share exactly as `processReturn`
+          // does. Omitting it here would show one figure and pay another.
+          offerDiscount: l.offerDiscount,
           alreadyReturned: l.returned,
         })),
         orderDiscount: sale.orderDiscount,

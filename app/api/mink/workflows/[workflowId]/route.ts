@@ -135,13 +135,22 @@ function readAction(value: unknown): "cancel" | "resume" {
     throw new SyntaxError("Workflow request must be a JSON object.");
   }
   const row = value as Record<string, unknown>;
+  // ★★ THE TYPE IS CHECKED BEFORE THE ALLOWLIST, and the value returned is the
+  // one that was checked. This read `String(row.action)`, so `["cancel"]`
+  // stringifies to `"cancel"` and PASSED — and then the raw ARRAY was returned
+  // (the `as` cast hid it), so the dispatcher's `action === "cancel"` was false
+  // because an array is not a string, and the request fell through to RESUME.
+  // A body whose only stated intent was to cancel resumed a run instead. The
+  // strict-key check catches an extra key; it cannot catch a wrong-typed value.
+  const action = row.action;
   if (
     Object.keys(row).length !== 1 ||
-    !["cancel", "resume"].includes(String(row.action))
+    typeof action !== "string" ||
+    !["cancel", "resume"].includes(action)
   ) {
     throw new SyntaxError("Choose cancel or resume.");
   }
-  return row.action as "cancel" | "resume";
+  return action as "cancel" | "resume";
 }
 
 class BodyTooLargeError extends Error {}

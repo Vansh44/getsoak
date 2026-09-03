@@ -678,6 +678,37 @@ export function getSettingDef(key: string): SettingDef | undefined {
   return SETTING_BY_KEY.get(key as SettingKey);
 }
 
+/**
+ * A numeric setting read from a RAW stored value, bounded by its own definition.
+ *
+ * ★★ A REAL 0 IS NOT AN ABSENT VALUE. `offers.maxTotalDiscountPercent` is
+ * declared `min: 0` and documented as "set to 0 to stop offers discounting
+ * anything", so 0 is a deliberate choice — and two readers gated on
+ * `value > 0`, which treats that choice as unset and substitutes the permissive
+ * 50% default. The merchant who locked it down hardest silently got the loosest
+ * behaviour. Exactly the trap CODEBASE.md §22 records for
+ * `pos.maxDiscountPercent`, where `Number(x) || 10` ate a deliberate cap of
+ * zero, and §28 for `products.return_window_days`.
+ *
+ * ★ THE BOUNDS COME FROM THE DEFINITION, not the call site. Every raw reader
+ * had hardcoded its own default, floor and ceiling, so getting one wrong was a
+ * local edit nobody else could see and repricing a default meant finding them
+ * all.
+ *
+ * `resolveStoreSettings` below already validates and clamps everything it
+ * returns; this is for the callers that read `stores.settings.features`
+ * straight out of the jsonb column — inside a transaction, or where a resolved
+ * read would cost a round trip — and therefore have nothing validating for them.
+ */
+export function resolveRawNumberSetting(key: SettingKey, raw: unknown): number {
+  const def = getSettingDef(key);
+  const fallback = typeof def?.defaultValue === "number" ? def.defaultValue : 0;
+  if (typeof raw !== "number" || !Number.isFinite(raw)) return fallback;
+  const min = typeof def?.min === "number" ? def.min : -Infinity;
+  const max = typeof def?.max === "number" ? def.max : Infinity;
+  return Math.min(Math.max(raw, min), max);
+}
+
 /** Resolved values for every setting in the catalog. */
 export type StoreSettingValues = Record<SettingKey, boolean | number | string>;
 

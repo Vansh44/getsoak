@@ -326,6 +326,7 @@ export async function getMinkWorkflow(
       );
     }
     assertActorWorkflowAccess(actor, run.template, run.inputJson);
+    assertActorStillSeesCapturedScope(actor, run.template, run.inputJson);
     const events = includeEvents
       ? await db
           .select()
@@ -464,7 +465,17 @@ export async function resumeMinkWorkflow(
     const now = new Date().toISOString();
     const updated = await db
       .update(minkWorkflowRuns)
-      .set({ status: "queued", runAfter: now, updatedAt: now })
+      .set({
+        status: "queued",
+        // ★ Same reason as `completeIntermediateStep`: a run parked at
+        // `waiting_approval` may already sit at the ceiling, and re-queueing it
+        // there would accept the approval and then never act on it. A human
+        // asking for this to continue is the clearest possible signal that it
+        // should get a fresh budget.
+        attemptCount: 0,
+        runAfter: now,
+        updatedAt: now,
+      })
       .where(ownerPredicate(actor, workflowId))
       .returning();
     await db
@@ -643,6 +654,58 @@ async function revalidateWorkflowAuthority(
           : `${locationIds.length} currently authorized ${locationIds.length === 1 ? "location" : "locations"} (narrowed from ${input.locationIds.length} queued)`,
     };
   });
+}
+
+/**
+ * A finished report is not a capability token either.
+ *
+ * ★★ THE WORKER RE-DERIVES SCOPE; THE READ DID NOT. `revalidateWorkflowAuthority`
+ * narrows a run's captured locations to what the actor may still see before
+ * every background step — but a run that already COMPLETED has its figures
+ * sitting in `result_json`, and `getMinkWorkflow` returned them on nothing more
+ * than owner + permission. So an unrestricted admin could queue a store-wide
+ * trading report, be bound to one location by the owner, reopen the Mink thread
+ * and read store-wide net sales, orders and top products that
+ * `/dashboard/analytics` and the orders list would both now refuse them
+ * (CODEBASE §23). `narrowMinkWorkflowLocationIds` existed and was reachable only
+ * from the worker.
+ *
+ * ★ REFUSED, NOT NARROWED. The numbers were computed ACROSS the captured scope
+ * and cannot be re-cut after the fact; showing a subset of a total is worse than
+ * showing nothing, because it looks like an answer. A fresh request under the
+ * actor's current authority is the honest way to get one.
+ *
+ * ★ THE ACTOR'S OWN `locationIds` IS THE SOURCE, already server-derived by
+ * `getMinkActorContext` — the same value every other permission-aware read
+ * uses — so this costs no query. `null` is the §23 contract for unrestricted.
+ */
+function assertActorStillSeesCapturedScope(
+  actor: MinkActorContext,
+  templateValue: unknown,
+  inputValue: unknown,
+) {
+  if (actor.isSuperadmin) return;
+  const bindings = actor.locationIds;
+  // Unrestricted: null by contract, and an empty array means the same thing —
+  // "no rows = unrestricted" is what `admin_locations` has always meant.
+  if (bindings === null || bindings.length === 0) return;
+  if (!isMinkWorkflowTemplate(templateValue)) return;
+  const input = readWorkflowInput(templateValue, inputValue);
+
+  const allowed = new Set(bindings);
+  // A store-wide run (no captured locations) or one that counted unassigned and
+  // online orders covers ground a location-bound admin may not see at all.
+  const withinScope =
+    input.locationIds.length > 0 &&
+    !input.includeUnassigned &&
+    input.locationIds.every((id) => allowed.has(id));
+  if (!withinScope) {
+    throw new MinkRequestError(
+      "mink_workflow_access_denied",
+      "This result covers locations you no longer have access to. Ask Mink again to get one for your current locations.",
+      403,
+    );
+  }
 }
 
 function hasWorkflowPermissions(
@@ -857,6 +920,21 @@ async function claimWorkflow(
 }
 
 function parseClaimedWorkflow(value: unknown): ClaimedWorkflow | null {
+  // ★★ AN EMPTY QUEUE IS THE STEADY STATE, NOT A MALFORMED ROW. The claim CTE
+  // matches nothing on most heartbeats, so `claimed.rows[0]` is `undefined` —
+  // and `readObject(undefined)` returns `{}`, which fails every guard below and
+  // THREW. `claimWorkflow` is awaited outside the worker's try/catch
+  // (`if (!run) break` is written for exactly this case), so that throw escaped
+  // `runMinkWorkflowWorker` into a route with no catch: the minute cron
+  // answered 500 forever, and because the loop only ever exits by the queue
+  // draining, `deliverPendingWorkflowNotifications` below it was unreachable —
+  // a workflow finished and nobody was ever told.
+  //
+  // ★ NOTHING TO CLAIM and A ROW WE CANNOT TRUST stay different answers: the
+  // first returns null and ends the run quietly, the second still throws, so a
+  // genuinely corrupt row is as loud as it was.
+  if (value === undefined || value === null) return null;
+
   const row = readObject(value);
   const cancelRequestedAt = normalizeTimestamp(row.cancelRequestedAt);
   if (
@@ -1150,6 +1228,26 @@ async function completeIntermediateStep(
       .set({
         status: "queued",
         currentStep: run.currentStep + 1,
+        // ★★ THE RETRY BUDGET IS PER STEP, AND RESETTING IT IS WHAT STOPS A RUN
+        // STRANDING. `claimWorkflow` increments `attempt_count` on EVERY claim
+        // and its candidate predicate is `attempt_count < max_attempts`, so a
+        // shared run-level budget is consumed by ordinary progress as well as
+        // by retries. A step that SUCCEEDS on the last permitted attempt then
+        // re-queued the run at the ceiling: never claimable again, and never
+        // failed either, because `failExpiredExhaustedWorkflows` only looks at
+        // `running`. No result, no notification, no error — the card just polls
+        // `queued` forever.
+        //
+        // ★ THE SCHEMA ALREADY SAID SO. `max_attempts BETWEEN total_steps AND
+        // 20` permits a budget equal to the step count, and at that lower bound
+        // a healthy run spends every attempt just walking its steps — so ONE
+        // retry would strand it. A budget that only works above its own legal
+        // minimum is a per-step budget being accounted per run.
+        //
+        // Terminal failure is unaffected: `scheduleWorkflowRetry` still fails
+        // the run after `max_attempts` consecutive failures ON ONE STEP, which
+        // is the bound that was always meant.
+        attemptCount: 0,
         runAfter: now,
         leaseOwner: null,
         leaseExpiresAt: null,

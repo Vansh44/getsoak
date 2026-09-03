@@ -51,6 +51,7 @@ import {
   type MinkProductActionStatus,
 } from "./product-action-types";
 import type { MinkActorContext } from "./types";
+import { resolveRawNumberSetting } from "@/lib/settings/registry";
 
 const APPROVAL_TTL_MS = 10 * 60 * 1_000;
 const TOOL_VERSION = 1;
@@ -771,12 +772,18 @@ async function readOfferDepthCeiling(db: Db, storeId: string): Promise<number> {
       .limit(1);
     const features = ((rows[0]?.settings as Record<string, unknown> | null)
       ?.features ?? {}) as Record<string, unknown>;
-    const value = features["offers.maxTotalDiscountPercent"];
-    if (typeof value === "number" && value > 0 && value <= 100) return value;
+    // ★ Through the registry, which owns the default, the floor and the
+    // ceiling. Gating on `value > 0` here read a deliberate 0 — "stop offers
+    // discounting anything" — as unset and handed back 50%.
+    return resolveRawNumberSetting(
+      "offers.maxTotalDiscountPercent",
+      features["offers.maxTotalDiscountPercent"],
+    );
   } catch {
-    // Fall through to the default.
+    // An unreadable store falls back to the registry default, not to no
+    // ceiling at all.
+    return resolveRawNumberSetting("offers.maxTotalDiscountPercent", undefined);
   }
-  return 50;
 }
 
 async function deleteCreatedResource(

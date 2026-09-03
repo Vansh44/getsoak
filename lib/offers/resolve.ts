@@ -32,6 +32,7 @@ import { getCurrentStore } from "@/lib/store/resolve";
 import {
   decodeConditions,
   decodeReward,
+  decodeTrigger,
   normalizeOnSalePriceMode,
 } from "./types";
 import type { Offer, OfferChannel } from "./types";
@@ -44,11 +45,6 @@ import { effectivePlan, limitsFor } from "@/lib/plans";
  *  decides which ones win — but still bounded, because a merchant with 500
  *  active offers must not turn one checkout into a 500-row join. */
 const OFFER_FETCH_LIMIT = MAX_EVALUATED_OFFERS * 3;
-
-function num(v: unknown): number | undefined {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : undefined;
-}
 
 /**
  * Every offer that is worth handing to the engine for this store.
@@ -189,7 +185,6 @@ export async function loadLiveOffers(
   const giftStock = await resolveGiftAvailability(db, storeId, rows);
 
   return rows.map((r) => {
-    const trigger = (r.triggerConfig ?? {}) as Record<string, unknown>;
     const reward = (r.rewardConfig ?? {}) as Record<string, unknown>;
     const decoded = decodeConditions(r.conditions);
     const scope = scopeBy.get(r.id);
@@ -217,10 +212,11 @@ export async function loadLiveOffers(
       channels: (r.channels ?? []) as OfferChannel[],
       locationIds: locBy.get(r.id) ?? [],
       groupIds: grpBy.get(r.id) ?? [],
-      trigger: {
-        type: r.triggerType === "min_subtotal" ? "min_subtotal" : "always",
-        minSubtotal: num(trigger.minSubtotal),
-      },
+      // ★ THROUGH THE SHARED DECODER, never a ternary. The hand-written
+      // version here collapsed Phase B's `contains_product`/`contains_category`
+      // to `always`, so a contents-gated offer applied to every cart — see
+      // `decodeTrigger`.
+      trigger: decodeTrigger(r.triggerType, r.triggerConfig),
       conditions: decoded.conditions,
       // ★ Resolved below against `on_hand − reserved`, the same figure a paid
       // line is checked against. `undefined` when this offer gives no gift.

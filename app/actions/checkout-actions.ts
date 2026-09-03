@@ -22,7 +22,9 @@ import type {
   Offer as StorefrontOffer,
   OnSalePriceMode,
 } from "@/lib/offers/types";
+import type { AppliedOffer } from "@/lib/offers/apply";
 import {
+  bonusOffersToReserve,
   loadOffersForStorefront,
   recordOfferRedemptions,
   releaseOfferUses,
@@ -33,6 +35,7 @@ import {
 import { CartItem } from "@/app/(storefront)/components/cart/CartProvider";
 import { computeTax } from "@/lib/billing/tax";
 import { variantEffectiveSelling } from "@/lib/pricing";
+import { toPaise } from "@/lib/money/allocate";
 import type { VariantSellingFields } from "@/lib/pricing";
 import { getLiveStoreGateway, getStoreGateway } from "@/lib/payments/provider";
 import {
@@ -409,6 +412,22 @@ export interface CartTaxRateLine {
   variantId: string | null;
   /** Authoritative per-unit price (from the DB) — the tax base. */
   price: number;
+  /**
+   * The price this line is ON SALE FROM — the variant's `selling_price` when a
+   * `special_price` is charged, otherwise equal to `price`.
+   *
+   * ★★ WITHOUT IT THE CART PRICES EVERY LINE AS NOT-ON-SALE, and `placeOrder`
+   * does not: the engine reads absent-or-equal as "no sale", so under
+   * `offers.onSalePrice = "skip"` the cart applied an offer the charge then
+   * declined and the total went UP at the last step, and under `best` the cart
+   * overstated the saving. Server-side for the same reason `categoryId` is —
+   * `CartItem.price` is the sale price captured at add time and nothing in the
+   * cart records what it was reduced from.
+   *
+   * ⚠ NOT `base_price`: an MRP is a struck-through list price, not a sale
+   * price, and passing it would let `best` discount from a much higher base.
+   */
+  regularUnitPrice: number;
   /** Resolved tax rate as a percentage (0..100). */
   rate: number;
   /** Tax class name, for the per-rate breakdown label. */
@@ -575,6 +594,7 @@ export async function getCartTaxRates(
         productId: l.productId,
         variantId: l.variantId,
         price: 0,
+        regularUnitPrice: 0,
         rate: 0,
         categoryId: null,
       };
@@ -588,6 +608,10 @@ export async function getCartTaxRates(
       productId: l.productId,
       variantId: l.variantId,
       price,
+      // The non-sale price the offer engine measures `onSalePrice` against.
+      // Equal to `price` for a product or an un-discounted variant, which the
+      // engine reads as "not on sale".
+      regularUnitPrice: v ? v.selling_price : p.selling_price,
       rate: cls?.rate ?? 0,
       label: cls?.name,
       categoryId: p.category_id ?? null,
@@ -1231,14 +1255,24 @@ export async function placeOrder(
   // ★ PRICED AND NAMED FROM THE DATABASE, never from the offer row. The offer
   // stores ids; what the line says and what it is worth come from the product
   // itself, exactly as for a paid line.
+  // What the gift is WORTH, for the offer's budget cap only — the ₹0 line
+  // below is what the customer is charged. Resolved here because the engine is
+  // pure and never prices a gift.
+  let giftValuePaise = 0;
+  let giftLineIndex = -1;
   if (offerResult?.gift) {
     const wanted = offerResult.gift;
+    let giftUnitPrice = 0;
     const giftLine = await (async () => {
       const [row] = await withService((db) =>
         db
           .select({
             id: products.id,
             name: products.name,
+            // ★ What the shopper would OTHERWISE have paid, which is what the
+            // gift costs this offer's budget — the same rule the shipping
+            // waiver's `offerWaivedAmount` follows. The LINE is still ₹0.
+            selling_price: products.sellingPrice,
             tax_class_id: products.taxClassId,
             category_id: products.categoryId,
             sku: products.sku,
@@ -1268,7 +1302,12 @@ export async function placeOrder(
       if (wanted.variantId) {
         const [variant] = await withService((db) =>
           db
-            .select({ id: productVariants.id, name: productVariants.name })
+            .select({
+              id: productVariants.id,
+              name: productVariants.name,
+              selling_price: productVariants.sellingPrice,
+              special_price: productVariants.specialPrice,
+            })
             .from(productVariants)
             .where(
               and(
@@ -1280,6 +1319,7 @@ export async function placeOrder(
         );
         if (!variant) return null;
         variantName = variant.name;
+        giftUnitPrice = variantEffectiveSelling(variant);
       }
 
       // ★★ A ₹0 LINE IS NOT A ZERO-TAX LINE, and the class is recorded even
@@ -1293,6 +1333,7 @@ export async function placeOrder(
       // ⚠ THE TREATMENT ITSELF IS NOT PROFESSIONALLY REVIEWED — the §25/§28
       // posture: the fields are right, get a CA to confirm before anyone
       // files against it. The Help guide says so to the merchant.
+      if (!wanted.variantId) giftUnitPrice = row.selling_price;
       const taxInfo = resolveTax(row);
       return {
         product_id: row.id,
@@ -1323,7 +1364,9 @@ export async function placeOrder(
     })();
 
     if (giftLine) {
+      giftLineIndex = validItems.length;
       validItems.push(giftLine);
+      giftValuePaise = toPaise(giftUnitPrice * giftLine.quantity);
     } else {
       // The gift vanished between the offer resolution and here. The order is
       // fine without it; silently dropping the gift is far better than
@@ -1481,12 +1524,54 @@ export async function placeOrder(
   // customer, so it fails open at the priced total — the trade
   // `increment_coupon_usage` already makes.
   let reservedOffers: ReservedOffer[] = [];
+  // ★ EXACTLY WHAT WAS CLAIMED, carried to `recordOfferRedemptions` so the
+  // ledger and the caps describe the same set. Re-deriving it there is what
+  // left every gift, cashback and shipping redemption unrecorded.
+  const redeemedOffers: AppliedOffer[] = [];
   if (offerResult && offerResult.applied.length > 0) {
     const claim = await reserveOfferUses(storeId, offerResult.applied, user.id);
     reservedOffers = claim.reserved;
     if (!claim.ok) {
       await releaseOfferUses(storeId, reservedOffers);
       return { error: claim.error ?? "That offer is no longer available." };
+    }
+    redeemedOffers.push(...offerResult.applied);
+  }
+
+  // ★★ A GIFT OR CASHBACK CAP DROPS THE EXTRA; IT NEVER REFUSES THE SALE.
+  // These caps are MEANT to be reached — "a free tumbler with the first 100
+  // orders" hits its limit on order 101 by design. Treating that like a
+  // merchandise cap would stop the shop selling anything at all until somebody
+  // noticed and disabled the offer, which is far worse than the bug this
+  // reservation exists to fix. It is the rule the gift block above already
+  // follows when the product has vanished: never refuse a paying customer over
+  // a free extra.
+  const bonuses = offerResult
+    ? bonusOffersToReserve(offerResult, giftValuePaise)
+    : [];
+  for (const bonus of bonuses) {
+    const claim = await reserveOfferUses(storeId, [bonus], user.id);
+    reservedOffers = [...reservedOffers, ...claim.reserved];
+    if (claim.ok) {
+      redeemedOffers.push(bonus);
+      continue;
+    }
+    // Withdrawn, not charged for: the line is dropped from the order and the
+    // credit is never issued.
+    if (bonus.level === "gift") {
+      // ★ THE EXACT INDEX RECORDED WHEN THE LINE WAS APPENDED, never a
+      // search. Matching on "this product at ₹0" would also match a genuinely
+      // free paid line, and removing the wrong element would silently shift
+      // `offerDiscounts` out of step with its lines.
+      if (giftLineIndex >= 0) {
+        validItems.splice(giftLineIndex, 1);
+        offerDiscounts.splice(giftLineIndex, 1);
+      }
+      offerResult = offerResult ? { ...offerResult, gift: null } : offerResult;
+    } else {
+      offerResult = offerResult
+        ? { ...offerResult, credit: null }
+        : offerResult;
     }
   }
 
@@ -1675,18 +1760,17 @@ export async function placeOrder(
       // specifically waived, as opposed to what the store's own standing
       // free-above threshold was already giving away.
       const waived = selectedRate.offerWaivedAmount ?? 0;
+      const shippingRedemption: AppliedOffer = {
+        offerId: offerResult.shipping.offerId,
+        offerName: offerResult.shipping.offerName,
+        code: offerResult.shipping.code,
+        rewardType: "free_shipping",
+        level: "shipping",
+        amount: Math.max(0, waived),
+      };
       const claim = await reserveOfferUses(
         storeId,
-        [
-          {
-            offerId: offerResult.shipping.offerId,
-            offerName: offerResult.shipping.offerName,
-            code: offerResult.shipping.code,
-            rewardType: "free_shipping",
-            level: "shipping",
-            amount: Math.max(0, waived),
-          },
-        ],
+        [shippingRedemption],
         user.id,
       );
       reservedOffers = [...reservedOffers, ...claim.reserved];
@@ -1694,6 +1778,10 @@ export async function placeOrder(
         await releaseDiscounts();
         return { error: claim.error ?? "That offer is no longer available." };
       }
+      // ★ RECORDED, not only reserved. `max_per_customer` is counted from
+      // `offer_redemptions`, so a waiver that moved `redemption_count` without
+      // writing a row left the per-customer cap unable to bind at all.
+      redeemedOffers.push(shippingRedemption);
     }
   }
   total = Math.max(
@@ -2056,12 +2144,16 @@ export async function placeOrder(
   // failing the sale at this point would take the money and then tell the
   // shopper it did not work. Idempotent on (offer, order) and
   // (order_item, offer), so a retry cannot double-count a redemption.
-  if (offerResult && offerResult.applied.length > 0) {
+  if (
+    offerResult &&
+    (offerResult.allocations.length > 0 || redeemedOffers.length > 0)
+  ) {
     await recordOfferRedemptions({
       storeId,
       orderId: order.id,
       customerId: user.id,
       result: offerResult,
+      redeemed: redeemedOffers,
       orderItemIdByLine: new Map(
         validItems.map((_, idx) => [String(idx), orderItemIds[idx]]),
       ),

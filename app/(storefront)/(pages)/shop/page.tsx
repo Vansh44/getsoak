@@ -85,9 +85,14 @@ export default async function ShopPage({
           categoryId:
             (p as { category_id?: string | null }).category_id ?? null,
           unitPrice: priced.selling,
-          // The struck-through price IS the regular one when a sale is on, so
-          // `onSalePrice` reads the same here as it does in the cart.
-          regularUnitPrice: priced.base > priced.selling ? priced.base : null,
+          // ★★ THE PRICE IT IS ON SALE FROM, NOT THE MRP. This passed
+          // `priced.base`, the struck-through list price — so every product
+          // with an MRP set read as on sale, and under the default `best` mode
+          // the offer was measured against that MRP and scored nothing. The
+          // badge was therefore absent on most of a catalogue and present only
+          // on products with no MRP. `regularSelling` is the variant's own
+          // pre-special price, which is what `placeOrder` passes.
+          regularUnitPrice: priced.regularSelling,
         },
         offerBundle.offers,
         offerBundle.policy,
