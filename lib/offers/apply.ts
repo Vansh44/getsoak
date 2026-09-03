@@ -182,6 +182,7 @@ export type SkipReason =
   | "not_first_order"
   | "outside_time_window"
   | "conditions_unreadable"
+  | "gift_unavailable"
   | "no_eligible_lines"
   | "beyond_candidate_cap"
   | "outscored";
@@ -199,7 +200,66 @@ export interface AppliedOffer {
   offerName: string;
   code: string | null;
   rewardType: OfferRewardType;
-  level: "order" | "line";
+  level: "order" | "line" | "shipping" | "gift" | "credit";
+  amount: number;
+}
+
+/**
+ * The shipping outcome, when an offer waives delivery.
+ *
+ * ★★ SEPARATE FROM `applied` ON PURPOSE. `applied` feeds `order_item_offers`,
+ * the per-line allocation, the receipt and the invoice — all of which describe
+ * MERCHANDISE. Folding a shipping waiver in there would put an offer on a line
+ * it did not discount, and `discount` (the Σ of line allocations) would either
+ * have to exclude it as a special case or overstate the merchandise discount.
+ *
+ * ★ `amount` IS 0 HERE AND FILLED IN BY THE CALLER. The engine is pure and
+ * never sees a carrier quote, so what the waiver is WORTH is knowable only
+ * after shipping is priced — which is why `placeOrder` rewrites it before
+ * reserving, so the offer's budget and spend reflect real money.
+ */
+/**
+ * A gift the order has earned.
+ *
+ * ★★ THE ENGINE NAMES IT; THE CALLER PRICES AND RESERVES IT. A gift is stock
+ * leaving the shelf (plan §12), so it goes through the SAME reservation as any
+ * paid line — `reserve_stock_at` online, the register's own location at the
+ * till. Without that the offer oversells silently AND advertises itself doing
+ * so: ten tumblers, fifty qualifying orders, fifty confirmation emails
+ * promising a tumbler, forty apologies, and a stock count that is simply wrong
+ * because nothing told inventory those units were promised.
+ */
+/**
+ * Store credit this order earns.
+ *
+ * ★★ NOT A DISCOUNT, AND KEPT OUT OF EVERY MONEY TOTAL (plan §14). Credit is a
+ * PAYMENT in this system (§29), so netting cashback off `orders.total` would
+ * understate the sale, mis-compute GST on it, and make the invoice disagree
+ * with what was charged. It is a marketing reward with a liability attached,
+ * issued through the ordinary credit ledger AFTER the order commits.
+ */
+export interface CreditOffer {
+  offerId: string;
+  offerName: string;
+  code: string | null;
+  /** Rupees of store credit to issue. */
+  amount: number;
+}
+
+export interface GiftOffer {
+  offerId: string;
+  offerName: string;
+  code: string | null;
+  productId: string;
+  variantId: string | null;
+  quantity: number;
+}
+
+export interface ShippingOffer {
+  offerId: string;
+  offerName: string;
+  code: string | null;
+  /** What the waiver was worth. 0 until the caller prices shipping. */
   amount: number;
 }
 
@@ -252,6 +312,23 @@ export interface OfferResult {
   /** Offers the cart ALMOST qualifies for. Sorted nearest-first; the UI shows
    *  one (plan §14b). */
   nearMiss: NearMissOffer[];
+  /**
+   * The offer waiving delivery, or null.
+   *
+   * ★ NOT PART OF `discount`. A waiver reduces the SHIPPING charge, not the
+   * merchandise total, so adding it to `discount` would misstate the tax base,
+   * the per-line allocation and every refund computed from them.
+   */
+  shipping: ShippingOffer | null;
+  /**
+   * The gift this order has earned, or null.
+   *
+   * ★ NOT A DISCOUNT, so it is not in `discount` or `allocations` either. The
+   * caller adds it as a real ₹0 line and reserves its stock.
+   */
+  gift: GiftOffer | null;
+  /** Store credit this order earns, or null. Never part of `discount`. */
+  credit: CreditOffer | null;
   /** ★ What the engine chose AND what it rejected. This is what makes "why
    *  did this customer get X and not Y" answerable at a counter, and what
    *  lets a test assert the DECISION rather than only the final number. */
@@ -582,6 +659,9 @@ function claimGroupOffer(
   if (offer.reward.type === "volume_break") {
     return claimVolumeOffer(priced, offer, mode, excluded);
   }
+  if (offer.reward.type === "bundle_price") {
+    return claimBundleOffer(priced, offer, mode, excluded);
+  }
   const claim = emptyClaim(priced.length);
   const buy = Math.trunc(offer.reward.buyQuantity ?? 0);
   const get = Math.trunc(offer.reward.getQuantity ?? 0);
@@ -807,6 +887,95 @@ function claimVolumeOffer(
 }
 
 /**
+ * "Any 3 tees for ₹999" — N units from the scope at a fixed total.
+ *
+ * ★★ THE DEAREST UNITS GO INTO THE BUNDLE, and that is not a preference. Take
+ * a scope holding ₹500, ₹400, ₹300 and ₹200 with "any 3 for ₹999": bundling
+ * the three DEAREST charges ₹999 for ₹1,200 of goods and leaves the ₹200 at
+ * full price — ₹1,199 in total. Bundling the three CHEAPEST would charge ₹999
+ * for ₹900 of goods, a MARK-UP, on an offer advertised as a saving. So
+ * dearest-first is simultaneously the customer-favourable reading and the only
+ * one that cannot invert the offer's meaning. It is the opposite of
+ * `buy_x_get_y`, where the CHEAPEST units are the free ones — and for the same
+ * underlying reason in both cases: give away the most.
+ *
+ * ★ A BUNDLE NEVER MARKS UP. If the chosen units are worth less than the
+ * bundle price the set is skipped, the `fixed_price` rule generalised: an
+ * offer may not make an item more expensive than it already was.
+ *
+ * ★ ONE PRICE ACROSS SEVERAL LINES, so the saving is allocated with the shared
+ * paise allocator — the same one `refundBreakdown` uses to undo it, which is
+ * what stops a returned bundle item coming back a paisa short.
+ */
+function claimBundleOffer(
+  priced: readonly PricedLine[],
+  offer: Offer,
+  mode: OnSalePriceMode,
+  excluded: readonly (string | null)[],
+): Claim {
+  const claim = emptyClaim(priced.length);
+  const size = Math.trunc(offer.reward.bundleQuantity ?? 0);
+  const pricePaise = toPaise(offer.reward.bundlePrice ?? 0);
+  if (size < 2 || pricePaise <= 0) return claim;
+
+  const units: { index: number; unitPaise: number }[] = [];
+  for (const pl of priced) {
+    if (!lineEligible(pl, mode)) continue;
+    if (excluded[pl.index] !== null) continue;
+    if (!offerCoversLine(offer, pl)) continue;
+    const qty = Math.max(0, Math.trunc(Number(pl.line.quantity) || 0));
+    if (qty <= 0) continue;
+    const unitPaise = Math.floor(pl.netPaise / qty);
+    for (let i = 0; i < qty; i += 1) units.push({ index: pl.index, unitPaise });
+  }
+  if (units.length < size) return claim;
+
+  // Dearest first, ties by line index so the outcome is reproducible.
+  const order = [...units].sort(
+    (a, b) => b.unitPaise - a.unitPaise || a.index - b.index,
+  );
+
+  let sets = Math.floor(order.length / size);
+  const cap = offer.reward.maxSets;
+  if (typeof cap === "number" && Number.isFinite(cap)) {
+    sets = Math.min(sets, Math.max(0, Math.trunc(cap)));
+  }
+  if (sets < 1) return claim;
+
+  const budget = budgetCapPaise(offer);
+  let spent = 0;
+
+  for (let setIndex = 0; setIndex < sets; setIndex += 1) {
+    const chosen = order.slice(setIndex * size, setIndex * size + size);
+    const worth = chosen.reduce((sum, u) => sum + u.unitPaise, 0);
+    // A set worth no more than the bundle price would be a mark-up.
+    if (worth <= pricePaise) continue;
+
+    const saving = Math.min(worth - pricePaise, Math.max(0, budget - spent));
+    if (saving <= 0) continue;
+
+    // Allocated across the units in the set in proportion to their price.
+    const shares = allocateProportional(
+      chosen.map((u) => u.unitPaise),
+      saving,
+    );
+    chosen.forEach((u, i) => {
+      const room = Math.min(
+        shares[i],
+        Math.max(0, priced[u.index].netPaise - claim.byLine[u.index]),
+      );
+      if (room <= 0) return;
+      claim.byLine[u.index] += room;
+      claim.offerByLine[u.index] = offer.id;
+      claim.total += room;
+      spent += room;
+    });
+  }
+
+  return claim;
+}
+
+/**
  * An order-level offer claiming a set of lines.
  *
  * A percentage is applied per line (separable). A fixed amount is NOT
@@ -959,6 +1128,14 @@ export function applyOffers({
       )
       .slice(0, NEAR_MISS_LIMIT);
 
+  // ★ RESOLVED SEPARATELY AND CARRIED INTO EVERY RETURN PATH, including the
+  // empty one. A cart whose merchandise offers all fail — or which qualifies
+  // for nothing but free delivery — must still get its free delivery, so the
+  // waiver cannot live inside the merchandise scenario comparison.
+  let shipping: ShippingOffer | null = null;
+  let gift: GiftOffer | null = null;
+  let credit: CreditOffer | null = null;
+
   const empty = (): OfferResult => ({
     subtotal: toRupees(subtotalPaise),
     lines: priced.map((pl) => ({ id: pl.id, offerDiscount: 0 })),
@@ -969,6 +1146,9 @@ export function applyOffers({
     scenario: { chosen: null, scores: [] },
     skipped,
     cappedByCeiling: false,
+    shipping,
+    gift,
+    credit,
   });
 
   if (priced.length === 0 || subtotalPaise <= 0) return empty();
@@ -1022,6 +1202,84 @@ export function applyOffers({
   const orderCandidates = candidates.filter(
     (o) => rewardLevel(o.reward.type) === "order",
   );
+
+  // ★★ SHIPPING IS DECIDED HERE, OUTSIDE THE SCENARIO COMPARISON. A shopper
+  // must not lose free delivery because a category discount scored higher —
+  // they are different pockets of the bill (plan §14). Every eligible shipping
+  // offer waives delivery identically, so the FIRST in candidate order wins:
+  // priority, then age, then id. There is nothing to compare on value, because
+  // the engine never sees a carrier quote.
+  //
+  // ⚠ `candidates` is the post-cap list, so a shipping offer beyond
+  // `MAX_EVALUATED_OFFERS` is skipped like any other — recorded, not silent.
+  const shippingOffer = candidates.find(
+    (o) => rewardLevel(o.reward.type) === "shipping",
+  );
+  if (shippingOffer) {
+    shipping = {
+      offerId: shippingOffer.id,
+      offerName: shippingOffer.name,
+      code: shippingOffer.code,
+      // ★ Zero until the caller prices shipping: the engine is pure and has no
+      // carrier quote, so what this is WORTH is not knowable here.
+      amount: 0,
+    };
+  }
+  for (const other of candidates) {
+    if (rewardLevel(other.reward.type) !== "shipping") continue;
+    if (other.id === shippingOffer?.id) continue;
+    skipped.push({ offerId: other.id, reason: "outscored" });
+  }
+
+  // ★★ THE GIFT AXIS. Like shipping it is chosen independently — a shopper
+  // must not lose their free tumbler because a percentage offer scored higher —
+  // but for a stronger reason: a gift is not a discount at all, so there is
+  // nothing to compare it against. One gift per order: two would need a rule
+  // for which comes first and a merchant could not predict it, and each one is
+  // real stock going out of the door.
+  //
+  // ★ `giftAvailable === false` DISQUALIFIED IT EARLIER, so anything reaching
+  // here has stock. The engine must stop OFFERING a gift it cannot deliver
+  // rather than promising it and failing at reserve time (plan §12).
+  const giftOffer = candidates.find(
+    (o) => rewardLevel(o.reward.type) === "gift",
+  );
+  if (giftOffer?.reward.giftProductId) {
+    gift = {
+      offerId: giftOffer.id,
+      offerName: giftOffer.name,
+      code: giftOffer.code,
+      productId: giftOffer.reward.giftProductId,
+      variantId: giftOffer.reward.giftVariantId ?? null,
+      quantity: Math.max(1, Math.trunc(giftOffer.reward.giftQuantity ?? 1)),
+    };
+  }
+  for (const other of candidates) {
+    if (rewardLevel(other.reward.type) !== "gift") continue;
+    if (other.id === giftOffer?.id) continue;
+    skipped.push({ offerId: other.id, reason: "outscored" });
+  }
+
+  // ★ THE CREDIT AXIS. Cashback changes no money on this order, so there is
+  // nothing to compare it against and nothing for it to lose to. One per
+  // order, by candidate order, because two would be a liability a merchant did
+  // not intend and could not predict the size of.
+  const creditOffer = candidates.find(
+    (o) => rewardLevel(o.reward.type) === "credit",
+  );
+  if (creditOffer && (creditOffer.reward.creditAmount ?? 0) > 0) {
+    credit = {
+      offerId: creditOffer.id,
+      offerName: creditOffer.name,
+      code: creditOffer.code,
+      amount: creditOffer.reward.creditAmount as number,
+    };
+  }
+  for (const other of candidates) {
+    if (rewardLevel(other.reward.type) !== "credit") continue;
+    if (other.id === creditOffer?.id) continue;
+    skipped.push({ offerId: other.id, reason: "outscored" });
+  }
 
   // 2. The per-order depth ceiling. Applied INSIDE scoring, so scenarios are
   //    compared on what they can actually deliver rather than on a headline
@@ -1133,6 +1391,14 @@ export function applyOffers({
   });
 
   for (const o of candidates) {
+    // ★ A SHIPPING OFFER IS NOT "OUTSCORED" BY A MERCHANDISE ONE. It never
+    // entered the comparison — it won its own axis, or lost to another
+    // shipping offer above. Marking it here would tell an operator the wrong
+    // reason on the one screen that answers "why didn't my offer apply?".
+    const level = rewardLevel(o.reward.type);
+    if (level === "shipping" || level === "gift" || level === "credit") {
+      continue;
+    }
     if (!perOffer.has(o.id))
       skipped.push({ offerId: o.id, reason: "outscored" });
   }
@@ -1159,6 +1425,9 @@ export function applyOffers({
     },
     skipped,
     cappedByCeiling,
+    shipping,
+    gift,
+    credit,
   };
 }
 
@@ -1261,6 +1530,21 @@ function disqualify(
     if (!activeBreak(offer, scopedUnits(offer, priced, mode))) {
       return "trigger_unmet";
     }
+  }
+
+  // ★★ STOP OFFERING A GIFT THAT IS NOT THERE. Promising it and failing at
+  // reserve time is the worst outcome available: the shopper has been told
+  // they are getting a tumbler, and the failure arrives after they commit.
+  // `giftAvailable` is resolved by the loader against `on_hand − reserved`,
+  // the same figure any paid line is checked against.
+  //
+  // ★ AND A GIFT WITH NO PRODUCT IS REFUSED, not silently ignored. That row
+  // can only come from a direct write — the editor and the database both
+  // require one — and running it as "no gift" would make the offer look like
+  // it applied while handing over nothing.
+  if (offer.reward.type === "free_item") {
+    if (!offer.reward.giftProductId) return "gift_unavailable";
+    if (offer.giftAvailable === false) return "gift_unavailable";
   }
 
   if (offer.trigger.type === "min_subtotal") {

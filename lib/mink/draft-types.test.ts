@@ -29,6 +29,13 @@ describe("Mink draft contracts", () => {
       bulk_inventory_adjustment: 5,
       order_status_transition: 1,
       bulk_price_update: 5,
+      offer_create: 1,
+      offer_update: 1,
+      // ★ ZERO. Activation writes one boolean, and the proposal it switches on
+      // has already been charged for — billing again would bill the merchant
+      // twice for one piece of work. It is a separate APPROVAL, not a separate
+      // piece of drafting.
+      offer_activate: 0,
     });
   });
 

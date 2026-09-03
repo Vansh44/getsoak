@@ -57,6 +57,12 @@ const DRAFT_PERMISSION: Record<
   bulk_inventory_adjustment: { section: "inventory", action: "manage" },
   order_status_transition: { section: "orders", action: "manage" },
   bulk_price_update: { section: "products", action: "manage" },
+  // ★ The `promotions` section, which is where offers live. It kept that key
+  // when the coupons page folded into Offers, so a role already granted
+  // promotions covers this with no re-grant (CODEBASE §38).
+  offer_create: { section: "promotions", action: "manage" },
+  offer_update: { section: "promotions", action: "manage" },
+  offer_activate: { section: "promotions", action: "manage" },
 };
 
 export interface MinkDraftState {

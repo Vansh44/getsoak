@@ -3877,11 +3877,92 @@ Enter a new customer's number: **expect** the total to drop by 10% at that
 point, and the charge to match it exactly. The quote and the sale must never
 disagree.
 
+**PS-OF.31 ★★ — Free delivery applies ALONGSIDE a discount**
+Create "20% off everything" and "free delivery over ₹500", both website. Fill a
+₹600 cart. **Expect:** 20% off AND free delivery. They are different pockets of
+the bill; a shopper must not lose delivery because a discount scored higher.
+
+**PS-OF.32 ★★ — An offer only ever LOWERS the delivery charge**
+Set your delivery settings to free above ₹999, then run "free delivery over
+₹500". A ₹600 cart: free. A ₹1,200 cart: free. **Expect:** never a charge that
+appears when the basket grows. Then check the offer's budget after each: the
+₹600 order consumed the delivery amount, the ₹1,200 order consumed **nothing**,
+because the standing policy was already shipping it free.
+
+**PS-OF.33 — Free delivery cannot be saved for the register**
+Try to save a free-delivery offer with the POS channel, or with no channel set
+at all. **Expect:** refused, naming the website. A register sale has nothing to
+deliver.
+
+**PS-OF.34 ★★ — A free gift is real stock**
+Create "free tumbler over ₹2,000" and place a qualifying order. **Expect:** the
+tumbler appears on the order, the invoice, the receipt and the confirmation
+email at ₹0, AND its stock drops by one. Check inventory: the unit is recorded as
+having left the shelf, exactly as if it had been sold.
+
+**PS-OF.35 ★★ — The offer withdraws itself when the gift runs out**
+Reduce the gift's stock to zero, then place a qualifying order. **Expect:** no
+gift promised anywhere — not on the cart, not in the confirmation. It must never
+be offered and then fail. Restock it: the offer resumes with no action.
+
+**PS-OF.36 ★★ — The till TELLS the cashier to hand the gift over**
+Ring a qualifying sale at the register. **Expect:** a "Hand over [gift]" row in
+the cart panel, and no change to any total. That row is the whole point: the
+gift is free, so nothing else on screen moves, and without it the shop gives
+away the stock on paper and nothing in the bag.
+
+**PS-OF.37 — One gift per order**
+Run two gift offers that both qualify. **Expect:** one gift, and the other
+offer recorded as skipped. Each is real stock going out of the door.
+
+**PS-OF.38 ★★ — A bundle takes the DEAREST items and never marks up**
+Create "any 3 for ₹999" over a category, and put ₹500, ₹400, ₹300 and ₹200 items
+in the cart. **Expect:** ₹201 off (the three dearest, ₹1,200, priced at ₹999) and
+the ₹200 item untouched. Then try four ₹100 items: **expect no discount at all**
+— ₹300 of goods must never be charged at ₹999.
+
+**PS-OF.39 — Cashback does not change what is paid**
+Create "₹100 store credit on orders over ₹2,000" and place a ₹2,500 order.
+**Expect:** the customer pays ₹2,500 exactly — the total, tax and invoice are
+untouched — and ₹100 appears in their store credit afterwards. Check the credit
+history: it is listed as cashback, distinct from a refund and from credit granted
+by hand.
+
+**PS-OF.40 ★★ — Mink creates an offer switched OFF**
+With the Mink offer gates on, ask Mink to draft an offer and approve it.
+**Expect:** the offer exists and is **paused**. Switching it on is a second,
+separate approval with its own preview. One approval must never do both.
+
+**PS-OF.41 ★★ — Mink cannot propose an offer without a budget**
+Ask Mink for an offer with no spending cap. **Expect:** refused. Then create one
+with a budget, clear the budget by hand, and ask Mink to switch it on:
+**expect refused again**. The cap is checked at activation as well as creation,
+because an offer that lost its budget in between would otherwise go live
+uncapped.
+
+**PS-OF.42 — Mink cannot exceed your own discount limit**
+Set the store's maximum discount per order to 20%, then ask Mink for 50% off.
+**Expect:** refused, naming your limit. Lower the limit to 10% after a proposal
+is written but before approving it: **expect the approval to be refused too** —
+the limit is read at the moment of approval, not when the proposal was made.
+
+**PS-OF.43 — Mink's reward shapes are deliberately limited**
+Ask Mink for a bundle, a free gift, a spending ladder or free delivery.
+**Expect:** it says those are set up by hand. They change stock, money owed or
+delivery cost in ways one approval screen cannot show honestly.
+
 ---
 
 ## 12. Known gaps
 
 Real and deliberate, so nobody files them as bugs:
+
+**A gift line's offer discount is not covered by a test.** `placeOrder` must
+append the gift before `offerDiscounts` is sized, or the gift's entry is
+`undefined` and the order fails to save with only "Failed to save order items"
+to show for it. The ordering is correct in both counters and is guarded by a
+comment; `makeDbMock` serves reads positionally and cannot place a gift row for
+`placeOrder` to find, so exercising PS-OF.34 by hand is the only current check.
 
 | Gap                                                                     | Status                                                                                                                                                                                                                                                                                                                                                                                                         |
 | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

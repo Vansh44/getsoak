@@ -27,6 +27,10 @@ const inr = (n: number) =>
  *  which is the merchant's reference ("Launch week Q3") and means nothing to a
  *  customer. */
 function rewardPhrase(offer: NearMissOffer): string {
+  // ★ THE MAIN USE OF THIS NUDGE (plan §14b). "Add ₹200 more to get a
+  // discount" is what the generic fallback would say for a free-delivery
+  // offer, and it is the one reward where naming it is the entire persuasion.
+  if (offer.rewardType === "free_shipping") return "free delivery";
   if (offer.amount && !offer.percent) return `${inr(offer.amount)} off`;
   if (offer.percent) return `${offer.percent}% off`;
   return "a discount";

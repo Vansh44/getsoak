@@ -92,6 +92,15 @@ export interface OfferFormData {
   tiers: { minSubtotal: number; value: number }[];
   /** `volume_break`: the quantity ladder. Highest qualifying rung wins. */
   breaks: { minQuantity: number; percent: number }[];
+  /** `free_item`: which product is given, and how many. */
+  giftProductId: string;
+  giftVariantId: string | null;
+  giftQuantity: number;
+  /** `bundle_price`: how many make a bundle, and what it costs. */
+  bundleQuantity: number;
+  bundlePrice: number;
+  /** `credit_back`: rupees of store credit. */
+  creditAmount: number;
   /** Extra requirements, ALL of which must hold. Empty = none. */
   conditions: OfferCondition[];
   /** Empty = every channel. */
@@ -131,6 +140,12 @@ export interface OfferRow {
   tierMode: "percent" | "amount";
   tiers: { minSubtotal: number; value: number }[];
   breaks: { minQuantity: number; percent: number }[];
+  giftProductId: string | null;
+  giftVariantId: string | null;
+  giftQuantity: number | null;
+  bundleQuantity: number | null;
+  bundlePrice: number | null;
+  creditAmount: number | null;
   conditions: OfferCondition[];
   channels: OfferChannel[];
   validFrom: string | null;
@@ -214,6 +229,7 @@ function validateForm(form: OfferFormData): string | null {
   const conditionIssues = validateOfferConditions(
     decodeConditions(form.conditions ?? []).conditions,
     form.channels ?? [],
+    form.rewardType,
   );
   if (conditionIssues.length > 0) return conditionIssues[0].message;
 
@@ -301,37 +317,55 @@ function buildRow(form: OfferFormData, userId: string, creating: boolean) {
         : {},
     rewardType: form.rewardType,
     rewardConfig:
-      form.rewardType === "tiered"
+      form.rewardType === "bundle_price"
         ? {
-            tierMode: form.tierMode === "amount" ? "amount" : "percent",
-            // Stored ordered and de-duplicated, so what the engine reads is
-            // what the editor's own preview showed.
-            tiers: sortedTiers(form.tiers ?? []).map((t) => ({
-              minSubtotal: Number(t.minSubtotal),
-              value: Number(t.value),
-            })),
+            bundleQuantity: Math.trunc(form.bundleQuantity) || 0,
+            bundlePrice: Number(form.bundlePrice),
+            ...(form.maxSets > 0 ? { maxSets: Number(form.maxSets) } : {}),
           }
-        : form.rewardType === "volume_break"
-          ? {
-              breaks: sortedBreaks(form.breaks ?? []).map((b) => ({
-                minQuantity: Math.trunc(Number(b.minQuantity)),
-                percent: Number(b.percent),
-              })),
-            }
-          : form.rewardType === "amount_off"
-            ? { amount: Number(form.amount) }
-            : form.rewardType === "fixed_price"
-              ? { unitPrice: Number(form.unitPrice) }
-              : form.rewardType === "buy_x_get_y"
+        : form.rewardType === "credit_back"
+          ? { creditAmount: Number(form.creditAmount) }
+          : form.rewardType === "free_shipping"
+            ? {}
+            : form.rewardType === "free_item"
+              ? {
+                  giftProductId: form.giftProductId,
+                  ...(form.giftVariantId
+                    ? { giftVariantId: form.giftVariantId }
+                    : {}),
+                  giftQuantity: Math.max(1, Math.trunc(form.giftQuantity) || 1),
+                }
+              : form.rewardType === "tiered"
                 ? {
-                    buyQuantity: Number(form.buyQuantity),
-                    getQuantity: Number(form.getQuantity),
-                    getPercent: Number(form.getPercent) || 100,
-                    ...(form.maxSets > 0
-                      ? { maxSets: Number(form.maxSets) }
-                      : {}),
+                    tierMode: form.tierMode === "amount" ? "amount" : "percent",
+                    // Stored ordered and de-duplicated, so what the engine reads is
+                    // what the editor's own preview showed.
+                    tiers: sortedTiers(form.tiers ?? []).map((t) => ({
+                      minSubtotal: Number(t.minSubtotal),
+                      value: Number(t.value),
+                    })),
                   }
-                : { percent: Number(form.percent) },
+                : form.rewardType === "volume_break"
+                  ? {
+                      breaks: sortedBreaks(form.breaks ?? []).map((b) => ({
+                        minQuantity: Math.trunc(Number(b.minQuantity)),
+                        percent: Number(b.percent),
+                      })),
+                    }
+                  : form.rewardType === "amount_off"
+                    ? { amount: Number(form.amount) }
+                    : form.rewardType === "fixed_price"
+                      ? { unitPrice: Number(form.unitPrice) }
+                      : form.rewardType === "buy_x_get_y"
+                        ? {
+                            buyQuantity: Number(form.buyQuantity),
+                            getQuantity: Number(form.getQuantity),
+                            getPercent: Number(form.getPercent) || 100,
+                            ...(form.maxSets > 0
+                              ? { maxSets: Number(form.maxSets) }
+                              : {}),
+                          }
+                        : { percent: Number(form.percent) },
     // Normalised through the decoder on the way IN as well, so a stray field
     // from an older client cannot reach the column.
     conditions: decodeConditions(form.conditions ?? []).conditions,
@@ -642,6 +676,12 @@ function mapRow(row: typeof offers.$inferSelect): OfferRow {
     // ★ Through the same decoder the engine uses, so the editor cannot show a
     // condition the engine reads differently — or, worse, show none where the
     // engine sees one it cannot parse and refuses the offer for.
+    giftProductId: decoded.giftProductId ?? null,
+    giftVariantId: decoded.giftVariantId ?? null,
+    giftQuantity: decoded.giftQuantity ?? null,
+    bundleQuantity: decoded.bundleQuantity ?? null,
+    bundlePrice: decoded.bundlePrice ?? null,
+    creditAmount: decoded.creditAmount ?? null,
     conditions: decodeConditions(row.conditions).conditions,
     channels: (row.channels ?? []) as OfferChannel[],
     validFrom: row.validFrom,

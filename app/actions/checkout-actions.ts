@@ -37,6 +37,7 @@ import type { VariantSellingFields } from "@/lib/pricing";
 import { getLiveStoreGateway, getStoreGateway } from "@/lib/payments/provider";
 import {
   getCreditBalance,
+  issueCredit,
   spendCredit,
   reinstateCreditForOrder,
 } from "@/lib/credit/store-credit";
@@ -1151,7 +1152,7 @@ export async function placeOrder(
   // fallback, deploying first would silently break every coupon on the
   // platform — the same order-independence `getStoreChrome`'s `store_menus`
   // fallback exists for (CODEBASE.md §11).
-  const offerResult = await resolveOffersForCart({
+  let offerResult = await resolveOffersForCart({
     storeId,
     channel: "storefront",
     // ★ NO LOCATION ONLINE, and not merely because routing has not run yet
@@ -1200,6 +1201,137 @@ export async function placeOrder(
       regularUnitPrice: it.listed_price,
     })),
   });
+
+  // ★★ THE GIFT BECOMES A REAL LINE, appended BEFORE tax, stock and the insert
+  // so every one of those paths handles it with no special case (plan §12).
+  // Its stock is reserved by the same loop as any paid line, its tax snapshot
+  // is computed by the same call, and it appears on the order, the invoice and
+  // the confirmation email because it is genuinely part of the order.
+  //
+  // ★★ APPENDED BEFORE `offerDiscounts` IS SIZED, and that ordering is
+  // load-bearing rather than tidy. `offerDiscounts` is `validItems.map(() => 0)`
+  // and is read by index when the order items are written; appending the gift
+  // after it leaves `offerDiscounts[giftIndex]` UNDEFINED, which is written
+  // straight into `order_items.offer_discount` — a NOT NULL column with a
+  // DEFAULT, and an explicit undefined does not fall back to a default. That is
+  // the `storeCreditUsed: null` failure (CODEBASE §22) exactly: every order
+  // carrying a gift would fail on INSERT, and the cashier or shopper would see
+  // only "Failed to save order items".
+  //
+  // The gift's own entry is therefore a genuine zero, which is true: it was
+  // never discounted, it was added.
+  //
+  // ⚠ NOT PINNED BY A TEST, and it should be. `makeDbMock` serves reads from a
+  // POSITIONAL `selectQueue`, and the gift's product read does not draw from it
+  // at any position — so a test cannot currently place a gift row for
+  // `placeOrder` to find. Routing the mock by TABLE rather than by call order
+  // would allow one, and is the follow-up. Until then this ordering is held by
+  // this comment and by `placePosSale`, whose identical append sits above its
+  // own `offerDiscounts` for the same reason.
+  //
+  // ★ PRICED AND NAMED FROM THE DATABASE, never from the offer row. The offer
+  // stores ids; what the line says and what it is worth come from the product
+  // itself, exactly as for a paid line.
+  if (offerResult?.gift) {
+    const wanted = offerResult.gift;
+    const giftLine = await (async () => {
+      const [row] = await withService((db) =>
+        db
+          .select({
+            id: products.id,
+            name: products.name,
+            tax_class_id: products.taxClassId,
+            category_id: products.categoryId,
+            sku: products.sku,
+            hsn_code: products.hsnCode,
+            requires_shipping: products.requiresShipping,
+            weight_grams: products.weightGrams,
+            length_cm: products.lengthCm,
+            width_cm: products.widthCm,
+            height_cm: products.heightCm,
+          })
+          .from(products)
+          // ★ STORE-SCOPED, like every other product read here. The offer row
+          // is store-scoped too, but a gift is the one product id that reaches
+          // this function without having been in the shopper's cart, so the
+          // predicate is doing real work rather than restating a guarantee.
+          .where(
+            and(
+              eq(products.id, wanted.productId),
+              eq(products.storeId, storeId),
+            ),
+          )
+          .limit(1),
+      );
+      if (!row) return null;
+
+      let variantName: string | null = null;
+      if (wanted.variantId) {
+        const [variant] = await withService((db) =>
+          db
+            .select({ id: productVariants.id, name: productVariants.name })
+            .from(productVariants)
+            .where(
+              and(
+                eq(productVariants.id, wanted.variantId as string),
+                eq(productVariants.productId, wanted.productId),
+              ),
+            )
+            .limit(1),
+        );
+        if (!variant) return null;
+        variantName = variant.name;
+      }
+
+      // ★★ A ₹0 LINE IS NOT A ZERO-TAX LINE, and the class is recorded even
+      // though the tax computed on a zero taxable value is zero (plan §12).
+      // Under India's GST a free good given with a sale is not automatically
+      // outside the tax base, and inventing "no tax class" here would be a
+      // filing decision disguised as an implementation detail. Recording the
+      // gift's own class means the data is there if the treatment turns out to
+      // require valuing it at open market value.
+      //
+      // ⚠ THE TREATMENT ITSELF IS NOT PROFESSIONALLY REVIEWED — the §25/§28
+      // posture: the fields are right, get a CA to confirm before anyone
+      // files against it. The Help guide says so to the merchant.
+      const taxInfo = resolveTax(row);
+      return {
+        product_id: row.id,
+        variant_id: wanted.variantId,
+        name: row.name,
+        variant_name: variantName,
+        price: 0,
+        listed_price: 0,
+        quantity: wanted.quantity,
+        total: 0,
+        // No cost snapshot: a gift's margin impact is its full cost, and
+        // recording it as a ₹0 sale with a cost would report a loss on a line
+        // that is a marketing expense. Left null, which reads as "unknown"
+        // rather than as zero (§20's gross-margin contract).
+        unit_cost: null,
+        tax_rate: taxInfo.rate,
+        tax_amount: 0,
+        tax_class_name: taxInfo.name,
+        category_id: row.category_id,
+        sku: row.sku,
+        hsn_code: row.hsn_code,
+        requires_shipping: row.requires_shipping,
+        weight_grams: row.weight_grams,
+        length_cm: row.length_cm,
+        width_cm: row.width_cm,
+        height_cm: row.height_cm,
+      };
+    })();
+
+    if (giftLine) {
+      validItems.push(giftLine);
+    } else {
+      // The gift vanished between the offer resolution and here. The order is
+      // fine without it; silently dropping the gift is far better than
+      // refusing a paying customer over a free extra.
+      offerResult = { ...offerResult, gift: null };
+    }
+  }
 
   let discount = 0;
   // Per-line offer allocation, indexed the same way as `validItems`. §8: a
@@ -1471,6 +1603,11 @@ export async function placeOrder(
       deliveryPostcode: cleanField(form.postalCode),
       cod: paymentMethod === "cod",
       merchandiseSubtotal: subtotal,
+      // ★ CHEAPEST WINS (plan §14). The store's standing free-above threshold
+      // and this offer are ORed inside `freeShippingApplies`, so an offer can
+      // only ever LOWER the charge — never raise it on a cart the standing
+      // policy already ships free.
+      offerWaivesShipping: offerResult?.shipping != null,
       parcel: packageForShippingLines(
         validItems.map((item) => ({
           quantity: item.quantity,
@@ -1518,6 +1655,47 @@ export async function placeOrder(
       provider: selectedRate.courierId ? "shiprocket" : "manual",
       quotedAt: new Date().toISOString(),
     };
+
+    // ★★ THE SHIPPING OFFER IS RESERVED HERE, NOT WITH THE MERCHANDISE ONES,
+    // because only now is it worth anything. The engine is pure and never sees
+    // a carrier quote, so it reports the waiver with `amount: 0`; reserving it
+    // at that point would consume a redemption while charging the offer's
+    // BUDGET nothing, and a merchant who capped a free-delivery campaign at
+    // ₹5,000 would find the cap never binding.
+    //
+    // ★ The waived amount is what the shopper would OTHERWISE have paid, which
+    // is exactly `carrierCost` when the carrier quoted one and the flat rate
+    // otherwise — `selectedRate.amount` is already zero by the time we get
+    // here, so reading it would record every waiver as worth nothing.
+    //
+    // ★ It is PUSHED onto `reservedOffers`, so all seven later failure paths
+    // release it through the one unwind helper. A separate release call beside
+    // each of them is how the eighth path leaks a budget forever.
+    if (offerResult?.shipping) {
+      // Computed by the quote, where both facts are known: what this offer
+      // specifically waived, as opposed to what the store's own standing
+      // free-above threshold was already giving away.
+      const waived = selectedRate.offerWaivedAmount ?? 0;
+      const claim = await reserveOfferUses(
+        storeId,
+        [
+          {
+            offerId: offerResult.shipping.offerId,
+            offerName: offerResult.shipping.offerName,
+            code: offerResult.shipping.code,
+            rewardType: "free_shipping",
+            level: "shipping",
+            amount: Math.max(0, waived),
+          },
+        ],
+        user.id,
+      );
+      reservedOffers = [...reservedOffers, ...claim.reserved];
+      if (!claim.ok) {
+        await releaseDiscounts();
+        return { error: claim.error ?? "That offer is no longer available." };
+      }
+    }
   }
   total = Math.max(
     0,
@@ -1889,6 +2067,39 @@ export async function placeOrder(
         validItems.map((_, idx) => [String(idx), orderItemIds[idx]]),
       ),
     });
+  }
+
+  // ★★ CASHBACK IS ISSUED AFTER THE ORDER COMMITS, and never before. It is a
+  // LIABILITY, not a discount (plan §14): it changes nothing about what the
+  // customer paid, so issuing it early would credit a balance for an order
+  // that then failed to save. Idempotent on the order — `issueCredit`'s unique
+  // key is (store, customer, kind, ref) — so a retry credits once.
+  //
+  // ★ ITS OWN LEDGER KIND, not `grant`. §29 keeps `reinstate` apart from
+  // `grant` because "a report that can't tell a returned spend from a goodwill
+  // gesture overstates what the store gave away"; cashback earned by a
+  // promotion is a third thing again, and a merchant reviewing what their
+  // offers cost must be able to see it separately from what they handed out by
+  // hand.
+  //
+  // ★ NEVER FAILS THE ORDER. The money is taken and the goods are committed;
+  // refusing here would tell a paying customer their order did not work
+  // because a free extra could not be recorded.
+  if (offerResult?.credit && offerResult.credit.amount > 0) {
+    await issueCredit({
+      storeId,
+      customerId: user.id,
+      amount: offerResult.credit.amount,
+      kind: "cashback",
+      ref: order.id,
+      note: offerResult.credit.offerName,
+    }).catch((err: unknown) =>
+      logError("checkout.cashback_failed", err, {
+        storeId,
+        orderId: order.id,
+        offerId: offerResult?.credit?.offerId,
+      }),
+    );
   }
 
   // Shopify's durable split: the order records the sale; this work object says

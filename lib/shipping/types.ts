@@ -37,6 +37,22 @@ export interface CheckoutShippingOption {
   estimatedDeliveryMaxDays: number | null;
   estimatedDeliveryAt: string | null;
   freeShippingApplied: boolean;
+  /**
+   * What a `free_shipping` OFFER specifically waived, in rupees. 0 when
+   * delivery was already free under the store's own standing policy.
+   *
+   * ★★ THE DISTINCTION IS LOAD-BEARING, and it is the only place both facts
+   * are known. `freeShippingApplied` cannot answer it: it is true whether the
+   * store's own free-above threshold made delivery free or an offer did. An
+   * offer that waived nothing — because the cart already shipped free — must
+   * be charged nothing against its budget, or a merchant who capped a
+   * free-delivery campaign at ₹5,000 would watch it burn on orders that were
+   * always going to ship free.
+   *
+   * ★ Optional so every existing constructor of this type is unchanged;
+   * absent reads as "nothing waived", which is the correct default.
+   */
+  offerWaivedAmount?: number;
 }
 
 /** Immutable checkout choice stored on the order for fulfilment and support. */

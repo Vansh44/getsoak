@@ -374,6 +374,11 @@ export default function CheckoutPage() {
       items,
       postalCode: selected.postal_code,
       paymentMethod: resolvedPayMethod === "razorpay" ? "razorpay" : "cod",
+      // Carried so a `fulfilment_type` condition on a free-delivery offer is
+      // judged the same way here as it will be at `placeOrder`. The waiver
+      // itself is derived SERVER-side; only the shopper's own selections
+      // travel from the browser.
+      fulfilmentType: fulfilment,
     })
       .then((result) => {
         if (!active) return;

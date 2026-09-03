@@ -39,6 +39,7 @@ import { TENDER_LABEL } from "@/lib/pos/receipt";
 import {
   getCreditBalance,
   getCreditBalances,
+  issueCredit,
   spendCredit,
 } from "@/lib/credit/store-credit";
 import { withService } from "@/lib/db/client";
@@ -1667,7 +1668,7 @@ export async function placePosSale(
   // ★ THE REGISTER'S OWN LOCATION, never a client-supplied one. Every till
   // session is bound to one location by `resolvePosOperator`, and that is the
   // value a location-scoped offer is measured against.
-  const offerResult = await resolveOffersForCart({
+  let offerResult = await resolveOffersForCart({
     storeId: op.storeId,
     channel: "pos",
     locationId: op.locationId,
@@ -1687,6 +1688,95 @@ export async function placePosSale(
       lineDiscount: l.line_discount,
     })),
   });
+  // ★★ A GIFT BECOMES A REAL ₹0 LINE AT THE TILL TOO, appended before totals,
+  // stock and the insert so each handles it with no special case (plan §12).
+  // The register's own location reserves it, exactly as it reserves a paid
+  // line — a gift is stock leaving the shelf, and nothing else told inventory
+  // those units went out of the door.
+  //
+  // ★ APPENDED BEFORE `offerDiscounts` is built, so the index alignment those
+  // arrays rely on still holds; the gift's own offer discount is zero, which
+  // is true — it was added, not discounted.
+  if (offerResult?.gift) {
+    const wanted = offerResult.gift;
+    const giftLine = await (async () => {
+      const rows = await withService((db) =>
+        db
+          .select({
+            id: products.id,
+            name: products.name,
+            taxClassId: products.taxClassId,
+            categoryId: products.categoryId,
+            hsnCode: products.hsnCode,
+          })
+          .from(products)
+          .where(
+            and(
+              eq(products.id, wanted.productId),
+              eq(products.storeId, op.storeId),
+            ),
+          )
+          .limit(1),
+      );
+      const row = rows[0];
+      if (!row) return null;
+
+      let variantName: string | null = null;
+      if (wanted.variantId) {
+        const vRows = await withService((db) =>
+          db
+            .select({ name: productVariants.name })
+            .from(productVariants)
+            .where(
+              and(
+                eq(productVariants.id, wanted.variantId as string),
+                eq(productVariants.productId, wanted.productId),
+              ),
+            )
+            .limit(1),
+        );
+        if (!vRows[0]) return null;
+        variantName = vRows[0].name;
+      }
+
+      const giftCls = row.taxClassId
+        ? classById.get(row.taxClassId)
+        : billing.defaultTaxClassId
+          ? classById.get(billing.defaultTaxClassId)
+          : null;
+
+      return {
+        product_id: row.id,
+        variant_id: wanted.variantId,
+        name: row.name,
+        variant_name: variantName,
+        hsn_code: row.hsnCode ?? null,
+        unit_price: 0,
+        // Null, not zero: a gift's cost is a marketing expense, and recording
+        // it against a ₹0 sale would report a loss on the line (§20).
+        unit_cost: null,
+        quantity: wanted.quantity,
+        amount: 0,
+        line_discount: 0,
+        // ★ The gift's OWN tax class is recorded even though tax on a zero
+        // taxable value is zero — see the note in `checkout-actions.ts`. ⚠ The
+        // GST treatment of a free good is NOT professionally reviewed.
+        tax_rate: billing.taxEnabled ? (giftCls?.rate ?? 0) : 0,
+        tax_class_name: giftCls?.name ?? null,
+        category_id: row.categoryId ?? null,
+        listed_price: 0,
+      };
+    })();
+
+    if (giftLine) {
+      priced.push(giftLine);
+    } else {
+      // Gone between resolution and here. A sale must never fail over a free
+      // extra, so the gift is dropped and the sale completes.
+      offerResult = { ...offerResult, gift: null };
+    }
+  }
+
   const offerDiscounts = priced.map((_, idx) =>
     offerResult ? (offerResult.lines[idx]?.offerDiscount ?? 0) : 0,
   );
@@ -2190,6 +2280,27 @@ export async function placePosSale(
         priced.map((_, idx) => [String(idx), orderItemIds[idx]]),
       ),
     });
+  }
+
+  // ★★ CASHBACK, AFTER THE SALE COMMITS. Same rule as online: a liability, not
+  // a discount, so it changes nothing the customer paid and must never fail a
+  // sale whose money is already in the drawer.
+  //
+  // ★ IT NEEDS A CUSTOMER, and at this counter there always is one — Charge
+  // requires an attached customer before any pricing or payment write. A
+  // balance has to belong to somebody; issuing it to nobody would be a
+  // liability the shop could never honour.
+  if (offerResult?.credit && offerResult.credit.amount > 0 && customerId) {
+    await issueCredit({
+      storeId: op.storeId,
+      customerId,
+      amount: offerResult.credit.amount,
+      kind: "cashback",
+      ref: orderId,
+      note: offerResult.credit.offerName,
+    }).catch((err: unknown) =>
+      logError("pos.cashback_failed", err, { storeId: op.storeId, orderId }),
+    );
   }
 
   reportStockChanges(

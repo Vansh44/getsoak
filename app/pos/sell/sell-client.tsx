@@ -536,6 +536,17 @@ export function SellClient({
     pricesIncludeTax: config.pricesIncludeTax,
     taxEnabled: config.taxEnabled,
   });
+  // The gift's name, resolved from the local catalogue by id. Falls back to
+  // the offer's own name rather than an id, so a cashier is never shown a UUID.
+  const giftLabel = useMemo(() => {
+    const g = offerQuote?.gift;
+    if (!g) return "";
+    // `byId` already exists for exactly this: resolving ids to a cached SKU,
+    // which is what resuming a held sale does.
+    const match = catalog.byId(g.productId, g.variantId);
+    return match?.name ?? `the gift from “${g.offerName}”`;
+  }, [offerQuote?.gift, catalog]);
+
   const { subtotal, lineDiscountTotal, offerDiscountTotal, tax } = totals;
   const cappedDiscount = totals.orderDiscount;
   const estTotal = totals.total;
@@ -1129,6 +1140,29 @@ export function SellClient({
                   </span>
                 </div>
               ))}
+            {/* ★★ A GIFT IS AN INSTRUCTION, NOT A NUMBER. It is worth ₹0, so
+                nothing in the totals moves and `posTotals` agrees perfectly
+                with the sale — which is exactly why this row is essential:
+                without it the register would reserve a tumbler and print it on
+                the receipt while the cashier, seeing no change on screen, hands
+                the customer their bag and nothing else. That is worse than a
+                total mismatch, because the shop has already given the stock
+                away on paper.
+                ★ The name comes from the local catalogue by id, so it costs no
+                round trip; a gift the cache has not seen still shows, labelled
+                by what it is. */}
+            {offerQuote?.gift && (
+              <div className="mb-2 flex items-start justify-between gap-3 rounded-md border border-[var(--pos-border)] px-2 py-1.5 text-sm">
+                <span className="text-[var(--pos-ink-2)]">
+                  <strong className="text-[var(--pos-ink)]">Hand over</strong>{" "}
+                  {giftLabel}
+                  {offerQuote.gift.quantity > 1
+                    ? ` × ${offerQuote.gift.quantity}`
+                    : ""}
+                </span>
+                <span className="shrink-0 text-[var(--pos-ink-2)]">Free</span>
+              </div>
+            )}
             {offerQuote?.cappedByCeiling && (
               <p className="mb-2 text-xs text-[var(--pos-ink-2)]">
                 Capped at this store&rsquo;s maximum discount per order.

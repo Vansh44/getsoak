@@ -2013,3 +2013,437 @@ describe("storeLocalTime", () => {
     ).toEqual({ day: 2, minute: 0 });
   });
 });
+
+describe("applyOffers — free shipping is a separate axis", () => {
+  const freeDelivery = offer({
+    id: "ship",
+    trigger: { type: "min_subtotal", minSubtotal: 500 },
+    reward: { type: "free_shipping" },
+  });
+
+  it("reports the waiver without touching the merchandise discount", () => {
+    const r = applyOffers({
+      lines: [line({ unitPrice: 600 })],
+      offers: [freeDelivery],
+      context: ctx(),
+    });
+    // ★ NOT part of `discount`: a waiver reduces the SHIPPING charge, and
+    // adding it here would misstate the tax base and every refund computed
+    // from the per-line allocation.
+    expect(r.discount).toBe(0);
+    expect(r.lines[0].offerDiscount).toBe(0);
+    expect(r.shipping).toMatchObject({ offerId: "ship", amount: 0 });
+  });
+
+  it("★ applies ALONGSIDE a merchandise offer, never instead of it", () => {
+    // A shopper must not lose free delivery because a category discount scored
+    // higher — they are different pockets of the bill.
+    const r = applyOffers({
+      lines: [line({ unitPrice: 600 })],
+      offers: [
+        freeDelivery,
+        offer({ id: "pct", reward: { type: "percent_off", percent: 10 } }),
+      ],
+      context: ctx(),
+    });
+    expect(r.discount).toBe(60);
+    expect(r.applied[0].offerId).toBe("pct");
+    expect(r.shipping?.offerId).toBe("ship");
+  });
+
+  it("survives a cart where every merchandise offer fails", () => {
+    const r = applyOffers({
+      lines: [line({ unitPrice: 600 })],
+      offers: [
+        freeDelivery,
+        offer({
+          id: "dead",
+          trigger: { type: "min_subtotal", minSubtotal: 99999 },
+          reward: { type: "percent_off", percent: 10 },
+        }),
+      ],
+      context: ctx(),
+    });
+    expect(r.discount).toBe(0);
+    expect(r.shipping?.offerId).toBe("ship");
+  });
+
+  it("is NOT counted against the per-order depth ceiling", () => {
+    // The ceiling bounds how deeply merchandise may be discounted. Shipping is
+    // a different pocket, and the engine cannot price it anyway.
+    const r = applyOffers({
+      lines: [line({ unitPrice: 600 })],
+      offers: [freeDelivery],
+      context: ctx({ maxTotalDiscountPercent: 0 }),
+    });
+    expect(r.shipping?.offerId).toBe("ship");
+  });
+
+  it("respects its own trigger", () => {
+    const r = applyOffers({
+      lines: [line({ unitPrice: 400 })],
+      offers: [freeDelivery],
+      context: ctx(),
+    });
+    expect(r.shipping).toBeNull();
+    expect(r.skipped[0].reason).toBe("trigger_unmet");
+  });
+
+  it("nudges toward free delivery BY NAME — the reward's main use", () => {
+    const r = applyOffers({
+      lines: [line({ unitPrice: 400 })],
+      offers: [freeDelivery],
+      context: ctx(),
+    });
+    expect(r.nearMiss[0]).toMatchObject({
+      kind: "spend",
+      gap: 100,
+      rewardType: "free_shipping",
+    });
+  });
+
+  it("picks ONE when two qualify, and records the other as skipped", () => {
+    // Every waiver is identical, so there is nothing to compare on value:
+    // candidate order decides, and the loser is recorded rather than silent.
+    const r = applyOffers({
+      lines: [line({ unitPrice: 600 })],
+      offers: [
+        { ...freeDelivery, id: "a", priority: 1 },
+        { ...freeDelivery, id: "b", priority: 5 },
+      ],
+      context: ctx(),
+    });
+    expect(r.shipping?.offerId).toBe("b");
+    expect(r.skipped).toContainEqual({ offerId: "a", reason: "outscored" });
+  });
+
+  it("★ a shipping offer that wins is never reported as outscored", () => {
+    // It never entered the merchandise comparison; saying it lost there would
+    // tell an operator the wrong reason on the screen that answers "why?".
+    const r = applyOffers({
+      lines: [line({ unitPrice: 600 })],
+      offers: [
+        freeDelivery,
+        offer({ id: "pct", reward: { type: "percent_off", percent: 10 } }),
+      ],
+      context: ctx(),
+    });
+    expect(r.skipped.some((s) => s.offerId === "ship")).toBe(false);
+  });
+
+  it("waives nothing on an empty cart", () => {
+    const r = applyOffers({
+      lines: [],
+      offers: [freeDelivery],
+      context: ctx(),
+    });
+    expect(r.shipping).toBeNull();
+  });
+});
+
+describe("applyOffers — a free gift", () => {
+  const GIFT = "11111111-1111-4111-8111-111111111111";
+  const tumbler = offer({
+    id: "gift",
+    trigger: { type: "min_subtotal", minSubtotal: 2000 },
+    reward: { type: "free_item", giftProductId: GIFT, giftQuantity: 1 },
+    giftAvailable: true,
+  });
+
+  it("names the gift without discounting anything", () => {
+    const r = applyOffers({
+      lines: [line({ unitPrice: 2500 })],
+      offers: [tumbler],
+      context: ctx(),
+    });
+    expect(r.discount).toBe(0);
+    expect(r.gift).toEqual({
+      offerId: "gift",
+      offerName: "Test offer",
+      code: null,
+      productId: GIFT,
+      variantId: null,
+      quantity: 1,
+    });
+  });
+
+  it("★ applies ALONGSIDE a discount, not instead of one", () => {
+    const r = applyOffers({
+      lines: [line({ unitPrice: 2500 })],
+      offers: [
+        tumbler,
+        offer({ id: "pct", reward: { type: "percent_off", percent: 10 } }),
+      ],
+      context: ctx(),
+    });
+    expect(r.discount).toBe(250);
+    expect(r.gift?.offerId).toBe("gift");
+  });
+
+  it("★★ STOPS OFFERING a gift with no stock, rather than failing at reserve time", () => {
+    // Promising it and failing later is the worst outcome available: the
+    // shopper has been told they are getting a tumbler, and the failure
+    // arrives after they commit.
+    const r = applyOffers({
+      lines: [line({ unitPrice: 2500 })],
+      offers: [{ ...tumbler, giftAvailable: false }],
+      context: ctx(),
+    });
+    expect(r.gift).toBeNull();
+    expect(r.skipped).toEqual([
+      { offerId: "gift", reason: "gift_unavailable" },
+    ]);
+  });
+
+  it("★ treats UNCHECKED availability as available, not as unavailable", () => {
+    // A caller that does not resolve gifts — a historical replay, a cached
+    // register catalogue — must not have every gift offer silently vanish.
+    // Only an explicit false withdraws it.
+    const { giftAvailable: _omit, ...unchecked } = tumbler;
+    const r = applyOffers({
+      lines: [line({ unitPrice: 2500 })],
+      offers: [unchecked],
+      context: ctx(),
+    });
+    expect(r.gift?.offerId).toBe("gift");
+  });
+
+  it("refuses a gift offer that names no product", () => {
+    // Only reachable by direct SQL, and running it as "no gift" would make the
+    // offer look applied while handing over nothing.
+    const r = applyOffers({
+      lines: [line({ unitPrice: 2500 })],
+      offers: [{ ...tumbler, reward: { type: "free_item", giftQuantity: 1 } }],
+      context: ctx(),
+    });
+    expect(r.gift).toBeNull();
+    expect(r.skipped[0].reason).toBe("gift_unavailable");
+  });
+
+  it("respects its own trigger and nudges toward it", () => {
+    const r = applyOffers({
+      lines: [line({ unitPrice: 1900 })],
+      offers: [tumbler],
+      context: ctx(),
+    });
+    expect(r.gift).toBeNull();
+    expect(r.nearMiss[0]).toMatchObject({ gap: 100, rewardType: "free_item" });
+  });
+
+  it("gives ONE gift when two offers qualify, and records the loser", () => {
+    // Each gift is real stock going out of the door, so two would need a rule
+    // for which comes first that a merchant could not predict.
+    const r = applyOffers({
+      lines: [line({ unitPrice: 2500 })],
+      offers: [
+        { ...tumbler, id: "a", priority: 1 },
+        { ...tumbler, id: "b", priority: 9 },
+      ],
+      context: ctx(),
+    });
+    expect(r.gift?.offerId).toBe("b");
+    expect(r.skipped).toContainEqual({ offerId: "a", reason: "outscored" });
+  });
+
+  it("★ a gift that wins is never reported as outscored by a merchandise offer", () => {
+    const r = applyOffers({
+      lines: [line({ unitPrice: 2500 })],
+      offers: [
+        tumbler,
+        offer({ id: "pct", reward: { type: "percent_off", percent: 10 } }),
+      ],
+      context: ctx(),
+    });
+    expect(r.skipped.some((s) => s.offerId === "gift")).toBe(false);
+  });
+
+  it("carries a specific variant through", () => {
+    const VAR = "22222222-2222-4222-8222-222222222222";
+    const r = applyOffers({
+      lines: [line({ unitPrice: 2500 })],
+      offers: [
+        {
+          ...tumbler,
+          reward: {
+            type: "free_item",
+            giftProductId: GIFT,
+            giftVariantId: VAR,
+            giftQuantity: 2,
+          },
+        },
+      ],
+      context: ctx(),
+    });
+    expect(r.gift).toMatchObject({ variantId: VAR, quantity: 2 });
+  });
+});
+
+describe("applyOffers — bundles", () => {
+  const bundle = offer({
+    id: "b3",
+    productIds: ["p1", "p2"],
+    reward: { type: "bundle_price", bundleQuantity: 3, bundlePrice: 999 },
+  });
+
+  it("prices three qualifying units at the bundle price", () => {
+    const r = applyOffers({
+      lines: [line({ quantity: 3, unitPrice: 500 })],
+      offers: [bundle],
+      context: ctx(),
+    });
+    // 1500 of goods for 999 → 501 off.
+    expect(r.discount).toBe(501);
+  });
+
+  it("counts units ACROSS the scoped lines", () => {
+    const r = applyOffers({
+      lines: [
+        line({ id: "a", productId: "p1", quantity: 2, unitPrice: 500 }),
+        line({ id: "b", productId: "p2", quantity: 1, unitPrice: 500 }),
+      ],
+      offers: [bundle],
+      context: ctx(),
+    });
+    expect(r.discount).toBe(501);
+  });
+
+  it("★★ puts the DEAREST units in the bundle, which is the only way that cannot mark up", () => {
+    // ₹500 + ₹400 + ₹300 + ₹200 with "any 3 for ₹999": bundling the three
+    // dearest charges ₹999 for ₹1,200 of goods and leaves the ₹200 at full
+    // price. Bundling the three CHEAPEST would charge ₹999 for ₹900 — a
+    // mark-up on an offer advertised as a saving.
+    const r = applyOffers({
+      lines: [
+        line({ id: "a", productId: "p1", quantity: 1, unitPrice: 500 }),
+        line({ id: "b", productId: "p1", quantity: 1, unitPrice: 400 }),
+        line({ id: "c", productId: "p2", quantity: 1, unitPrice: 300 }),
+        line({ id: "d", productId: "p2", quantity: 1, unitPrice: 200 }),
+      ],
+      offers: [bundle],
+      context: ctx(),
+    });
+    expect(r.subtotal).toBe(1400);
+    expect(r.discount).toBe(201); // 1200 − 999
+    // The ₹200 unit is untouched: it was not in the bundle.
+    expect(r.lines.find((l) => l.id === "d")?.offerDiscount).toBe(0);
+  });
+
+  it("★ NEVER MARKS UP — a set worth less than the bundle price is skipped", () => {
+    const r = applyOffers({
+      lines: [line({ quantity: 3, unitPrice: 100 })],
+      offers: [bundle],
+      context: ctx(),
+    });
+    expect(r.discount).toBe(0);
+  });
+
+  it("needs a full bundle", () => {
+    const r = applyOffers({
+      lines: [line({ quantity: 2, unitPrice: 500 })],
+      offers: [bundle],
+      context: ctx(),
+    });
+    expect(r.discount).toBe(0);
+  });
+
+  it("repeats, and honours a set cap", () => {
+    const six = [line({ quantity: 6, unitPrice: 500 })];
+    expect(
+      applyOffers({ lines: six, offers: [bundle], context: ctx() }).discount,
+    ).toBe(1002);
+    expect(
+      applyOffers({
+        lines: six,
+        offers: [
+          {
+            ...bundle,
+            reward: { ...bundle.reward, maxSets: 1 },
+          },
+        ],
+        context: ctx(),
+      }).discount,
+    ).toBe(501);
+  });
+
+  it("ignores units outside its scope", () => {
+    const r = applyOffers({
+      lines: [
+        line({ id: "in", productId: "p1", quantity: 2, unitPrice: 500 }),
+        line({ id: "out", productId: "zzz", quantity: 2, unitPrice: 500 }),
+      ],
+      offers: [bundle],
+      context: ctx(),
+    });
+    expect(r.discount).toBe(0);
+  });
+
+  it("respects a budget", () => {
+    const r = applyOffers({
+      lines: [line({ quantity: 3, unitPrice: 500 })],
+      offers: [{ ...bundle, remainingBudget: 200 }],
+      context: ctx(),
+    });
+    expect(r.discount).toBe(200);
+  });
+});
+
+describe("applyOffers — cashback", () => {
+  const cashback = offer({
+    id: "cb",
+    trigger: { type: "min_subtotal", minSubtotal: 2000 },
+    reward: { type: "credit_back", creditAmount: 100 },
+  });
+
+  it("★★ changes NOTHING about what the customer pays", () => {
+    // Credit is a payment in this system, so netting cashback off the total
+    // would understate the sale and mis-compute GST on it.
+    const r = applyOffers({
+      lines: [line({ unitPrice: 2500 })],
+      offers: [cashback],
+      context: ctx(),
+    });
+    expect(r.discount).toBe(0);
+    expect(r.lines[0].offerDiscount).toBe(0);
+    expect(r.credit).toEqual({
+      offerId: "cb",
+      offerName: "Test offer",
+      code: null,
+      amount: 100,
+    });
+  });
+
+  it("applies alongside a discount", () => {
+    const r = applyOffers({
+      lines: [line({ unitPrice: 2500 })],
+      offers: [
+        cashback,
+        offer({ id: "pct", reward: { type: "percent_off", percent: 10 } }),
+      ],
+      context: ctx(),
+    });
+    expect(r.discount).toBe(250);
+    expect(r.credit?.amount).toBe(100);
+  });
+
+  it("respects its trigger", () => {
+    const r = applyOffers({
+      lines: [line({ unitPrice: 1000 })],
+      offers: [cashback],
+      context: ctx(),
+    });
+    expect(r.credit).toBeNull();
+  });
+
+  it("issues ONE, and records the loser", () => {
+    const r = applyOffers({
+      lines: [line({ unitPrice: 2500 })],
+      offers: [
+        { ...cashback, id: "a", priority: 1 },
+        { ...cashback, id: "b", priority: 7 },
+      ],
+      context: ctx(),
+    });
+    expect(r.credit?.offerId).toBe("b");
+    expect(r.skipped).toContainEqual({ offerId: "a", reason: "outscored" });
+  });
+});

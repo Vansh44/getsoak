@@ -118,6 +118,20 @@ export function isWebsiteOnlyCondition(type: OfferConditionType): boolean {
   return type === "payment_method" || type === "fulfilment_type";
 }
 
+/**
+ * Is this REWARD one only the website can deliver?
+ *
+ * ★ A REGISTER SALE HAS NO SHIPPING AT ALL — the customer is standing there
+ * holding the goods. So a free-delivery offer at a till is not "unfinished
+ * work" or "worth nothing"; there is no charge for it to act on. Refused at
+ * save alongside the website-only conditions, by the same function, so a
+ * merchant is told once and clearly rather than discovering an offer that
+ * silently never fires.
+ */
+export function isWebsiteOnlyReward(type: OfferRewardType): boolean {
+  return type === "free_shipping";
+}
+
 export interface OfferTrigger {
   type: OfferTriggerType;
   /** `min_subtotal` only: rupees. ★ Tested against the UNDISCOUNTED
@@ -149,6 +163,10 @@ export const OFFER_REWARDS = [
   "buy_x_get_y",
   "tiered",
   "volume_break",
+  "free_shipping",
+  "free_item",
+  "bundle_price",
+  "credit_back",
 ] as const;
 export type OfferRewardType = (typeof OFFER_REWARDS)[number];
 
@@ -187,6 +205,32 @@ export interface OfferReward {
   breaks?: { minQuantity: number; percent: number }[];
   /** `tiered` only: whether each rung's `value` is a percentage or rupees. */
   tierMode?: "percent" | "amount";
+  /**
+   * `bundle_price`: how many items from the scope make a bundle, and what the
+   * bundle costs.
+   *
+   * ★ "ANY N FROM THIS SET FOR ₹X", which is the bundle retail actually runs
+   * ("any 3 tees for ₹999") and which the existing scope machinery already
+   * expresses. A strict "these exact three products together" bundle needs a
+   * per-product composition table and is deliberately NOT built — the Help
+   * guide says so rather than letting a merchant discover it.
+   */
+  bundleQuantity?: number;
+  bundlePrice?: number;
+  /** `credit_back`: store credit issued after the order, in rupees. */
+  creditAmount?: number;
+  /**
+   * `free_item`: the gift. A product id, optionally a specific variant, and
+   * how many.
+   *
+   * ★ IDS, NOT A SKU. Every other reward is priced from the cart, but this one
+   * names a product the cart does not contain — so it is resolved server-side
+   * against the store, and a SKU would be a second lookup key that can drift
+   * from the row it points at.
+   */
+  giftProductId?: string;
+  giftVariantId?: string | null;
+  giftQuantity?: number;
   /** Most sets one order may earn. `undefined` = unlimited. ★ A cart of 100
    *  units on buy-1-get-1 otherwise gives away 50 items, which merchants
    *  reliably do not mean the first time they build one. */
@@ -201,10 +245,36 @@ export interface OfferReward {
  * line) is expressed in terms of the level — so a wrong level silently changes
  * which offers can coexist.
  */
-export function rewardLevel(type: OfferRewardType): "order" | "line" {
+/**
+ * Which axis of the bill a reward acts on.
+ *
+ * ★★ SHIPPING IS ITS OWN AXIS, chosen INDEPENDENTLY of merchandise offers
+ * rather than competing with them (plan §14). A shopper must not lose free
+ * delivery because a category discount happened to score higher under
+ * best-offer-wins — they are different pockets of the bill, and every merchant
+ * expects both to apply. Returning a third value rather than folding shipping
+ * into "order" is what keeps it out of the scenario comparison entirely.
+ */
+export function rewardLevel(
+  type: OfferRewardType,
+): "order" | "line" | "shipping" | "gift" | "credit" {
+  if (type === "free_shipping") return "shipping";
+  // ★★ A GIFT IS ITS OWN AXIS TOO, and for a stronger reason than shipping: it
+  // does not DISCOUNT anything, it ADDS a line. There is nothing for the
+  // scenario comparison to score it against, and folding it into "order" would
+  // have `claimOrderOffer` try to allocate a discount that does not exist.
+  if (type === "free_item") return "gift";
+  // ★ Cashback is not a discount (plan §14): it issues store credit, does not
+  // reduce `orders.total`, does not change the tax base and appears on no
+  // invoice. Credit is a PAYMENT in this system, so netting it off would
+  // understate the sale and mis-compute GST.
+  if (type === "credit_back") return "credit";
   return type === "percent_off_items" ||
     type === "fixed_price" ||
     type === "buy_x_get_y" ||
+    // A bundle discounts the LINES it covers, so its scope says what is
+    // discounted — the same axis as every other item-level reward.
+    type === "bundle_price" ||
     type === "volume_break"
     ? "line"
     : "order";
@@ -222,8 +292,26 @@ export function rewardLevel(type: OfferRewardType): "order" | "line" {
  * A group reward therefore gets its own claim pass (`claimGroupOffer`) which
  * competes against the per-line winners on the lines it wants.
  */
+export function isShippingReward(type: OfferRewardType): boolean {
+  return type === "free_shipping";
+}
+
+export function isGiftReward(type: OfferRewardType): boolean {
+  return type === "free_item";
+}
+
+export function isCreditReward(type: OfferRewardType): boolean {
+  return type === "credit_back";
+}
+
 export function isGroupReward(type: OfferRewardType): boolean {
-  return type === "buy_x_get_y" || type === "volume_break";
+  return (
+    type === "buy_x_get_y" ||
+    type === "volume_break" ||
+    // A bundle counts units ACROSS the scope, like a quantity ladder: three
+    // different tees make one "any 3 for ₹999" between them.
+    type === "bundle_price"
+  );
 }
 
 /**
@@ -300,6 +388,14 @@ export function decodeReward(rewardType: string, config: unknown): OfferReward {
     getQuantity: num(c.getQuantity),
     getPercent: num(c.getPercent),
     maxSets: num(c.maxSets),
+    giftProductId:
+      typeof c.giftProductId === "string" ? c.giftProductId : undefined,
+    giftVariantId:
+      typeof c.giftVariantId === "string" ? c.giftVariantId : undefined,
+    giftQuantity: num(c.giftQuantity),
+    bundleQuantity: num(c.bundleQuantity),
+    bundlePrice: num(c.bundlePrice),
+    creditAmount: num(c.creditAmount),
     tierMode: c.tierMode === "amount" ? "amount" : undefined,
     tiers: ladder(c.tiers, "minSubtotal") as OfferReward["tiers"],
     breaks: ladder(c.breaks, "minQuantity") as OfferReward["breaks"],
@@ -401,8 +497,30 @@ export function decodeConditions(raw: unknown): {
 export function validateOfferConditions(
   conditions: readonly OfferCondition[],
   channels: readonly string[],
+  /**
+   * The offer's reward, when the caller has one.
+   *
+   * ★ ONE FUNCTION ANSWERS "CAN THIS OFFER RUN ON THESE CHANNELS", covering
+   * both the website-only conditions and the website-only reward. Two separate
+   * checks would each have to re-derive "empty channels means every channel",
+   * and the one that forgot would let a register offer through.
+   *
+   * Optional so a caller validating conditions alone need not invent a reward.
+   */
+  rewardType?: OfferRewardType,
 ): OfferValidationIssue[] {
   const issues: OfferValidationIssue[] = [];
+
+  // Empty channels means every channel, so it includes POS. Derived once.
+  const posReach = channels.length === 0 || channels.includes("pos");
+
+  if (rewardType && posReach && isWebsiteOnlyReward(rewardType)) {
+    issues.push({
+      field: "reward",
+      message:
+        "Free delivery only applies to website orders — a register sale has nothing to deliver. Set the offer to your website only.",
+    });
+  }
 
   if (conditions.length > OFFER_CONDITIONS.length) {
     issues.push({
@@ -427,8 +545,7 @@ export function validateOfferConditions(
     seen.add(c.type);
   }
 
-  // Empty channels means every channel, so it includes POS.
-  const reachesPos = channels.length === 0 || channels.includes("pos");
+  const reachesPos = posReach;
 
   for (const c of conditions) {
     if (reachesPos && isWebsiteOnlyCondition(c.type)) {
@@ -576,6 +693,16 @@ export interface Offer {
   productIds: readonly string[];
   variantIds: readonly string[];
   categoryIds: readonly string[];
+  /**
+   * The gift still has stock. Resolved by the caller against
+   * `on_hand − reserved`, because the engine is pure.
+   *
+   * ★ `undefined` MEANS "NOT CHECKED", not "unavailable" — a caller that does
+   * not resolve gifts (the register's cached catalogue, a historical replay)
+   * must not have every gift offer silently vanish. Only an explicit `false`
+   * withdraws it.
+   */
+  giftAvailable?: boolean;
   /** A redemption cap has been reached — resolved by the caller against the
    *  database, because the engine is pure. */
   exhausted?: boolean;
@@ -592,6 +719,9 @@ export interface OfferValidationIssue {
   field: string;
   message: string;
 }
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const MAX_PERCENT = 100;
 const MAX_AMOUNT = 10_000_000; // ₹1 crore — a sanity bound, not a business rule
@@ -724,6 +854,78 @@ export function validateOfferRule(
       }
       break;
     }
+    case "free_item": {
+      const id = reward.giftProductId;
+      // ★ A UUID, checked here rather than only in SQL, so the editor can say
+      // "choose a gift" instead of surfacing a constraint violation.
+      if (typeof id !== "string" || !UUID_RE.test(id)) {
+        issues.push({
+          field: "reward.giftProductId",
+          message: "Choose the free gift.",
+        });
+        break;
+      }
+      if (
+        reward.giftVariantId !== null &&
+        reward.giftVariantId !== undefined &&
+        !UUID_RE.test(reward.giftVariantId)
+      ) {
+        issues.push({
+          field: "reward.giftVariantId",
+          message: "Choose which option of the gift to give.",
+        });
+        break;
+      }
+      const qty = reward.giftQuantity ?? 1;
+      // ★ CAPPED LOW ON PURPOSE. A gift leaves the shelf, so a typo here is
+      // stock gone rather than money discounted; ten is far more than any
+      // "free tumbler with your order" needs.
+      if (!Number.isInteger(qty) || qty < 1 || qty > 10) {
+        issues.push({
+          field: "reward.giftQuantity",
+          message: "Give between one and ten of the gift.",
+        });
+      }
+      break;
+    }
+    case "bundle_price": {
+      const qty = reward.bundleQuantity;
+      const price = reward.bundlePrice;
+      if (!Number.isInteger(qty) || (qty ?? 0) < 2 || (qty ?? 0) > 20) {
+        issues.push({
+          field: "reward.bundleQuantity",
+          message: "A bundle is between two and twenty items.",
+        });
+        break;
+      }
+      // ★ A bundle of one is a fixed price, which already exists — allowing it
+      // here would give merchants two ways to build the same offer and two
+      // places for it to behave differently.
+      if (!(typeof price === "number") || price <= 0 || price > MAX_AMOUNT) {
+        issues.push({
+          field: "reward.bundlePrice",
+          message: "Enter what the bundle costs.",
+        });
+      }
+      break;
+    }
+    case "credit_back": {
+      const amount = reward.creditAmount;
+      if (!(typeof amount === "number") || amount <= 0 || amount > MAX_AMOUNT) {
+        issues.push({
+          field: "reward.creditAmount",
+          message: "Enter how much store credit to give.",
+        });
+      }
+      break;
+    }
+    case "free_shipping":
+      // ★ NO PAYLOAD, and that is deliberate rather than unfinished. "Free
+      // shipping" is the whole reward; a percentage off delivery would have to
+      // be quoted against a carrier price the engine never sees (§14 — the
+      // rate is live from Shiprocket), so it would be a number the merchant
+      // could not predict and the cart could not verify.
+      break;
     case "tiered": {
       const tiers = sortedTiers(reward.tiers);
       const mode = reward.tierMode ?? "percent";

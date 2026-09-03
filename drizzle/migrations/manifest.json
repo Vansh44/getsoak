@@ -2601,6 +2601,352 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260903_0066_offers_phase_f",
+      "description": "Allow the free_shipping offer reward and refuse it for register-inclusive offers",
+      "file": "sql/20260903_0066_offers_phase_f.sql",
+      "checksum": "35ca0e2474ead2754ae83c26d28ee615fb38d72178101102287b9d56b4b33a43",
+      "transaction": true,
+      "requires": ["20260903_0065_offers_phase_e"],
+      "verify": {},
+      "applyVerify": {
+        "constraints": ["offers_reward_type_check"],
+        "functions": ["offers_reward_channel_fit()"],
+        "queries": [
+          {
+            "name": "free delivery is an allowed reward",
+            "sql": "select count(*)::text from pg_constraint where conname = 'offers_reward_type_check' and pg_get_constraintdef(oid) like '%free_shipping%'",
+            "equals": "1"
+          },
+          {
+            "name": "a free-delivery offer cannot include the register, even with no channels set",
+            "sql": "select count(*)::text from pg_proc where proname = 'offers_reward_channel_fit' and prosrc like '%only applies to website orders%' and prosrc like '%array_length(NEW.channels, 1), 0) = 0%'",
+            "equals": "1"
+          },
+          {
+            "name": "the reward channel rule is enforced by a trigger on the offers table",
+            "sql": "select count(*)::text from pg_trigger where tgname = 'offers_reward_channel_fit' and tgrelid = 'public.offers'::regclass and NOT tgisinternal",
+            "equals": "1"
+          },
+          {
+            "name": "the offers guide explains cheapest-wins, the separate axis and the courier cost",
+            "sql": "select count(*)::text from public.help_articles where slug = 'create-and-manage-offers' and status = 'published' and body like '%<h2>Free delivery</h2>%' and body like '%only ever makes delivery cheaper%' and body like '%alongside a discount, not instead of one%' and body like '%You still pay the courier%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "constraints": ["offers_reward_type_check"],
+        "functions": ["offers_reward_channel_fit()"],
+        "queries": [
+          {
+            "name": "free delivery is an allowed reward",
+            "sql": "select count(*)::text from pg_constraint where conname = 'offers_reward_type_check' and pg_get_constraintdef(oid) like '%free_shipping%'",
+            "equals": "1"
+          },
+          {
+            "name": "a free-delivery offer cannot include the register, even with no channels set",
+            "sql": "select count(*)::text from pg_proc where proname = 'offers_reward_channel_fit' and prosrc like '%only applies to website orders%' and prosrc like '%array_length(NEW.channels, 1), 0) = 0%'",
+            "equals": "1"
+          },
+          {
+            "name": "the reward channel rule is enforced by a trigger on the offers table",
+            "sql": "select count(*)::text from pg_trigger where tgname = 'offers_reward_channel_fit' and tgrelid = 'public.offers'::regclass and NOT tgisinternal",
+            "equals": "1"
+          },
+          {
+            "name": "the offers guide explains cheapest-wins, the separate axis and the courier cost",
+            "sql": "select count(*)::text from public.help_articles where slug = 'create-and-manage-offers' and status = 'published' and body like '%<h2>Free delivery</h2>%' and body like '%only ever makes delivery cheaper%' and body like '%alongside a discount, not instead of one%' and body like '%You still pay the courier%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260903_0067_offers_phase_g",
+      "description": "Allow the free_item offer reward and enforce that a gift offer names a product and a bounded quantity",
+      "file": "sql/20260903_0067_offers_phase_g.sql",
+      "checksum": "546f3b0fef3c4ab5647dcaac065e7db20b12a36e62220bb3b471e993a436107d",
+      "transaction": true,
+      "requires": ["20260903_0066_offers_phase_f"],
+      "verify": {},
+      "applyVerify": {
+        "constraints": [
+          "offers_reward_type_check",
+          "offers_free_item_shape_check"
+        ],
+        "functions": [],
+        "queries": [
+          {
+            "name": "a free gift is an allowed reward",
+            "sql": "select count(*)::text from pg_constraint where conname = 'offers_reward_type_check' and pg_get_constraintdef(oid) like '%free_item%'",
+            "equals": "1"
+          },
+          {
+            "name": "a gift offer cannot omit its product or quantity",
+            "sql": "select count(*)::text from pg_constraint where conname = 'offers_free_item_shape_check' and pg_get_constraintdef(oid) ilike '%coalesce%'",
+            "equals": "1"
+          },
+          {
+            "name": "the offers guide explains stock, one-per-order and the unreviewed tax treatment",
+            "sql": "select count(*)::text from public.help_articles where slug = 'create-and-manage-offers' and status = 'published' and body like '%<h2>Free gift with an order</h2>%' and body like '%stops on its own when the gift runs out%' and body like '%check with your accountant%' and body like '%not automatically clawed back%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "constraints": [
+          "offers_reward_type_check",
+          "offers_free_item_shape_check"
+        ],
+        "functions": [],
+        "queries": [
+          {
+            "name": "a free gift is an allowed reward",
+            "sql": "select count(*)::text from pg_constraint where conname = 'offers_reward_type_check' and pg_get_constraintdef(oid) like '%free_item%'",
+            "equals": "1"
+          },
+          {
+            "name": "a gift offer cannot omit its product or quantity",
+            "sql": "select count(*)::text from pg_constraint where conname = 'offers_free_item_shape_check' and pg_get_constraintdef(oid) ilike '%coalesce%'",
+            "equals": "1"
+          },
+          {
+            "name": "the offers guide explains stock, one-per-order and the unreviewed tax treatment",
+            "sql": "select count(*)::text from public.help_articles where slug = 'create-and-manage-offers' and status = 'published' and body like '%<h2>Free gift with an order</h2>%' and body like '%stops on its own when the gift runs out%' and body like '%check with your accountant%' and body like '%not automatically clawed back%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260903_0068_offers_phase_h",
+      "description": "Allow bundle_price and credit_back offer rewards, enforce their shapes, and add the cashback store-credit kind",
+      "file": "sql/20260903_0068_offers_phase_h.sql",
+      "checksum": "0af78657775481d8d665628f25c621240afc7ab7d0207421791958f5d65d0616",
+      "transaction": true,
+      "requires": ["20260903_0067_offers_phase_g"],
+      "verify": {},
+      "applyVerify": {
+        "constraints": [
+          "offers_reward_type_check",
+          "offers_bundle_shape_check",
+          "offers_credit_back_shape_check",
+          "customer_credit_ledger_kind_check"
+        ],
+        "functions": [],
+        "queries": [
+          {
+            "name": "bundles and cashback are allowed rewards",
+            "sql": "select count(*)::text from pg_constraint where conname = 'offers_reward_type_check' and pg_get_constraintdef(oid) like '%bundle_price%' and pg_get_constraintdef(oid) like '%credit_back%'",
+            "equals": "1"
+          },
+          {
+            "name": "a bundle of one is refused, because that is a fixed price",
+            "sql": "select count(*)::text from pg_constraint where conname = 'offers_bundle_shape_check' and pg_get_constraintdef(oid) ilike '%coalesce%'",
+            "equals": "1"
+          },
+          {
+            "name": "cashback has its own credit-ledger kind, kept apart from a manual grant",
+            "sql": "select count(*)::text from pg_constraint where conname = 'customer_credit_ledger_kind_check' and pg_get_constraintdef(oid) like '%cashback%' and pg_get_constraintdef(oid) like '%grant%'",
+            "equals": "1"
+          },
+          {
+            "name": "the offers guide explains dearest-into-the-bundle and that cashback is a liability",
+            "sql": "select count(*)::text from public.help_articles where slug = 'create-and-manage-offers' and status = 'published' and body like '%most expensive qualifying items go into the bundle%' and body like '%a bundle can never raise a price%' and body like '%Cashback is not a discount%' and body like '%money you owe%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "constraints": [
+          "offers_reward_type_check",
+          "offers_bundle_shape_check",
+          "offers_credit_back_shape_check",
+          "customer_credit_ledger_kind_check"
+        ],
+        "functions": [],
+        "queries": [
+          {
+            "name": "bundles and cashback are allowed rewards",
+            "sql": "select count(*)::text from pg_constraint where conname = 'offers_reward_type_check' and pg_get_constraintdef(oid) like '%bundle_price%' and pg_get_constraintdef(oid) like '%credit_back%'",
+            "equals": "1"
+          },
+          {
+            "name": "a bundle of one is refused, because that is a fixed price",
+            "sql": "select count(*)::text from pg_constraint where conname = 'offers_bundle_shape_check' and pg_get_constraintdef(oid) ilike '%coalesce%'",
+            "equals": "1"
+          },
+          {
+            "name": "cashback has its own credit-ledger kind, kept apart from a manual grant",
+            "sql": "select count(*)::text from pg_constraint where conname = 'customer_credit_ledger_kind_check' and pg_get_constraintdef(oid) like '%cashback%' and pg_get_constraintdef(oid) like '%grant%'",
+            "equals": "1"
+          },
+          {
+            "name": "the offers guide explains dearest-into-the-bundle and that cashback is a liability",
+            "sql": "select count(*)::text from public.help_articles where slug = 'create-and-manage-offers' and status = 'published' and body like '%most expensive qualifying items go into the bundle%' and body like '%a bundle can never raise a price%' and body like '%Cashback is not a discount%' and body like '%money you owe%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260903_0069_offers_bundle_scope",
+      "description": "Require a bundle_price offer to name the items it bundles",
+      "file": "sql/20260903_0069_offers_bundle_scope.sql",
+      "checksum": "0b59d8937362887b4f60a63650d2e1e38b0ef7c5aadba3a5550320e650e25f99",
+      "transaction": true,
+      "requires": ["20260903_0068_offers_phase_h"],
+      "verify": {},
+      "applyVerify": {
+        "constraints": [],
+        "functions": ["offers_contents_trigger_needs_scope()"],
+        "queries": [
+          {
+            "name": "a bundle offer must name the items it bundles",
+            "sql": "select count(*)::text from pg_proc where proname = 'offers_contents_trigger_needs_scope' and prosrc like '%bundle_price%'",
+            "equals": "1"
+          },
+          {
+            "name": "rewards that touch no line are still not required to name items",
+            "sql": "select count(*)::text from pg_proc where proname = 'offers_contents_trigger_needs_scope' and prosrc not like '%credit_back%' and prosrc not like '%free_shipping%' and prosrc not like '%free_item%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "constraints": [],
+        "functions": ["offers_contents_trigger_needs_scope()"],
+        "queries": [
+          {
+            "name": "a bundle offer must name the items it bundles",
+            "sql": "select count(*)::text from pg_proc where proname = 'offers_contents_trigger_needs_scope' and prosrc like '%bundle_price%'",
+            "equals": "1"
+          },
+          {
+            "name": "rewards that touch no line are still not required to name items",
+            "sql": "select count(*)::text from pg_proc where proname = 'offers_contents_trigger_needs_scope' and prosrc not like '%credit_back%' and prosrc not like '%free_shipping%' and prosrc not like '%free_item%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260903_0070_offers_phase_i_mink",
+      "description": "Add Mink offer authority: three default-off gates, offer draft kinds, the offer approval target and a mandatory budget cap",
+      "file": "sql/20260903_0070_offers_phase_i_mink.sql",
+      "checksum": "27a1e713e3980b355fc66807a43b2b6cf1b399e3b6d2c4ed020dd6ee710a3949",
+      "transaction": true,
+      "requires": ["20260903_0069_offers_bundle_scope"],
+      "verify": {},
+      "applyVerify": {
+        "constraints": [
+          "mink_drafts_kind_check",
+          "mink_action_tool_access_name_check",
+          "mink_action_audit_tool_check",
+          "mink_action_approvals_resource_type_check",
+          "mink_action_approvals_offer_budget_check",
+          "mink_action_approvals_offer_target_check"
+        ],
+        "functions": [],
+        "queries": [
+          {
+            "name": "the three offer tools are gateable, auditable and proposable",
+            "sql": "select count(*)::text from pg_constraint where conname in ('mink_action_tool_access_name_check','mink_action_audit_tool_check') and pg_get_constraintdef(oid) like '%create_offer%' and pg_get_constraintdef(oid) like '%activate_offer%'",
+            "equals": "2"
+          },
+          {
+            "name": "activation is its own draft kind, separate from creating the terms",
+            "sql": "select count(*)::text from pg_constraint where conname = 'mink_drafts_kind_check' and pg_get_constraintdef(oid) like '%offer_create%' and pg_get_constraintdef(oid) like '%offer_activate%'",
+            "equals": "1"
+          },
+          {
+            "name": "an offer approval cannot be saved without a budget",
+            "sql": "select count(*)::text from pg_constraint where conname = 'mink_action_approvals_offer_budget_check' and pg_get_constraintdef(oid) ilike '%coalesce%'",
+            "equals": "1"
+          },
+          {
+            "name": "the Help guide states the budget rule and the separate activation",
+            "sql": "select count(*)::text from public.help_articles where slug = 'create-and-manage-offers' and status = 'published' and body like '%An offer Mink creates is switched off%' and body like '%must have a total budget%' and body like '%cannot propose bundles, free gifts, spending ladders or free delivery%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "constraints": [
+          "mink_drafts_kind_check",
+          "mink_action_tool_access_name_check",
+          "mink_action_audit_tool_check",
+          "mink_action_approvals_resource_type_check",
+          "mink_action_approvals_offer_budget_check",
+          "mink_action_approvals_offer_target_check"
+        ],
+        "functions": [],
+        "queries": [
+          {
+            "name": "the three offer tools are gateable, auditable and proposable",
+            "sql": "select count(*)::text from pg_constraint where conname in ('mink_action_tool_access_name_check','mink_action_audit_tool_check') and pg_get_constraintdef(oid) like '%create_offer%' and pg_get_constraintdef(oid) like '%activate_offer%'",
+            "equals": "2"
+          },
+          {
+            "name": "activation is its own draft kind, separate from creating the terms",
+            "sql": "select count(*)::text from pg_constraint where conname = 'mink_drafts_kind_check' and pg_get_constraintdef(oid) like '%offer_create%' and pg_get_constraintdef(oid) like '%offer_activate%'",
+            "equals": "1"
+          },
+          {
+            "name": "an offer approval cannot be saved without a budget",
+            "sql": "select count(*)::text from pg_constraint where conname = 'mink_action_approvals_offer_budget_check' and pg_get_constraintdef(oid) ilike '%coalesce%'",
+            "equals": "1"
+          },
+          {
+            "name": "the Help guide states the budget rule and the separate activation",
+            "sql": "select count(*)::text from public.help_articles where slug = 'create-and-manage-offers' and status = 'published' and body like '%An offer Mink creates is switched off%' and body like '%must have a total budget%' and body like '%cannot propose bundles, free gifts, spending ladders or free delivery%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260903_0071_mink_offer_approval_tool",
+      "description": "Widen the fourth tool allowlist 0070 missed, so an offer approval can be saved",
+      "file": "sql/20260903_0071_mink_offer_approval_tool.sql",
+      "checksum": "661006d80afb31551106acacd037f507135885b7e4d774a96dab9760d5bd4a16",
+      "transaction": true,
+      "requires": ["20260903_0070_offers_phase_i_mink"],
+      "verify": {},
+      "applyVerify": {
+        "constraints": ["mink_action_approvals_tool_check"],
+        "functions": [],
+        "queries": [
+          {
+            "name": "an offer approval names a tool the approvals table accepts",
+            "sql": "select count(*)::text from pg_constraint where conname = 'mink_action_approvals_tool_check' and pg_get_constraintdef(oid) like '%create_offer%' and pg_get_constraintdef(oid) like '%activate_offer%'",
+            "equals": "1"
+          },
+          {
+            "name": "every tool allowlist agrees about the offer tools",
+            "sql": "select count(*)::text from pg_constraint where contype = 'c' and pg_get_constraintdef(oid) like '%create_coupon%' and pg_get_constraintdef(oid) not like '%create_offer%'",
+            "equals": "0"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "constraints": ["mink_action_approvals_tool_check"],
+        "functions": [],
+        "queries": [
+          {
+            "name": "an offer approval names a tool the approvals table accepts",
+            "sql": "select count(*)::text from pg_constraint where conname = 'mink_action_approvals_tool_check' and pg_get_constraintdef(oid) like '%create_offer%' and pg_get_constraintdef(oid) like '%activate_offer%'",
+            "equals": "1"
+          },
+          {
+            "name": "every tool allowlist agrees about the offer tools",
+            "sql": "select count(*)::text from pg_constraint where contype = 'c' and pg_get_constraintdef(oid) like '%create_coupon%' and pg_get_constraintdef(oid) not like '%create_offer%'",
+            "equals": "0"
+          }
+        ]
+      }
     }
   ]
 }

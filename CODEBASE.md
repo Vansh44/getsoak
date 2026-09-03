@@ -8025,9 +8025,8 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       merchant's Twilio number needs a messaging webhook pointed at us. Until
       then opt-out is enforced on send but can only be recorded by hand.
 
-38. **Offers — one engine for every discount** (Phases A–E shipped; design and
-    the full phase plan in **`docs/offers-plan.md`**, sequenced as roadmap
-    Step 22).
+38. **Offers — one engine for every discount** (Phases A–I shipped, the whole
+    plan; design in **`docs/offers-plan.md`**, sequenced as roadmap Step 22).
     Coupons were the only discount mechanism and were order-level only: a
     percentage or a rupee amount off the whole cart, on a code, online only.
     Offers replace that with one engine reaching both counters.
@@ -8366,10 +8365,117 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       stale `true` with nobody attached would quote a discount the server
       refuses, making the total go UP at completion, which is the one direction
       of divergence that is indefensible in front of a customer.
-    - **Not built (Phases F–I):**
-      free shipping, gift with purchase, bundles, cashback, and Mink offer
-      authority. `PosCatalogItem` carries `categoryId` (cache SCHEMA_VERSION v4)
-      so the till prices a scoped offer identically.
+    - **Phase F — `free_shipping`, ITS OWN AXIS.** `rewardLevel` returns
+      `"shipping"`, so it never enters the merchandise scenario comparison — a
+      shopper must not lose free delivery because a category discount scored
+      higher; they are different pockets of the bill.
+      ★★ CHEAPEST WINS, AND IT IS ONE LINE: `freeShippingApplies` gained a third
+      argument and ORs it in, so both quote paths pick it up with no special
+      case. That is what makes "free above ₹500" work — a store whose standing
+      policy is free-above-₹999 has temporarily lowered its threshold. Any other
+      rule produces a cart where ADDING ITEMS INCREASES DELIVERY COST.
+      ★ `CheckoutShippingOption.offerWaivedAmount` separates the OFFER's waiver
+      from the store's own threshold, and is the only place both facts are
+      known: an offer that waived nothing (the cart already shipped free) is
+      charged nothing against its budget, or a ₹5,000 free-delivery campaign
+      burns on orders that were always going to ship free.
+      ★ THE WAIVER IS RESERVED AFTER THE QUOTE, not with the merchandise
+      offers — the engine is pure and never sees a carrier quote, so it reports
+      `amount: 0` and `placeOrder` fills it in, then PUSHES it onto
+      `reservedOffers` so all seven failure paths release it through the one
+      existing unwind helper. Refused for a POS-inclusive offer: a register sale
+      has no delivery charge to waive. ⚠ For a Shiprocket store the merchant
+      still pays the courier — the waiver zeroes the CUSTOMER's charge and the
+      cost appears nowhere on the order.
+    - **Phase G — `free_item`, AND A GIFT IS STOCK LEAVING THE SHELF.**
+      `rewardLevel` returns `"gift"`; the engine NAMES it and the caller prices,
+      adds and reserves it. Both counters APPEND IT TO THE PRICED LINES before
+      tax, stock and the insert, so each path handles it with no special case —
+      same reservation, same tax call, same order-items write, and it appears on
+      the order, invoice, receipt and confirmation email because it genuinely is
+      part of the order.
+      ★★ THE ENGINE STOPS OFFERING A GIFT WITH NO STOCK. `loadLiveOffers`
+      resolves availability against `on_hand − reserved` in ONE query for every
+      gift offer; promising it and failing at reserve time is the worst outcome
+      available, because the shopper has been told they are getting a tumbler
+      and the failure arrives after they commit. `undefined` means UNCHECKED,
+      not unavailable, so a historical replay or a cached register catalogue
+      does not make every gift offer silently vanish.
+      ★★ THE TILL SHOWS A "HAND OVER" ROW. The gift is worth ₹0, so nothing in
+      the totals moves and `posTotals` agrees perfectly — which is exactly why
+      the row is essential: without it the register reserves a tumbler and
+      prints it on the receipt while the cashier, seeing no change on screen,
+      hands over the bag and nothing else. Worse than a total mismatch, because
+      the stock has already gone on paper.
+      **⚠⚠ THE GST TREATMENT IS NOT PROFESSIONALLY REVIEWED.** The plan gated
+      this phase on a professional confirming it; what ships is the §25/§28
+      posture this codebase already takes for policy text and credit notes — the
+      DATA is right (the gift line records its own tax class, so the figures
+      exist if the treatment requires valuing it at open market value) with tax
+      on a zero taxable value computed as zero. The migration, the Help guide
+      and the offer editor each say so. Get a CA to confirm before anyone files.
+    - **Phase H — `bundle_price` and `credit_back`.** A bundle is "any N from
+      this set for ₹X", the bundle retail actually runs and the one the existing
+      scope machinery expresses; a strict "these exact three products" bundle
+      needs a composition table and is deliberately not built.
+      ★★ THE DEAREST UNITS GO INTO THE BUNDLE. ₹500+₹400+₹300+₹200 on "any 3 for
+      ₹999": bundling the three dearest charges ₹999 for ₹1,200 of goods and
+      leaves the ₹200 at full price; bundling the three CHEAPEST would charge
+      ₹999 for ₹900 — A MARK-UP on an offer advertised as a saving. So
+      dearest-first is both the customer-favourable reading and the only one
+      that cannot invert the offer's meaning. The opposite of `buy_x_get_y`,
+      where the cheapest are free — same rule in both: give away the most. A set
+      worth less than the bundle price is skipped.
+      ★ A TEST CAUGHT A REAL DEFECT: `bundle_price` was first classified
+      order-level and every bundle returned zero, because the group claim is
+      reached only through the LINE candidate list. Reclassifying it made
+      migration `0069` necessary — a line-level reward's scope is what it
+      discounts, and unscoped "any 3 for ₹999" would bundle any three items in
+      the catalogue.
+      ★ `credit_back` CHANGES NOTHING ABOUT WHAT THE CUSTOMER PAYS. Credit is a
+      PAYMENT here (§29), so netting cashback off `orders.total` would
+      understate the sale, mis-compute GST and make the invoice disagree with
+      the charge. Issued after the order commits, idempotent on the order, never
+      fails the sale, and under ITS OWN ledger kind — §29 keeps `reinstate`
+      apart from `grant` for exactly this reason, and promotional credit is a
+      third thing again.
+    - **Phase I — Mink offer authority, three DEFAULT-OFF gates**
+      (`create_offer` / `update_offer` / `activate_offer`), following the Phase
+      4C pattern: saved private proposal, exact short-lived human approval,
+      tenant/permission/tool/version rechecks, idempotent transactional
+      execution, append-only outcome. No model tool executes.
+      ★★ ACTIVATION IS ITS OWN APPROVAL, which is the design and not an extra
+      step: a disabled offer costs exactly nothing so its review can take as
+      long as it needs, while a live automatic offer applies itself to every
+      qualifying order from the instant it goes live. Create and update pin
+      `status: "disabled"` LITERALLY, so even a tampered payload cannot produce
+      a live offer.
+      ★★ A BUDGET CAP IS MANDATORY IN FIVE PLACES — the draft field, the
+      proposal, the preview, execution, AND activation again (an offer whose
+      budget was cleared by hand after Mink created it would otherwise go live
+      uncapped) — plus a sixth as a database constraint on the approval row,
+      which is the durable artefact an execution replays from.
+      ★ THE DEPTH CAP IS READ LIVE, not taken from the approval, so tightening
+      `offers.maxTotalDiscountPercent` reaches proposals already written; it
+      fails to the registry default, never to 100.
+      ★ THE REWARD SHAPE IS NARROW BY DESIGN — a percentage or a rupee amount
+      off the order. Bundles, gifts, ladders and free delivery change stock,
+      liability or delivery cost in ways one approval screen cannot show
+      honestly. Rollback deletes only an offer never switched on and never
+      applied to an order, since `offer_redemptions` and `order_item_offers`
+      point at it.
+      ★★ AND THE ADVERSARIAL PROBE CAUGHT A FOURTH ALLOWLIST. `0070` widened
+      three tool vocabularies found by reading the constraints on the tables
+      expected; `mink_action_approvals` carries its OWN `tool_check` too, which
+      it missed — so every offer approval, valid ones included, was refused and
+      the whole execution path would have failed at runtime. Repaired by `0071`.
+      **The rule: when a vocabulary is enumerated in more than one constraint,
+      find them by QUERYING for an existing member
+      (`pg_get_constraintdef(oid) LIKE '%create_coupon%'`) rather than by
+      listing the tables you expect.** That query returned three; enumerating by
+      hand returned two.
+    - `PosCatalogItem` carries `categoryId` (cache SCHEMA_VERSION v4) so the
+      till prices a scoped offer identically.
 
 39. **The operator console — one screen per job.** `app/platform/dashboard/(console)`
     - `lib/platform/`. Full IA + rationale: **`docs/operator-console.md`**.

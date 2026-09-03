@@ -646,6 +646,12 @@ export function OfferForm({
     tiers: offer?.tiers ?? [{ minSubtotal: 1000, value: 5 }],
     breaks: offer?.breaks ?? [{ minQuantity: 6, percent: 10 }],
     conditions: offer?.conditions ?? [],
+    giftProductId: offer?.giftProductId ?? "",
+    giftVariantId: offer?.giftVariantId ?? null,
+    giftQuantity: offer?.giftQuantity ?? 1,
+    bundleQuantity: offer?.bundleQuantity ?? 3,
+    bundlePrice: offer?.bundlePrice ?? 0,
+    creditAmount: offer?.creditAmount ?? 0,
     channels: offer?.channels ?? [],
     validFrom: dateValue(offer?.validFrom ?? null),
     validUntil: dateValue(offer?.validUntil ?? null),
@@ -677,7 +683,11 @@ export function OfferForm({
     // ★ A quantity ladder MUST be scoped: "buy 6 or more" counts units across
     // the chosen products, and unscoped it would count the whole basket —
     // a case price on an unrelated mixture of everything in the shop.
-    form.rewardType === "volume_break";
+    form.rewardType === "volume_break" ||
+    // ★ A bundle MUST be scoped: "any 3 for ₹999" unscoped would bundle any
+    // three items in the whole catalogue, at whatever the dearest three
+    // happen to be.
+    form.rewardType === "bundle_price";
   const scopeIsCondition =
     form.triggerType === "contains_product" ||
     form.triggerType === "contains_category";
@@ -719,24 +729,34 @@ export function OfferForm({
                 `${Math.trunc(Number(b.minQuantity) || 0)}+ → ${Number(b.percent || 0)}% off`,
             )
             .join(", ");
+    const giftName =
+      products.find((pr) => pr.id === form.giftProductId)?.name ?? "a gift";
     const gives =
-      form.rewardType === "tiered"
-        ? `Order discount by level: ${ladder || "no levels yet"}`
-        : form.rewardType === "volume_break"
-          ? `Chosen items${scoped} by quantity: ${ladder || "no levels yet"}`
-          : form.rewardType === "amount_off"
-            ? `₹${Number(form.amount || 0).toLocaleString("en-IN")} off the order`
-            : form.rewardType === "fixed_price"
-              ? `Chosen items${scoped} at ₹${Number(form.unitPrice || 0).toLocaleString("en-IN")} each`
-              : form.rewardType === "buy_x_get_y"
-                ? `Buy ${form.buyQuantity || 0}, get ${form.getQuantity || 0}${
-                    form.getPercent && form.getPercent < 100
-                      ? ` at ${form.getPercent}% off`
-                      : " free"
-                  }${scoped}`
-                : form.rewardType === "percent_off_items"
-                  ? `${Number(form.percent || 0)}% off chosen items${scoped}`
-                  : `${Number(form.percent || 0)}% off the order`;
+      form.rewardType === "bundle_price"
+        ? `Any ${form.bundleQuantity || 0} chosen items${scoped} for ₹${Number(form.bundlePrice || 0).toLocaleString("en-IN")}`
+        : form.rewardType === "credit_back"
+          ? `₹${Number(form.creditAmount || 0).toLocaleString("en-IN")} store credit back`
+          : form.rewardType === "free_item"
+            ? `Free ${giftName}${form.giftQuantity > 1 ? ` × ${form.giftQuantity}` : ""}`
+            : form.rewardType === "free_shipping"
+              ? "Free delivery"
+              : form.rewardType === "tiered"
+                ? `Order discount by level: ${ladder || "no levels yet"}`
+                : form.rewardType === "volume_break"
+                  ? `Chosen items${scoped} by quantity: ${ladder || "no levels yet"}`
+                  : form.rewardType === "amount_off"
+                    ? `₹${Number(form.amount || 0).toLocaleString("en-IN")} off the order`
+                    : form.rewardType === "fixed_price"
+                      ? `Chosen items${scoped} at ₹${Number(form.unitPrice || 0).toLocaleString("en-IN")} each`
+                      : form.rewardType === "buy_x_get_y"
+                        ? `Buy ${form.buyQuantity || 0}, get ${form.getQuantity || 0}${
+                            form.getPercent && form.getPercent < 100
+                              ? ` at ${form.getPercent}% off`
+                              : " free"
+                          }${scoped}`
+                        : form.rewardType === "percent_off_items"
+                          ? `${Number(form.percent || 0)}% off chosen items${scoped}`
+                          : `${Number(form.percent || 0)}% off the order`;
     const when =
       form.triggerType === "min_subtotal"
         ? ` on orders over ₹${Number(form.minSubtotal || 0).toLocaleString("en-IN")}`
@@ -859,10 +879,123 @@ export function OfferForm({
                 <option value="volume_break">
                   Buy more, save more (quantity levels)
                 </option>
+                <option value="free_shipping">Free delivery</option>
+                <option value="free_item">Free gift</option>
+                <option value="bundle_price">
+                  Bundle price (any few for one price)
+                </option>
+                <option value="credit_back">Store credit back</option>
               </select>
             </label>
-            {form.rewardType === "tiered" ||
-            form.rewardType === "volume_break" ? (
+            {form.rewardType === "bundle_price" ? (
+              <div className="sm:col-span-2 grid gap-4 sm:grid-cols-3">
+                {(
+                  [
+                    ["bundleQuantity", "How many items"],
+                    ["bundlePrice", "Bundle price (₹)"],
+                    ["maxSets", "Max bundles per order"],
+                  ] as const
+                ).map(([key, label]) => (
+                  <label key={key} className="block">
+                    <span className={hintClass}>{label}</span>
+                    <input
+                      className={fieldClass}
+                      inputMode="numeric"
+                      value={form[key] || ""}
+                      placeholder={key === "maxSets" ? "No limit" : ""}
+                      onChange={(e) =>
+                        set(key, Number(e.target.value.replace(/\D/g, "")) || 0)
+                      }
+                    />
+                  </label>
+                ))}
+                <span className={`${hintClass} sm:col-span-3`}>
+                  Items are counted across the basket, and the most expensive
+                  qualifying ones go into the bundle — which gives the customer
+                  the biggest saving and means a bundle can never charge more
+                  than the items were worth. If they come to less than the
+                  bundle price, the offer does not apply.
+                </span>
+              </div>
+            ) : form.rewardType === "credit_back" ? (
+              <div className="sm:col-span-2">
+                <label className="block max-w-[12rem]">
+                  <span className={hintClass}>Store credit (₹)</span>
+                  <input
+                    className={fieldClass}
+                    inputMode="numeric"
+                    value={form.creditAmount || ""}
+                    onChange={(e) =>
+                      set(
+                        "creditAmount",
+                        Number(e.target.value.replace(/\D/g, "")) || 0,
+                      )
+                    }
+                  />
+                </label>
+                <span className={hintClass}>
+                  The customer pays full price today and receives store credit
+                  afterwards. It does not reduce the order total, change the tax
+                  or appear on the invoice, because nothing about what they paid
+                  has changed.
+                </span>
+                <p className="mt-2 text-xs text-[#b45309]">
+                  This is money you owe. Unlike a discount, which costs you
+                  once, credit sits on the customer&rsquo;s account until they
+                  spend it — set a budget if you want a ceiling on how much you
+                  issue.
+                </p>
+              </div>
+            ) : form.rewardType === "free_item" ? (
+              <div className="sm:col-span-2">
+                <label className="block">
+                  <span className={hintClass}>The gift</span>
+                  <select
+                    className={fieldClass}
+                    value={form.giftProductId}
+                    onChange={(e) => set("giftProductId", e.target.value)}
+                  >
+                    <option value="">Choose a product…</option>
+                    {products.map((pr) => (
+                      <option key={pr.id} value={pr.id}>
+                        {pr.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="mt-3 block max-w-[10rem]">
+                  <span className={hintClass}>How many</span>
+                  <input
+                    className={fieldClass}
+                    inputMode="numeric"
+                    value={form.giftQuantity || ""}
+                    onChange={(e) =>
+                      set(
+                        "giftQuantity",
+                        Number(e.target.value.replace(/\D/g, "")) || 0,
+                      )
+                    }
+                  />
+                </label>
+                {/* ★★ THE TWO THINGS A MERCHANT WOULD OTHERWISE DISCOVER THE
+                    HARD WAY, said before they save rather than after. */}
+                <span className={hintClass}>
+                  The gift is added to the order at ₹0 and its stock is reserved
+                  like any sold item, so it is taken off your shelf and appears
+                  on the order and the receipt. The offer stops applying on its
+                  own when the gift runs out — customers are never promised one
+                  you cannot send.
+                </span>
+                <p className="mt-2 text-xs text-[#b45309]">
+                  Tax on free goods: the line records the gift&rsquo;s own tax
+                  class, and tax on a zero value is zero. Whether GST is due on
+                  a free item given with a sale depends on your circumstances —
+                  check with your accountant before relying on this for a
+                  return.
+                </p>
+              </div>
+            ) : form.rewardType === "tiered" ||
+              form.rewardType === "volume_break" ? (
               <LadderEditor form={form} setForm={setForm} />
             ) : form.rewardType === "buy_x_get_y" ? (
               <div className="sm:col-span-2">

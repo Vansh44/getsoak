@@ -21,6 +21,7 @@ import {
   offerProducts,
   offerRedemptions,
   offerUserGroups,
+  inventoryLevels,
   offers,
   orders,
   stores,
@@ -181,6 +182,12 @@ export async function loadLiveOffers(
     usedBy.set(r.offerId, (usedBy.get(r.offerId) ?? 0) + 1);
   }
 
+  // ★★ ONE QUERY FOR EVERY GIFT, not one per offer. A cart must not cost N
+  // round trips at ~46ms each — the same rule the scope and usage reads follow.
+  // Resolved BEFORE the map so the engine can withdraw a gift it cannot
+  // deliver rather than promising it and failing at reserve time (plan §12).
+  const giftStock = await resolveGiftAvailability(db, storeId, rows);
+
   return rows.map((r) => {
     const trigger = (r.triggerConfig ?? {}) as Record<string, unknown>;
     const reward = (r.rewardConfig ?? {}) as Record<string, unknown>;
@@ -215,6 +222,9 @@ export async function loadLiveOffers(
         minSubtotal: num(trigger.minSubtotal),
       },
       conditions: decoded.conditions,
+      // ★ Resolved below against `on_hand − reserved`, the same figure a paid
+      // line is checked against. `undefined` when this offer gives no gift.
+      giftAvailable: giftStock.get(r.id),
       // ★ An unreadable condition REFUSES the offer rather than running it
       // without the restriction — see `Offer.conditionsUnreadable`.
       conditionsUnreadable: decoded.dropped,
@@ -308,6 +318,76 @@ export async function loadFirstOrderState(
   } catch {
     return false;
   }
+}
+
+/**
+ * Which gift offers still have stock to give.
+ *
+ * ★ AVAILABLE, NOT ON HAND. `on_hand − reserved` is what a paid line is
+ * checked against, and a gift promised to somebody else's pending order is
+ * exactly as unavailable as one that has been sold.
+ *
+ * ★ ACROSS EVERY LOCATION, deliberately. Which shelf serves an online order is
+ * a routing OUTCOME decided later (§23), so requiring stock at one specific
+ * location here would withdraw a gift the store can actually fulfil. The
+ * reservation at order time is the authoritative check; this is the
+ * don't-advertise-what-you-haven't-got filter in front of it.
+ *
+ * ★ FAILS OPEN. An unreadable stock table returns an empty map, so
+ * `giftAvailable` is `undefined` and the engine treats the gift as unchecked
+ * rather than unavailable — a blip must not cancel every gift offer in the
+ * store. The reservation still refuses at order time.
+ */
+async function resolveGiftAvailability(
+  db: Db,
+  storeId: string,
+  rows: readonly { id: string; rewardType: string; rewardConfig: unknown }[],
+): Promise<Map<string, boolean>> {
+  const out = new Map<string, boolean>();
+  const wanted = rows
+    .filter((r) => r.rewardType === "free_item")
+    .map((r) => ({
+      id: r.id,
+      reward: decodeReward(r.rewardType, r.rewardConfig),
+    }))
+    .filter((r) => !!r.reward.giftProductId);
+  if (wanted.length === 0) return out;
+
+  try {
+    const productIds = [
+      ...new Set(wanted.map((w) => w.reward.giftProductId as string)),
+    ];
+    const levels = await db
+      .select({
+        productId: inventoryLevels.productId,
+        variantId: inventoryLevels.variantId,
+        onHand: inventoryLevels.onHand,
+        reserved: inventoryLevels.reserved,
+      })
+      .from(inventoryLevels)
+      .where(
+        and(
+          eq(inventoryLevels.storeId, storeId),
+          inArray(inventoryLevels.productId, productIds),
+        ),
+      );
+
+    const availableBy = new Map<string, number>();
+    for (const l of levels) {
+      const key = `${l.productId}:${l.variantId ?? ""}`;
+      const free = Number(l.onHand ?? 0) - Number(l.reserved ?? 0);
+      availableBy.set(key, (availableBy.get(key) ?? 0) + free);
+    }
+
+    for (const w of wanted) {
+      const key = `${w.reward.giftProductId}:${w.reward.giftVariantId ?? ""}`;
+      const need = Math.max(1, Math.trunc(w.reward.giftQuantity ?? 1));
+      out.set(w.id, (availableBy.get(key) ?? 0) >= need);
+    }
+  } catch {
+    return new Map();
+  }
+  return out;
 }
 
 export async function loadOfferPolicy(): Promise<
