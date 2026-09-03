@@ -23,6 +23,8 @@ const state = vi.hoisted(() => ({
   selectCalls: 0,
   executeCalls: 0,
   setCalls: [] as any[],
+  /** Make the Nth select throw, to stand in for one failing worker pass. */
+  throwAtSelect: null as number | null,
 }));
 
 /**
@@ -57,7 +59,9 @@ function chain(rows: any[]) {
 const db = {
   select: () => {
     const rows = state.selectRows[state.selectCalls] ?? [];
+    const call = state.selectCalls;
     state.selectCalls += 1;
+    if (call === state.throwAtSelect) throw new Error("connection terminated");
     return chain(rows);
   },
   execute: () => {
@@ -85,19 +89,34 @@ vi.mock("@/lib/observability/logger", () => ({
   logWarn: vi.fn(),
 }));
 
+import { recordEvent } from "@/lib/notifications/record";
 import {
+  cancelMinkWorkflow,
   getMinkWorkflow,
   resumeMinkWorkflow,
   runMinkWorkflowWorker,
 } from "./workflows";
 
+/**
+ * ★ RESTORE EVERY FIELD, IN EVERY `beforeEach`. `test:shuffle` exists for
+ * exactly this: `throwAtSelect` was reset only in the first describe, so under
+ * a different ordering the failing-pass test leaked a throwing select into the
+ * scope-guard describe and took ten tests with it. One helper, so a field added
+ * later cannot be reset in some blocks and not others.
+ */
+function resetState() {
+  state.selectRows = [];
+  state.executeRows = [];
+  state.selectCalls = 0;
+  state.executeCalls = 0;
+  state.setCalls = [];
+  state.throwAtSelect = null;
+}
+
 describe("the Mink workflow worker on an idle tick", () => {
   beforeEach(() => {
-    state.selectRows = [];
-    state.executeRows = [];
-    state.selectCalls = 0;
-    state.executeCalls = 0;
-    state.setCalls = [];
+    resetState();
+    (recordEvent as any).mockClear?.();
   });
 
   it("★★ returns quietly when the queue is empty, instead of throwing", async () => {
@@ -119,6 +138,48 @@ describe("the Mink workflow worker on an idle tick", () => {
     // reaching a second SELECT is the evidence the loop exited normally.
     expect(state.executeCalls).toBeGreaterThan(0);
     expect(state.selectCalls).toBeGreaterThanOrEqual(2);
+  });
+
+  it("★ one failing pass does not jump over the other two", async () => {
+    // The reaper runs BEFORE the claim loop and delivery runs after it, and
+    // all three used to share one uncaught path — so a throw in the reaper took
+    // the queue AND the notification outbox with it, and a finished workflow
+    // was never announced. Each pass now fails alone.
+    state.throwAtSelect = 0; // the reaper's read
+    await expect(runMinkWorkflowWorker()).rejects.toThrow(
+      "connection terminated",
+    );
+    // ★ Delivery still got its turn: a second select means the loop was walked
+    // and `deliverPendingWorkflowNotifications` was reached.
+    expect(state.selectCalls).toBeGreaterThanOrEqual(2);
+  });
+
+  it("★★ tells the admin who asked, and nobody else", async () => {
+    // The event's section is `dashboard`, which every admin can view, so the
+    // default permission routing told the whole team about one person's
+    // request — including the private drafting workflows only the requester can
+    // open. `restrictToAdminIds` narrows the already permission-filtered set,
+    // so it can only ever remove people.
+    state.selectRows = [
+      [], // reaper: nothing to reap
+      [
+        {
+          id: "wf-9",
+          storeId: "store-1",
+          adminId: "admin-7",
+          template: "delayed_pickup_review",
+          result: {},
+        },
+      ],
+    ];
+    await runMinkWorkflowWorker();
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "mink.workflow_completed",
+        storeId: "store-1",
+        restrictToAdminIds: ["admin-7"],
+      }),
+    );
   });
 
   it("★ a genuinely malformed claimed row is still loud", async () => {
@@ -160,11 +221,7 @@ const WEEKLY_INPUT = {
 
 describe("★★ the workflow retry budget is per step", () => {
   beforeEach(() => {
-    state.selectRows = [];
-    state.executeRows = [];
-    state.selectCalls = 0;
-    state.executeCalls = 0;
-    state.setCalls = [];
+    resetState();
   });
 
   /** The payload of the update that put the run back on the queue. */
@@ -271,11 +328,7 @@ describe("★★ the workflow retry budget is per step", () => {
 // (CODEBASE §23).
 describe("★★ reading a completed workflow re-checks the captured scope", () => {
   beforeEach(() => {
-    state.selectRows = [];
-    state.executeRows = [];
-    state.selectCalls = 0;
-    state.executeCalls = 0;
-    state.setCalls = [];
+    resetState();
   });
 
   const actor = (locationIds: string[] | null, isSuperadmin = false) =>
@@ -366,5 +419,61 @@ describe("★★ reading a completed workflow re-checks the captured scope", () 
     await expect(
       getMinkWorkflow(actor(["loc-a"], true), "wf-1", false),
     ).resolves.toBeDefined();
+  });
+
+  // ★★ AND CANCEL RETURNS THE SAME VIEW, so it needs the same guard.
+  //
+  // A completed run falls straight through `cancelMinkWorkflow`'s early return
+  // to `toWorkflowView(run)`, which carries `result_json`. With the check only
+  // on the read, an admin refused 403 on GET could press Stop and be handed the
+  // store-wide figures anyway — and the card makes that one click, not a
+  // theoretical request: the artifact persisted in the thread still says
+  // "queued", so `active` is true and the Stop button renders on every re-open.
+  it("★★ refuses to hand a completed result back through cancel", async () => {
+    seedRun({ locationIds: [], includeUnassigned: true });
+    await expect(cancelMinkWorkflow(actor(["loc-a"]), "wf-1")).rejects.toThrow(
+      /no longer have access/i,
+    );
+  });
+
+  it("★ still lets the owner stop work inside the scope they still see", async () => {
+    seedRun({
+      locationIds: ["11111111-1111-4111-8111-111111111111"],
+      includeUnassigned: false,
+    });
+    await expect(
+      cancelMinkWorkflow(
+        actor(["11111111-1111-4111-8111-111111111111"]),
+        "wf-1",
+      ),
+    ).resolves.toBeDefined();
+  });
+
+  it("★ approving more work on a scope you cannot see is refused too", async () => {
+    state.selectCalls = 0;
+    state.selectRows = [
+      [
+        {
+          id: "wf-1",
+          storeId: "store-1",
+          adminId: "admin-1",
+          template: "weekly_trading_report",
+          status: "waiting_approval",
+          inputJson: {
+            ...WEEKLY_INPUT,
+            locationIds: [],
+            includeUnassigned: true,
+          },
+          currentStep: 1,
+          totalSteps: 3,
+          attemptCount: 2,
+          maxAttempts: 6,
+        },
+      ],
+      [],
+    ];
+    await expect(resumeMinkWorkflow(actor(["loc-a"]), "wf-1")).rejects.toThrow(
+      /no longer have access/i,
+    );
   });
 });

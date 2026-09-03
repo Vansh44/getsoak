@@ -102,6 +102,17 @@ export interface EmitEventInput {
    */
   customerId?: string | null;
   /**
+   * Narrow the `store-admins` audience to specific admins.
+   *
+   * ★ IT CAN ONLY EVER REMOVE PEOPLE. It is applied AFTER the section
+   * permission filter and the store's own routing rule, so it obeys the same
+   * floor everything else does (routing.ts): naming somebody who cannot view
+   * the event's section does not deliver to them. Use it for an event that is
+   * genuinely about one admin's own request — a Mink workflow they queued —
+   * rather than news the whole team needs.
+   */
+  restrictToAdminIds?: readonly string[] | null;
+  /**
    * DISPLAY-ONLY extras for the EMAIL channel — today, an order summary.
    *
    * Deliberately separate from `payload`: that one is the audit record, kept
@@ -302,13 +313,16 @@ async function fanOut(
     // only narrow this set — see the header of routing.ts for why targeting
     // must never widen it.
     const eligible = await storeAdminRecipients(db, input.storeId, def.section);
-    recipients.push(
-      ...selectRecipients(
-        eligible,
-        config.audiences.team?.routing,
-        input.locationId ?? null,
-      ),
+    const selected = selectRecipients(
+      eligible,
+      config.audiences.team?.routing,
+      input.locationId ?? null,
     );
+    // Narrowing only, and last — see `restrictToAdminIds` above.
+    const targeted = input.restrictToAdminIds
+      ? selected.filter((r) => input.restrictToAdminIds!.includes(r.id))
+      : selected;
+    recipients.push(...targeted);
   }
   if (def.audiences.customer && input.customerId) {
     recipients.push({

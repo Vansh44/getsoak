@@ -5,11 +5,32 @@ import type {
   MinkProductActionStatus,
 } from "./product-action-types";
 
+/**
+ * ★★ ONE LIST, DERIVED BOTH WAYS. This was a bare union, and `domain-actions.ts`
+ * carried a hand-written `isResourceType` guard beside it that still read
+ * `product | coupon | customer_group`. `validateDomainApprovalRow` runs that
+ * guard over every approval it creates, executes or rolls back, so ADDING
+ * "offer" to the union changed the types and nothing else: the database
+ * accepted `resource_type = 'offer'` (migration 0070) and the application
+ * threw "This Mink approval is invalid" on the way in. Deriving the type from
+ * the array means the next resource type cannot be half-added.
+ */
+export const MINK_DOMAIN_RESOURCE_TYPES = [
+  "product",
+  "coupon",
+  "customer_group",
+  "offer",
+] as const;
+
 export type MinkDomainResourceType =
-  | "product"
-  | "coupon"
-  | "customer_group"
-  | "offer";
+  (typeof MINK_DOMAIN_RESOURCE_TYPES)[number];
+
+export function isMinkDomainResourceType(
+  value: string,
+): value is MinkDomainResourceType {
+  return (MINK_DOMAIN_RESOURCE_TYPES as readonly string[]).includes(value);
+}
+
 export type MinkDomainActionValues = Record<string, string | null>;
 
 export interface MinkDomainActionApproval {

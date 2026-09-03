@@ -43,6 +43,43 @@ describe("Mink workflow cron", () => {
     expect(runWorker).not.toHaveBeenCalled();
   });
 
+  it("answers 503 rather than an unhandled 500 when the heartbeat throws", async () => {
+    // ★ THE CRON CONTRACT prune-logs and seo-refresh already follow: a thrown
+    // pass is 503 so Cloud Scheduler's retries engage. A workflow that
+    // exhausted its OWN retries is still 200 with ok:false — that is the queue
+    // working, not an outage.
+    runWorker.mockRejectedValueOnce(new Error("connection terminated"));
+    const { POST } = await import("./route");
+    const response = await POST(
+      new Request("https://storemink.com/api/cron/mink-workflows", {
+        method: "POST",
+        headers: { authorization: "Bearer cron-secret" },
+      }),
+    );
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({ ok: false });
+  });
+
+  it("reports a workflow that exhausted its own retries as 200, not an outage", async () => {
+    runWorker.mockResolvedValueOnce({
+      claims: 1,
+      stepsCompleted: 0,
+      workflowsCompleted: 0,
+      workflowsCancelled: 0,
+      retriesScheduled: 0,
+      workflowsFailed: 1,
+      notificationsDelivered: 0,
+    });
+    const { GET } = await import("./route");
+    const response = await GET(
+      new Request("https://storemink.com/api/cron/mink-workflows", {
+        headers: { authorization: "Bearer cron-secret" },
+      }),
+    );
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ ok: false });
+  });
+
   it("runs one bounded heartbeat for either supported cron method", async () => {
     const { GET } = await import("./route");
     const response = await GET(

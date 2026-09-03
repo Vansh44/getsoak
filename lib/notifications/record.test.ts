@@ -133,6 +133,82 @@ describe("recordEvent", () => {
     expect(rows[0].title).toContain("ORD10010004");
   });
 
+  // ★★ NARROWING ONLY, AND LAST. `restrictToAdminIds` exists for an event that
+  // is genuinely about one admin's own request — a Mink workflow they queued —
+  // rather than news the whole team needs. It is applied AFTER the section
+  // permission filter and the store's routing rule, so it obeys the same floor
+  // everything else does: it can remove people, never add them.
+  describe("restrictToAdminIds", () => {
+    const manager = {
+      id: "uid-manager",
+      email: "manager@store.com",
+      role: "manager",
+      firstName: "Meera",
+      lastName: "K",
+    };
+    const managerRole = {
+      slug: "manager",
+      permissions: { dashboard: ["view"], orders: ["manage"] },
+    };
+
+    it("delivers only to the named admin", async () => {
+      const mock = setupDb({
+        staff: [superadmin, manager],
+        roles: [managerRole],
+      });
+
+      await recordEvent({
+        type: "mink.workflow_completed",
+        storeId: STORE,
+        subject: {
+          type: "mink_workflow",
+          id: "wf-1",
+          label: "Delayed pickup review",
+        },
+        payload: { url: "/dashboard/orders" },
+        restrictToAdminIds: ["uid-manager"],
+      });
+
+      const rows = fannedOut(mock);
+      expect(rows.map((r: any) => r.recipientId)).toEqual(["uid-manager"]);
+    });
+
+    it("tells everyone eligible when it is omitted", async () => {
+      // The unrestricted path must be untouched, or every other event changes.
+      const mock = setupDb({
+        staff: [superadmin, manager],
+        roles: [managerRole],
+      });
+
+      await recordEvent({
+        type: "mink.workflow_completed",
+        storeId: STORE,
+        subject: { type: "mink_workflow", id: "wf-1", label: "Weekly report" },
+      });
+
+      expect(
+        fannedOut(mock)
+          .map((r: any) => r.recipientId)
+          .sort(),
+      ).toEqual(["uid-manager", "uid-owner"]);
+    });
+
+    it("cannot add somebody the permission filter already excluded", async () => {
+      // Naming an admin who is not in the eligible set delivers to nobody, not
+      // to them — targeting narrows, it never widens (routing.ts).
+      const mock = setupDb({ staff: [superadmin] });
+
+      await recordEvent({
+        type: "mink.workflow_completed",
+        storeId: STORE,
+        subject: { type: "mink_workflow", id: "wf-1", label: "Weekly report" },
+        restrictToAdminIds: ["uid-not-an-admin"],
+      });
+
+      expect(fannedOut(mock)).toHaveLength(0);
+    });
+  });
+
   it("also notifies the customer when the event names one", async () => {
     const mock = setupDb({ staff: [superadmin] });
 
