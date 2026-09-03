@@ -64,6 +64,13 @@ describe("Mink system prompt document", () => {
       "not automatically an offer-eligibility boundary",
     );
     expect(template).toContain("choose a total budget");
+    expect(template).toContain(
+      "Use start_delayed_pickup_review only when the user explicitly asks",
+    );
+    expect(template).toContain(
+      "not customer names, email, phone, address, notes or collection codes",
+    );
+    expect(template).toContain("preserve the duplicate-withheld result");
   });
 
   it("renders only trusted actor fields and permission-filtered tool names", () => {

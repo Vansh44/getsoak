@@ -5,14 +5,17 @@ import {
   AlertTriangle,
   ArrowUpRight,
   Ban,
+  BellRing,
   CheckCircle2,
   CircleAlert,
+  Clock3,
   LoaderCircle,
   Play,
   RotateCcw,
 } from "lucide-react";
 import type { MinkArtifact } from "@/lib/mink/types";
 import type {
+  DelayedPickupReviewResult,
   MinkWorkflowResult,
   MinkWorkflowTemplate,
   MinkWorkflowView,
@@ -238,6 +241,9 @@ function WorkflowResult({
     return (
       <SlowInventoryPromotion result={result as SlowInventoryPromotionResult} />
     );
+  }
+  if (template === "delayed_pickup_review") {
+    return <DelayedPickupReview result={result as DelayedPickupReviewResult} />;
   }
   return <WeeklyReport result={result as WeeklyTradingReportResult} />;
 }
@@ -788,6 +794,180 @@ function SlowInventoryPromotion({
       </p>
     </div>
   );
+}
+
+function DelayedPickupReview({
+  result,
+}: {
+  result: DelayedPickupReviewResult;
+}) {
+  return (
+    <div className="space-y-3">
+      <div className="rounded-xl bg-[#f4fff9] px-3 py-2 text-[10px] text-[#176b49]">
+        <div className="flex items-start gap-2">
+          <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>
+            Pickup review complete · {result.locationLabel} · {result.timeZone}
+          </span>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-1.5">
+        <MetricTile
+          label="Action required"
+          value={result.totalActionableOrders}
+        />
+        <MetricTile
+          label="Preparation overdue"
+          value={result.preparationOverdueCount}
+        />
+        <MetricTile
+          label="Unprepared, at risk"
+          value={result.preparationAtRiskCount}
+        />
+        <MetricTile
+          label="Ready, collection due"
+          value={result.collectionDueCount}
+        />
+      </div>
+
+      {result.pickups.length ? (
+        <div>
+          <h4 className="text-[10px] font-semibold text-[#302c35]">
+            Action queue
+          </h4>
+          <div className="mt-1 divide-y divide-[#efedf2] overflow-hidden rounded-xl border border-[#efedf2]">
+            {result.pickups.slice(0, 25).map((pickup) => (
+              <a
+                key={`${pickup.orderRef}:${pickup.locationName}`}
+                href={safeDashboardPath(pickup.orderDashboardPath)}
+                className="block px-2.5 py-2 hover:bg-[#faf8ff]"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <span className="min-w-0 truncate text-[10px] font-semibold text-[#3f3370]">
+                    {pickup.orderRef}
+                  </span>
+                  <span className="inline-flex shrink-0 items-center gap-1 text-[9px] text-[#6841d9]">
+                    {pickup.locationName} <ArrowUpRight className="h-3 w-3" />
+                  </span>
+                </div>
+                <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[9px] text-[#625c68]">
+                  <span className="inline-flex items-center gap-1">
+                    <Clock3 className="h-3 w-3" />{" "}
+                    {pickupIssueLabel(pickup.issue)}
+                  </span>
+                  <span>{pickup.hoursUntilExpiry}h until expiry</span>
+                  {pickup.hoursPastPromise != null ? (
+                    <span>{pickup.hoursPastPromise}h past ready promise</span>
+                  ) : null}
+                  <span className="inline-flex items-center gap-1">
+                    <BellRing className="h-3 w-3" />
+                    {pickupReminderLabel(pickup.reminderState)}
+                  </span>
+                </div>
+              </a>
+            ))}
+          </div>
+          {result.truncated ? (
+            <p className="mt-1 text-[9px] text-[#8a5c10]">
+              Showing 25 highest-priority orders out of{" "}
+              {result.totalActionableOrders.toLocaleString("en-IN")} matches.
+            </p>
+          ) : null}
+        </div>
+      ) : (
+        <p className="rounded-xl border border-[#e6e3e9] bg-[#fafafa] px-3 py-2 text-[10px] text-[#625c68]">
+          No live pickup is overdue for preparation or inside the 48-hour
+          collection-risk window in this scope.
+        </p>
+      )}
+
+      {result.communications.length ? (
+        <div>
+          <h4 className="text-[10px] font-semibold text-[#302c35]">
+            Communication guidance
+          </h4>
+          <div className="mt-1 space-y-1.5">
+            {result.communications.map((communication) => (
+              <div
+                key={`${communication.kind}:${communication.status}`}
+                className="rounded-xl border border-[#e8e3f5] bg-[#faf8ff] px-3 py-2"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <span className="text-[10px] font-semibold text-[#40365c]">
+                    {communication.title}
+                  </span>
+                  <span className="rounded-full bg-white px-2 py-1 text-[8px] font-semibold text-[#6f4ce6]">
+                    {communicationStatusLabel(communication.status)}
+                  </span>
+                </div>
+                <p className="mt-1 text-[9px] leading-4 text-[#6d6282]">
+                  Orders: {communication.orderReferences.join(", ")}
+                </p>
+                {communication.subject && communication.body ? (
+                  <div className="mt-2 rounded-lg bg-white px-2.5 py-2 text-[9px] leading-4 text-[#4f4957]">
+                    <div className="font-semibold">{communication.subject}</div>
+                    <p className="mt-1 whitespace-pre-wrap">
+                      {communication.body}
+                    </p>
+                  </div>
+                ) : null}
+                <p className="mt-1 text-[9px] leading-4 text-[#6d6282]">
+                  {communication.note}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      <div className="rounded-xl border border-[#f2e5bd] bg-[#fffaf0] px-3 py-2">
+        <div className="flex items-center gap-1.5 text-[10px] font-semibold text-[#805b16]">
+          <AlertTriangle className="h-3.5 w-3.5" /> Safety boundary
+        </div>
+        <ul className="mt-1 list-disc space-y-1 pl-4 text-[9px] leading-4 text-[#78663f]">
+          {result.safetyNotes.map((note) => (
+            <li key={note}>{note}</li>
+          ))}
+        </ul>
+      </div>
+
+      <a
+        href={safeDashboardPath(result.ordersDashboardPath)}
+        className="inline-flex items-center gap-1 text-[10px] font-semibold text-[#6841d9] hover:underline"
+      >
+        Verify live orders <ArrowUpRight className="h-3 w-3" />
+      </a>
+      <p className="text-[9px] text-[#8a858e]">
+        Private preparation only · data as of {formatDate(result.dataAsOf)}. No
+        message, reminder, order, deadline or stock record was changed.
+      </p>
+    </div>
+  );
+}
+
+function pickupIssueLabel(
+  issue: DelayedPickupReviewResult["pickups"][number]["issue"],
+): string {
+  if (issue === "preparation_overdue") return "Preparation overdue";
+  if (issue === "preparation_at_risk") return "Unprepared, expires soon";
+  return "Ready, collection due";
+}
+
+function pickupReminderLabel(
+  state: DelayedPickupReviewResult["pickups"][number]["reminderState"],
+): string {
+  if (state === "already_recorded") return "Reminder already recorded";
+  if (state === "automatic_pending") return "Automatic reminder pending";
+  return "Reminder not due";
+}
+
+function communicationStatusLabel(
+  status: DelayedPickupReviewResult["communications"][number]["status"],
+): string {
+  if (status === "prepared_for_review") return "Review copy";
+  if (status === "automatic_reminder_pending") return "Automatic reminder";
+  return "Duplicate withheld";
 }
 
 function MetricTile({

@@ -14,6 +14,7 @@ import {
 import { MinkToolInputError } from "../errors";
 import type { MinkActorContext, MinkArtifact } from "../types";
 import {
+  enqueueDelayedPickupReview,
   enqueueProductLaunchPreparation,
   enqueueRevenueDeclineInvestigation,
   enqueueSlowInventoryPromotion,
@@ -727,6 +728,44 @@ const startSlowInventoryPromotion: MinkTool = {
   },
 };
 
+const startDelayedPickupReview: MinkTool = {
+  declaration: {
+    name: "start_delayed_pickup_review",
+    description:
+      "Queue a durable private review only when the user explicitly asks Mink to review delayed, overdue, unprepared, uncollected or at-risk pickup orders and prepare communication guidance. It optionally accepts one exact accessible dashboard location such as Shop or Delhi warehouse; otherwise it keeps accessible active physical locations separate. It includes only live awaiting/ready pickups whose promised ready time has passed or whose collection deadline is within StoreMink’s existing 48-hour reminder window, returns at most 25 orders, and excludes collected, expired, cancelled and fully refunded orders. It exposes order references and lifecycle timestamps only—never names, email, phone, address or collection codes. It may prepare generic delay copy for human review, but never sends, creates a saved draft, claims/resets a reminder marker, changes an order, deadline or stock, and withholds duplicate collection-reminder copy when StoreMink’s automatic reminder is pending or already recorded.",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {
+        location_name: {
+          type: "string",
+          description:
+            "Optional exact accessible dashboard location name, such as Shop or Delhi warehouse. Never use or invent a location ID.",
+          minLength: 1,
+          maxLength: 100,
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  permission: { section: "orders", action: "manage" },
+  available: (actor) => actor.draftingEnabled === true,
+  timeoutMs: 7_000,
+  artifact(output) {
+    return workflowArtifact(output, {
+      template: "delayed_pickup_review",
+      title: "Delayed pickup review",
+      description:
+        "A private, PII-minimized pickup review with duplicate-safe communication guidance.",
+    });
+  },
+  async execute(actor, args) {
+    const workflow = await enqueueDelayedPickupReview(actor, {
+      locationName: args.location_name,
+    });
+    return { workflow };
+  },
+};
+
 function workflowArtifact(
   output: Record<string, unknown>,
   copy: {
@@ -1054,6 +1093,7 @@ export const minkReadToolRegistry = new MinkToolRegistry([
   startRevenueDeclineInvestigation,
   startProductLaunchPreparation,
   startSlowInventoryPromotion,
+  startDelayedPickupReview,
   listOrdersTool,
   currentOrderTool,
   searchHelpCentreTool,

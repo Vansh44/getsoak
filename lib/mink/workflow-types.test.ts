@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildDelayedPickupReviewResult,
   buildProductLaunchPreparationResult,
   buildRevenueDeclineInvestigationResult,
   buildSlowInventoryPromotionResult,
@@ -396,5 +397,106 @@ describe("slow inventory promotion result", () => {
     });
     expect(result.promotionProposal.suggestedDiscountPercent).toBeNull();
     expect(result.promotionProposal.note).toContain("cost/margin data");
+  });
+});
+
+describe("delayed pickup review result", () => {
+  it("prepares only delay copy and preserves automatic reminder ownership", () => {
+    const result = buildDelayedPickupReviewResult({
+      locationLabel: "Shop and Delhi",
+      locationCount: 2,
+      timeZone: "Asia/Kolkata",
+      reviewedAt: "2026-09-03T12:00:00.000Z",
+      riskWindowHours: 48,
+      pickups: [
+        {
+          orderRef: "ECH-1001",
+          locationName: "Shop",
+          pickupStatus: "awaiting",
+          createdAt: "2026-09-01T08:00:00.000Z",
+          promisedReadyAt: "2026-09-03T10:00:00.000Z",
+          preparedAt: null,
+          expiresAt: "2026-09-07T12:00:00.000Z",
+          warnedAt: null,
+          orderDashboardPath: "/dashboard/orders?q=ECH-1001",
+        },
+        {
+          orderRef: "ECH-1002",
+          locationName: "Delhi",
+          pickupStatus: "awaiting",
+          createdAt: "2026-09-02T08:00:00.000Z",
+          promisedReadyAt: "2026-09-03T14:00:00.000Z",
+          preparedAt: null,
+          expiresAt: "2026-09-04T12:00:00.000Z",
+          warnedAt: null,
+          orderDashboardPath: "/dashboard/orders?q=ECH-1002",
+        },
+        {
+          orderRef: "ECH-1003",
+          locationName: "Shop",
+          pickupStatus: "ready",
+          createdAt: "2026-09-01T08:00:00.000Z",
+          promisedReadyAt: "2026-09-02T08:00:00.000Z",
+          preparedAt: "2026-09-02T09:00:00.000Z",
+          expiresAt: "2026-09-04T08:00:00.000Z",
+          warnedAt: null,
+          orderDashboardPath: "/dashboard/orders?q=ECH-1003",
+        },
+        {
+          orderRef: "ECH-1004",
+          locationName: "Delhi",
+          pickupStatus: "ready",
+          createdAt: "2026-09-01T08:00:00.000Z",
+          promisedReadyAt: "2026-09-02T08:00:00.000Z",
+          preparedAt: "2026-09-02T09:00:00.000Z",
+          expiresAt: "2026-09-04T10:00:00.000Z",
+          warnedAt: "2026-09-03T11:00:00.000Z",
+          orderDashboardPath: "/dashboard/orders?q=ECH-1004",
+        },
+      ],
+      totalActionableOrders: 4,
+      preparationOverdueCount: 1,
+      preparationAtRiskCount: 1,
+      collectionDueCount: 2,
+      truncated: false,
+      dataAsOf: "2026-09-03T12:00:00.000Z",
+    });
+
+    expect(result.pickups.map((pickup) => pickup.issue)).toEqual([
+      "preparation_overdue",
+      "preparation_at_risk",
+      "collection_due",
+      "collection_due",
+    ]);
+    expect(result.pickups[0]).toMatchObject({
+      hoursPastPromise: 2,
+      hoursUntilExpiry: 96,
+      reminderState: "not_due",
+    });
+    expect(result.communications).toEqual([
+      expect.objectContaining({
+        kind: "preparation_delay",
+        status: "prepared_for_review",
+        orderReferences: ["ECH-1001", "ECH-1002"],
+        subject: "Update on pickup order [order reference]",
+      }),
+      expect.objectContaining({
+        kind: "automatic_collection_reminder",
+        status: "automatic_reminder_pending",
+        orderReferences: ["ECH-1003"],
+        subject: null,
+        body: null,
+      }),
+      expect.objectContaining({
+        kind: "automatic_collection_reminder",
+        status: "automatic_reminder_already_recorded",
+        orderReferences: ["ECH-1004"],
+        subject: null,
+        body: null,
+      }),
+    ]);
+    expect(result.safetyNotes.join(" ")).toContain(
+      "names, email addresses, phone numbers, postal addresses and collection codes",
+    );
   });
 });

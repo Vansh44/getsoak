@@ -478,6 +478,26 @@ the arbitrary URL is not clickable. Restored conversation history renders the
 same structured catalogue artifact. The answer has copy/helpful/report controls
 and no grey assistant speech bubble.
 
+**PS-3.13 ★★ — Mink reviews delayed pickups without becoming a second reminder job**
+As an Echos admin with Mink drafting and Orders Manage, create controlled
+Awaiting/Ready pickup fixtures at Shop and Delhi, including an Awaiting order
+past its promised-ready time, a Ready order inside 48 hours with no reminder
+marker, and one whose marker is already recorded. Ask the exact Phase 6E
+prompts from `docs/mink-ai-test-prompts.md` for both locations and separately
+for Shop and Delhi warehouse.
+**Expect:** exact location aliases never widen; only live Awaiting/Ready,
+non-cancelled, non-refunded and not-yet-expired pickups appear. The card is
+bounded to 25 rows, keeps each location explicit, links by visible order
+reference, and exposes no customer name, email, phone, address, note or
+collection code. Awaiting delay copy keeps the revised ready time as a
+staff-confirmed placeholder. A pending or recorded automatic reminder
+withholds duplicate collection copy. The workflow does not send/queue/save a
+message, change the reminder marker, status or deadline, release a hold, or
+move stock. Removing Orders Manage, drafting or location authority cancels or
+narrows the next step; a restart/retry still produces one run and one
+completion notification. The existing pickup expiry and one-time reminder
+sweeps behave exactly as before.
+
 ---
 
 ## 4. Inventory — the dashboard

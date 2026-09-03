@@ -60,8 +60,9 @@ describe("readMinkArtifacts", () => {
         { ...valid, template: "revenue_decline_investigation" },
         { ...valid, template: "product_launch_preparation" },
         { ...valid, template: "slow_inventory_promotion" },
+        { ...valid, template: "delayed_pickup_review" },
       ]),
-    ).toHaveLength(3);
+    ).toHaveLength(4);
     expect(
       readMinkArtifacts([
         { ...valid, runId: "not-a-uuid" },

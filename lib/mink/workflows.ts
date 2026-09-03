@@ -22,6 +22,7 @@ import { MinkRequestError, MinkToolInputError } from "./errors";
 import { resolveMinkLocation } from "./tools/location-scope";
 import type { MinkActorContext } from "./types";
 import {
+  collectDelayedPickupSnapshot,
   collectProductLaunchSnapshot,
   collectRevenueDeclineSnapshot,
   collectSlowInventorySnapshot,
@@ -30,6 +31,7 @@ import {
   type WorkflowExecutionScope,
 } from "./workflow-template-data";
 import {
+  buildDelayedPickupReviewResult,
   buildProductLaunchPreparationResult,
   buildRevenueDeclineInvestigationResult,
   buildSlowInventoryPromotionResult,
@@ -37,6 +39,9 @@ import {
   isMinkWorkflowTemplate,
   isMinkWorkflowStatus,
   narrowMinkWorkflowLocationIds,
+  type DelayedPickupReviewInput,
+  type DelayedPickupReviewResult,
+  type DelayedPickupSnapshot,
   type MinkWorkflowEventView,
   type MinkWorkflowResult,
   type MinkWorkflowStatus,
@@ -63,6 +68,7 @@ const WORKFLOW_STEPS: Record<MinkWorkflowTemplate, readonly string[]> = {
   revenue_decline_investigation: ["snapshot", "diagnose", "finalise"],
   product_launch_preparation: ["snapshot", "assess", "finalise"],
   slow_inventory_promotion: ["snapshot", "prepare", "finalise"],
+  delayed_pickup_review: ["snapshot", "prepare", "finalise"],
 };
 const WORKFLOW_LEASE_SECONDS = 120;
 const MAX_WORKFLOW_LOCATIONS = 50;
@@ -169,6 +175,24 @@ export async function enqueueSlowInventoryPromotion(
   });
 }
 
+export async function enqueueDelayedPickupReview(
+  actor: MinkActorContext,
+  options: { locationName?: unknown },
+): Promise<MinkWorkflowView> {
+  assertQueueAuthority(actor, "delayed_pickup_review");
+  const input: DelayedPickupReviewInput = await buildAuthorityInput(
+    actor,
+    options.locationName,
+    false,
+  );
+  const scopeKey = input.locationIds.join(",") || "no-active-location";
+  return enqueueWorkflow(actor, {
+    template: "delayed_pickup_review",
+    input,
+    idempotencyKey: `agent-run:${actor.runId}:delayed-pickup:${scopeKey}:v1`,
+  });
+}
+
 async function buildAuthorityInput(
   actor: MinkActorContext,
   locationName?: unknown,
@@ -209,7 +233,8 @@ async function enqueueWorkflow(
       | WeeklyTradingReportInput
       | RevenueDeclineInvestigationInput
       | ProductLaunchPreparationInput
-      | SlowInventoryPromotionInput;
+      | SlowInventoryPromotionInput
+      | DelayedPickupReviewInput;
     idempotencyKey: string;
   },
 ): Promise<MinkWorkflowView> {
@@ -494,15 +519,11 @@ export async function runMinkWorkflowWorker(
         result.workflowsCancelled += 1;
         continue;
       }
-      if (
-        config.betaRequireInvite ||
-        run.template === "slow_inventory_promotion"
-      ) {
+      if (config.betaRequireInvite || requiresWorkflowDrafting(run.template)) {
         const access = await getMinkStoreAccess(run.storeId);
         if (
           (config.betaRequireInvite && !access.enabled) ||
-          (run.template === "slow_inventory_promotion" &&
-            !access.draftingEnabled)
+          (requiresWorkflowDrafting(run.template) && !access.draftingEnabled)
         ) {
           await cancelClaimedWorkflow(run, workerId, "store_access_revoked");
           result.workflowsCancelled += 1;
@@ -642,6 +663,9 @@ function hasWorkflowPermissions(
       can(permissions, "inventory", "view", isSuperadmin) &&
       can(permissions, "promotions", "manage", isSuperadmin)
     );
+  }
+  if (template === "delayed_pickup_review") {
+    return can(permissions, "orders", "manage", isSuperadmin);
   }
   return can(permissions, "analytics", "view", isSuperadmin);
 }
@@ -950,6 +974,38 @@ async function executeClaimedStep(
       workerId,
       stepKey,
       "diagnose",
+    );
+  }
+
+  if (run.template === "delayed_pickup_review") {
+    const input = readDelayedPickupInput(run.inputJson);
+    if (stepKey === "snapshot") {
+      const snapshot = await collectDelayedPickupSnapshot(
+        run.storeId,
+        input,
+        executionScope,
+      );
+      await completeIntermediateStep(run, workerId, stepKey, snapshot);
+      return { completed: false };
+    }
+    if (stepKey === "prepare") {
+      const snapshot = await readStepOutput<DelayedPickupSnapshot>(
+        run,
+        "snapshot",
+      );
+      await completeIntermediateStep(
+        run,
+        workerId,
+        stepKey,
+        buildDelayedPickupReviewResult(snapshot),
+      );
+      return { completed: false };
+    }
+    return finalizeFromStep<DelayedPickupReviewResult>(
+      run,
+      workerId,
+      stepKey,
+      "prepare",
     );
   }
 
@@ -1467,6 +1523,14 @@ function readSlowInventoryInput(value: unknown): SlowInventoryPromotionInput {
   return { ...authority, period: row.period };
 }
 
+function readDelayedPickupInput(value: unknown): DelayedPickupReviewInput {
+  const authority = readAuthorityInput(value, "invalid_delayed_pickup_input");
+  if (authority.includeUnassigned) {
+    throw new Error("invalid_delayed_pickup_input");
+  }
+  return authority;
+}
+
 function readWorkflowInput(
   template: MinkWorkflowTemplate,
   value: unknown,
@@ -1474,7 +1538,8 @@ function readWorkflowInput(
   | WeeklyTradingReportInput
   | RevenueDeclineInvestigationInput
   | ProductLaunchPreparationInput
-  | SlowInventoryPromotionInput {
+  | SlowInventoryPromotionInput
+  | DelayedPickupReviewInput {
   if (template === "revenue_decline_investigation") {
     return readRevenueInput(value);
   }
@@ -1483,6 +1548,9 @@ function readWorkflowInput(
   }
   if (template === "slow_inventory_promotion") {
     return readSlowInventoryInput(value);
+  }
+  if (template === "delayed_pickup_review") {
+    return readDelayedPickupInput(value);
   }
   return readWeeklyInput(value);
 }
@@ -1540,7 +1608,7 @@ function assertQueueAuthority(
       403,
     );
   }
-  if (template === "slow_inventory_promotion" && !actor.draftingEnabled) {
+  if (requiresWorkflowDrafting(template) && !actor.draftingEnabled) {
     throw new MinkRequestError(
       "mink_workflow_access_denied",
       "Mink drafting is not enabled for this store.",
@@ -1575,10 +1643,10 @@ function assertActorWorkflowAccess(
       403,
     );
   }
-  if (templateValue === "slow_inventory_promotion" && !actor.draftingEnabled) {
+  if (requiresWorkflowDrafting(templateValue) && !actor.draftingEnabled) {
     throw new MinkRequestError(
       "mink_workflow_access_denied",
-      "You no longer have access to this promotion workflow.",
+      "You no longer have access to this private preparation workflow.",
       403,
     );
   }
@@ -1613,6 +1681,9 @@ function workflowLabel(template: MinkWorkflowTemplate): string {
   if (template === "slow_inventory_promotion") {
     return "Slow-inventory promotion proposal";
   }
+  if (template === "delayed_pickup_review") {
+    return "Delayed pickup review";
+  }
   return "Weekly trading report";
 }
 
@@ -1623,6 +1694,9 @@ function workflowNotificationUrl(
   if (template === "slow_inventory_promotion") {
     return "/dashboard/inventory";
   }
+  if (template === "delayed_pickup_review") {
+    return "/dashboard/orders";
+  }
   if (template !== "product_launch_preparation") {
     return "/dashboard/analytics";
   }
@@ -1630,6 +1704,13 @@ function workflowNotificationUrl(
   return typeof productId === "string" && UUID_PATTERN.test(productId)
     ? `/dashboard/products/${productId}`
     : "/dashboard/products";
+}
+
+function requiresWorkflowDrafting(template: unknown): boolean {
+  return (
+    template === "slow_inventory_promotion" ||
+    template === "delayed_pickup_review"
+  );
 }
 
 const UUID_PATTERN =

@@ -22,8 +22,12 @@ import {
 import type { AnalyticsRange } from "@/lib/analytics/range";
 import { parseAnalyticsRange } from "@/lib/analytics/range";
 import { withService } from "@/lib/db/client";
+import { PICKUP_WARN_HOURS } from "@/lib/pos/collection-state";
 import { MinkToolInputError } from "./errors";
 import type {
+  DelayedPickupReviewInput,
+  DelayedPickupSnapshot,
+  DelayedPickupSnapshotItem,
   ProductLaunchPreparationInput,
   ProductLaunchSnapshot,
   ProductLaunchSkuSnapshot,
@@ -39,6 +43,7 @@ import type {
 
 const MAX_LAUNCH_SKUS = 20;
 const MAX_SLOW_INVENTORY_CANDIDATES = 20;
+const MAX_DELAYED_PICKUPS = 25;
 
 export interface WorkflowExecutionScope {
   locationIds: string[];
@@ -241,6 +246,21 @@ type SlowInventoryQueryRow = {
   totalMatches: number | string;
 };
 
+type DelayedPickupQueryRow = {
+  orderRef: string;
+  locationName: string;
+  pickupStatus: "awaiting" | "ready";
+  createdAt: string | Date;
+  promisedReadyAt: string | Date | null;
+  preparedAt: string | Date | null;
+  expiresAt: string | Date;
+  warnedAt: string | Date | null;
+  totalMatches: number | string;
+  preparationOverdueCount: number | string;
+  preparationAtRiskCount: number | string;
+  collectionDueCount: number | string;
+};
+
 /**
  * Find slow stock at the shelf where it can actually be moved. The query is
  * deliberately one bounded database statement: it never pulls an unbounded
@@ -391,6 +411,132 @@ export async function collectSlowInventorySnapshot(
       dataAsOf: new Date().toISOString(),
     };
   });
+}
+
+/**
+ * Review only currently actionable pickup orders. This intentionally excludes
+ * every customer/contact field and collection code: a background operational
+ * report does not need PII or a counter credential to identify an order.
+ * Existing expiry/reminder sweeps remain the only writers of pickup state.
+ */
+export async function collectDelayedPickupSnapshot(
+  storeId: string,
+  input: DelayedPickupReviewInput,
+  scope: WorkflowExecutionScope,
+): Promise<DelayedPickupSnapshot> {
+  const reviewedAt = new Date().toISOString();
+  if (scope.locationIds.length === 0) {
+    return {
+      locationLabel: scope.locationLabel,
+      locationCount: 0,
+      timeZone: input.timeZone,
+      reviewedAt,
+      riskWindowHours: PICKUP_WARN_HOURS,
+      pickups: [],
+      totalActionableOrders: 0,
+      preparationOverdueCount: 0,
+      preparationAtRiskCount: 0,
+      collectionDueCount: 0,
+      truncated: false,
+      dataAsOf: reviewedAt,
+    };
+  }
+
+  const queryResult = await withService((db) =>
+    db.execute(sql<DelayedPickupQueryRow>`
+      WITH actionable AS (
+        SELECT
+          ${orders.orderRef} AS "orderRef",
+          ${storeLocations.name} AS "locationName",
+          ${orders.pickupStatus} AS "pickupStatus",
+          ${orders.createdAt} AS "createdAt",
+          ${orders.pickupReadyAt} AS "promisedReadyAt",
+          ${orders.pickupPreparedAt} AS "preparedAt",
+          ${orders.pickupExpiresAt} AS "expiresAt",
+          ${orders.pickupWarnedAt} AS "warnedAt"
+        FROM ${orders}
+        INNER JOIN ${storeLocations}
+          ON ${storeLocations.id} = ${orders.pickupLocationId}
+         AND ${storeLocations.storeId} = ${orders.storeId}
+         AND ${storeLocations.active} = true
+        WHERE ${orders.storeId} = ${storeId}::uuid
+          AND ${orders.fulfilmentType} = 'pickup'
+          AND ${inArray(orders.pickupLocationId, scope.locationIds)}
+          AND ${orders.pickupStatus} IN ('awaiting', 'ready')
+          AND ${orders.status} <> 'cancelled'
+          AND ${orders.paymentStatus} <> 'refunded'
+          AND ${orders.pickupExpiresAt} > ${reviewedAt}::timestamptz
+          AND (
+            (
+              ${orders.pickupStatus} = 'awaiting'
+              AND ${orders.pickupReadyAt} IS NOT NULL
+              AND ${orders.pickupReadyAt} <= ${reviewedAt}::timestamptz
+            )
+            OR ${orders.pickupExpiresAt} <= (
+              ${reviewedAt}::timestamptz
+              + make_interval(hours => ${PICKUP_WARN_HOURS})
+            )
+          )
+      )
+      SELECT
+        actionable.*,
+        COUNT(*) OVER ()::int AS "totalMatches",
+        COUNT(*) FILTER (
+          WHERE "pickupStatus" = 'awaiting'
+            AND "promisedReadyAt" IS NOT NULL
+            AND "promisedReadyAt" <= ${reviewedAt}::timestamptz
+        ) OVER ()::int AS "preparationOverdueCount",
+        COUNT(*) FILTER (
+          WHERE "pickupStatus" = 'awaiting'
+            AND (
+              "promisedReadyAt" IS NULL
+              OR "promisedReadyAt" > ${reviewedAt}::timestamptz
+            )
+        ) OVER ()::int AS "preparationAtRiskCount",
+        COUNT(*) FILTER (
+          WHERE "pickupStatus" = 'ready'
+        ) OVER ()::int AS "collectionDueCount"
+      FROM actionable
+      ORDER BY
+        CASE
+          WHEN "expiresAt" <= ${reviewedAt}::timestamptz + interval '24 hours' THEN 0
+          WHEN "pickupStatus" = 'awaiting'
+            AND "promisedReadyAt" <= ${reviewedAt}::timestamptz THEN 1
+          ELSE 2
+        END,
+        "expiresAt" ASC,
+        "createdAt" ASC,
+        "orderRef" ASC
+      LIMIT ${MAX_DELAYED_PICKUPS}
+    `),
+  );
+  const rows = queryResult.rows as unknown as DelayedPickupQueryRow[];
+  const pickups: DelayedPickupSnapshotItem[] = rows.map((row) => ({
+    orderRef: row.orderRef,
+    locationName: row.locationName,
+    pickupStatus: row.pickupStatus,
+    createdAt: requiredIsoTimestamp(row.createdAt),
+    promisedReadyAt: optionalIsoTimestamp(row.promisedReadyAt),
+    preparedAt: optionalIsoTimestamp(row.preparedAt),
+    expiresAt: requiredIsoTimestamp(row.expiresAt),
+    warnedAt: optionalIsoTimestamp(row.warnedAt),
+    orderDashboardPath: `/dashboard/orders?q=${encodeURIComponent(row.orderRef)}`,
+  }));
+  const totalActionableOrders = Number(rows[0]?.totalMatches ?? 0);
+  return {
+    locationLabel: scope.locationLabel,
+    locationCount: scope.locationIds.length,
+    timeZone: input.timeZone,
+    reviewedAt,
+    riskWindowHours: PICKUP_WARN_HOURS,
+    pickups,
+    totalActionableOrders,
+    preparationOverdueCount: Number(rows[0]?.preparationOverdueCount ?? 0),
+    preparationAtRiskCount: Number(rows[0]?.preparationAtRiskCount ?? 0),
+    collectionDueCount: Number(rows[0]?.collectionDueCount ?? 0),
+    truncated: totalActionableOrders > pickups.length,
+    dataAsOf: reviewedAt,
+  };
 }
 
 export async function collectProductLaunchSnapshot(
@@ -693,6 +839,19 @@ function uniqueImageCount(...groups: Array<Array<string | null>>): number {
       .map((value) => value?.trim())
       .filter((value): value is string => Boolean(value)),
   ).size;
+}
+
+function optionalIsoTimestamp(value: string | Date | null): string | null {
+  if (value == null) return null;
+  return requiredIsoTimestamp(value);
+}
+
+function requiredIsoTimestamp(value: string | Date): string {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    throw new Error("workflow_pickup_timestamp_invalid");
+  }
+  return date.toISOString();
 }
 
 function readStoreDiscountCeiling(value: unknown): number {

@@ -566,4 +566,96 @@ describe("Mink catalogue artifact", () => {
       screen.getByRole("link", { name: /Open Offers manually/i }),
     ).toHaveAttribute("href", "/dashboard/offers/new");
   });
+
+  it("renders PII-minimized delayed pickups and withholds duplicate reminder copy", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          workflow: {
+            id: "55555555-5555-4555-8555-555555555555",
+            template: "delayed_pickup_review",
+            status: "completed",
+            currentStep: 3,
+            totalSteps: 3,
+            attemptCount: 3,
+            errorCode: null,
+            errorDetail: null,
+            cancelRequested: false,
+            result: {
+              locationLabel: "Shop",
+              locationCount: 1,
+              timeZone: "Asia/Kolkata",
+              reviewedAt: "2026-09-03T12:00:00.000Z",
+              riskWindowHours: 48,
+              totalActionableOrders: 1,
+              preparationOverdueCount: 0,
+              preparationAtRiskCount: 0,
+              collectionDueCount: 1,
+              truncated: false,
+              dataAsOf: "2026-09-03T12:00:00.000Z",
+              pickups: [
+                {
+                  orderRef: "ECH-1003",
+                  locationName: "Shop",
+                  pickupStatus: "ready",
+                  createdAt: "2026-09-01T08:00:00.000Z",
+                  promisedReadyAt: "2026-09-02T08:00:00.000Z",
+                  preparedAt: "2026-09-02T09:00:00.000Z",
+                  expiresAt: "2026-09-04T08:00:00.000Z",
+                  warnedAt: "2026-09-03T11:00:00.000Z",
+                  orderDashboardPath: "/dashboard/orders?q=ECH-1003",
+                  issue: "collection_due",
+                  hoursUntilExpiry: 20,
+                  hoursPastPromise: null,
+                  reminderState: "already_recorded",
+                },
+              ],
+              communications: [
+                {
+                  kind: "automatic_collection_reminder",
+                  title: "Collection reminder",
+                  status: "automatic_reminder_already_recorded",
+                  orderReferences: ["ECH-1003"],
+                  subject: null,
+                  body: null,
+                  note: "StoreMink already recorded the one-time pickup reminder, so Mink withheld duplicate message copy.",
+                },
+              ],
+              safetyNotes: [
+                "Customer names, email addresses, phone numbers, postal addresses and collection codes are never included.",
+              ],
+              ordersDashboardPath: "/dashboard/orders",
+            },
+            createdAt: "2026-09-03T12:00:00.000Z",
+            updatedAt: "2026-09-03T12:01:00.000Z",
+            completedAt: "2026-09-03T12:01:00.000Z",
+          },
+        }),
+      }),
+    );
+    const artifact: MinkArtifact = {
+      type: "workflow",
+      runId: "55555555-5555-4555-8555-555555555555",
+      template: "delayed_pickup_review",
+      title: "Delayed pickup review",
+      description: "Private pickup review.",
+      status: "queued",
+      currentStep: 0,
+      totalSteps: 3,
+    };
+
+    render(<MinkArtifacts artifacts={[artifact]} />);
+    await waitFor(() =>
+      expect(screen.getByText(/Pickup review complete/i)).toBeVisible(),
+    );
+    expect(screen.getByText("Duplicate withheld")).toBeVisible();
+    expect(screen.getByText(/withheld duplicate message copy/i)).toBeVisible();
+    expect(screen.queryByText(/customer@example\.com/i)).toBeNull();
+    expect(screen.getByRole("link", { name: /ECH-1003/i })).toHaveAttribute(
+      "href",
+      "/dashboard/orders?q=ECH-1003",
+    );
+  });
 });

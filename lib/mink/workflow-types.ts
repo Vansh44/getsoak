@@ -3,6 +3,7 @@ export const MINK_WORKFLOW_TEMPLATES = [
   "revenue_decline_investigation",
   "product_launch_preparation",
   "slow_inventory_promotion",
+  "delayed_pickup_review",
 ] as const;
 export type MinkWorkflowTemplate = (typeof MINK_WORKFLOW_TEMPLATES)[number];
 
@@ -333,11 +334,81 @@ export interface SlowInventoryPromotionResult extends Omit<
   offersDashboardPath: string;
 }
 
+export type DelayedPickupReviewInput = MinkWorkflowAuthorityInput;
+
+export interface DelayedPickupSnapshotItem {
+  orderRef: string;
+  locationName: string;
+  pickupStatus: "awaiting" | "ready";
+  createdAt: string;
+  promisedReadyAt: string | null;
+  preparedAt: string | null;
+  expiresAt: string;
+  warnedAt: string | null;
+  orderDashboardPath: string;
+}
+
+export interface DelayedPickupSnapshot {
+  locationLabel: string;
+  locationCount: number;
+  timeZone: string;
+  reviewedAt: string;
+  riskWindowHours: 48;
+  pickups: DelayedPickupSnapshotItem[];
+  totalActionableOrders: number;
+  preparationOverdueCount: number;
+  preparationAtRiskCount: number;
+  collectionDueCount: number;
+  truncated: boolean;
+  dataAsOf: string;
+}
+
+export type DelayedPickupIssue =
+  | "preparation_overdue"
+  | "preparation_at_risk"
+  | "collection_due";
+
+export type DelayedPickupReminderState =
+  | "already_recorded"
+  | "automatic_pending"
+  | "not_due";
+
+export interface DelayedPickupReviewItem extends DelayedPickupSnapshotItem {
+  issue: DelayedPickupIssue;
+  hoursUntilExpiry: number;
+  hoursPastPromise: number | null;
+  reminderState: DelayedPickupReminderState;
+}
+
+export interface DelayedPickupCommunication {
+  kind: "preparation_delay" | "automatic_collection_reminder";
+  title: string;
+  status:
+    | "prepared_for_review"
+    | "automatic_reminder_pending"
+    | "automatic_reminder_already_recorded";
+  orderReferences: string[];
+  subject: string | null;
+  body: string | null;
+  note: string;
+}
+
+export interface DelayedPickupReviewResult extends Omit<
+  DelayedPickupSnapshot,
+  "pickups"
+> {
+  pickups: DelayedPickupReviewItem[];
+  communications: DelayedPickupCommunication[];
+  safetyNotes: string[];
+  ordersDashboardPath: string;
+}
+
 export type MinkWorkflowResult =
   | WeeklyTradingReportResult
   | RevenueDeclineInvestigationResult
   | ProductLaunchPreparationResult
-  | SlowInventoryPromotionResult;
+  | SlowInventoryPromotionResult
+  | DelayedPickupReviewResult;
 
 export interface MinkWorkflowEventView {
   id: string;
@@ -726,6 +797,105 @@ export function buildSlowInventoryPromotionResult(
     ],
     inventoryDashboardPath: "/dashboard/inventory",
     offersDashboardPath: "/dashboard/offers/new",
+  };
+}
+
+export function buildDelayedPickupReviewResult(
+  snapshot: DelayedPickupSnapshot,
+): DelayedPickupReviewResult {
+  const reviewedAt = new Date(snapshot.reviewedAt).getTime();
+  const pickups: DelayedPickupReviewItem[] = snapshot.pickups.map((pickup) => {
+    const expiryAt = new Date(pickup.expiresAt).getTime();
+    const readyAt = pickup.promisedReadyAt
+      ? new Date(pickup.promisedReadyAt).getTime()
+      : null;
+    const preparationOverdue =
+      pickup.pickupStatus === "awaiting" &&
+      readyAt != null &&
+      readyAt <= reviewedAt;
+    const issue: DelayedPickupIssue = preparationOverdue
+      ? "preparation_overdue"
+      : pickup.pickupStatus === "awaiting"
+        ? "preparation_at_risk"
+        : "collection_due";
+    const hoursUntilExpiry = Math.max(
+      0,
+      Math.ceil((expiryAt - reviewedAt) / 3_600_000),
+    );
+    const reminderState: DelayedPickupReminderState = pickup.warnedAt
+      ? "already_recorded"
+      : hoursUntilExpiry <= snapshot.riskWindowHours
+        ? "automatic_pending"
+        : "not_due";
+    return {
+      ...pickup,
+      issue,
+      hoursUntilExpiry,
+      hoursPastPromise:
+        preparationOverdue && readyAt != null
+          ? Math.max(0, Math.ceil((reviewedAt - readyAt) / 3_600_000))
+          : null,
+      reminderState,
+    };
+  });
+  const preparationOrders = pickups.filter(
+    (pickup) => pickup.pickupStatus === "awaiting",
+  );
+  const reminderPending = pickups.filter(
+    (pickup) =>
+      pickup.pickupStatus === "ready" &&
+      pickup.reminderState === "automatic_pending",
+  );
+  const reminderRecorded = pickups.filter(
+    (pickup) =>
+      pickup.pickupStatus === "ready" &&
+      pickup.reminderState === "already_recorded",
+  );
+  const communications: DelayedPickupCommunication[] = [];
+  if (preparationOrders.length > 0) {
+    communications.push({
+      kind: "preparation_delay",
+      title: "Pickup preparation delay",
+      status: "prepared_for_review",
+      orderReferences: preparationOrders.map((pickup) => pickup.orderRef),
+      subject: "Update on pickup order [order reference]",
+      body: "We’re sorry—your pickup order [order reference] at [location] is taking longer than planned. We now expect it to be ready by [confirmed revised ready time]. Please wait for the ready-to-collect notice before travelling.",
+      note: "Confirm a revised ready time and verify the live order before adapting or sending this copy manually.",
+    });
+  }
+  if (reminderPending.length > 0) {
+    communications.push({
+      kind: "automatic_collection_reminder",
+      title: "Collection reminder",
+      status: "automatic_reminder_pending",
+      orderReferences: reminderPending.map((pickup) => pickup.orderRef),
+      subject: null,
+      body: null,
+      note: "StoreMink’s one-time pickup reminder is pending in the existing 48-hour window, so Mink withheld duplicate message copy.",
+    });
+  }
+  if (reminderRecorded.length > 0) {
+    communications.push({
+      kind: "automatic_collection_reminder",
+      title: "Collection reminder",
+      status: "automatic_reminder_already_recorded",
+      orderReferences: reminderRecorded.map((pickup) => pickup.orderRef),
+      subject: null,
+      body: null,
+      note: "StoreMink already recorded the one-time pickup reminder, so Mink withheld duplicate message copy.",
+    });
+  }
+
+  return {
+    ...snapshot,
+    pickups,
+    communications,
+    safetyNotes: [
+      "This private review does not send a message, claim a reminder, change an order, extend a deadline, cancel a pickup or move stock.",
+      "Collected, expired, cancelled and fully refunded orders are excluded; verify the live order before any manual contact because pickup state can change after this snapshot.",
+      "Customer names, email addresses, phone numbers, postal addresses and collection codes are never included in this workflow result.",
+    ],
+    ordersDashboardPath: "/dashboard/orders",
   };
 }
 
