@@ -1,15 +1,19 @@
 import "server-only";
 
-import { and, asc, eq, inArray, isNull } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import {
   getSalesAnalytics,
   getSalesByChannel,
   getSalesByLocation,
   getTopProducts,
+  orderWindow,
+  recognizedOrder,
 } from "@/app/dashboard/analytics/data";
 import {
   categories,
   inventoryLevels,
+  orderItems,
+  orders,
   products,
   productVariants,
   storeLocations,
@@ -26,11 +30,15 @@ import type {
   RevenueDeclineInvestigationInput,
   RevenueDeclineSnapshot,
   RevenueMetricSet,
+  SlowInventoryPromotionInput,
+  SlowInventoryShelfSnapshot,
+  SlowInventorySnapshot,
   WeeklyTradingReportInput,
   WeeklyTradingReportSnapshot,
 } from "./workflow-types";
 
 const MAX_LAUNCH_SKUS = 20;
+const MAX_SLOW_INVENTORY_CANDIDATES = 20;
 
 export interface WorkflowExecutionScope {
   locationIds: string[];
@@ -215,6 +223,174 @@ export async function collectRevenueDeclineSnapshot(
     })),
     dataAsOf: new Date().toISOString(),
   };
+}
+
+type SlowInventoryQueryRow = {
+  productId: string;
+  variantId: string | null;
+  productName: string;
+  variantName: string | null;
+  sku: string;
+  locationId: string;
+  locationName: string;
+  stock: number | string;
+  unitsSold: number | string;
+  salesAmount: number | string;
+  effectivePrice: number | string;
+  unitCost: number | string | null;
+  totalMatches: number | string;
+};
+
+/**
+ * Find slow stock at the shelf where it can actually be moved. The query is
+ * deliberately one bounded database statement: it never pulls an unbounded
+ * catalogue into a worker, and it cannot hide a dead Shop shelf behind Delhi
+ * stock (or vice versa).
+ */
+export async function collectSlowInventorySnapshot(
+  storeId: string,
+  input: SlowInventoryPromotionInput,
+  scope: WorkflowExecutionScope,
+): Promise<SlowInventorySnapshot> {
+  const requestedAt = new Date(input.requestedAt);
+  const range = parseAnalyticsRange(
+    { range: input.period, compare: "none" },
+    input.timeZone,
+    requestedAt,
+  );
+  const periodDays = input.period === "90d" ? 90 : 30;
+  const exposureCutoff = range.current.from.toISOString();
+
+  return withService(async (db) => {
+    const [storeRows, queryResult] = await Promise.all([
+      db
+        .select({ name: stores.name, settings: stores.settings })
+        .from(stores)
+        .where(eq(stores.id, storeId))
+        .limit(1),
+      scope.locationIds.length === 0
+        ? Promise.resolve({ rows: [] as SlowInventoryQueryRow[] })
+        : db.execute(sql<SlowInventoryQueryRow>`
+            WITH shelf AS (
+              SELECT
+                ${products.id} AS "productId",
+                ${inventoryLevels.variantId} AS "variantId",
+                ${products.name} AS "productName",
+                ${productVariants.name} AS "variantName",
+                COALESCE(${productVariants.sku}, ${products.sku}) AS sku,
+                ${inventoryLevels.locationId} AS "locationId",
+                ${storeLocations.name} AS "locationName",
+                ${inventoryLevels.onHand}::int AS stock,
+                COALESCE(
+                  NULLIF(${productVariants.specialPrice}, 0),
+                  ${productVariants.sellingPrice},
+                  ${products.sellingPrice}
+                )::numeric AS "effectivePrice",
+                COALESCE(${productVariants.costPrice}, ${products.costPrice})::numeric AS "unitCost"
+              FROM ${inventoryLevels}
+              INNER JOIN ${products}
+                ON ${products.id} = ${inventoryLevels.productId}
+               AND ${products.storeId} = ${inventoryLevels.storeId}
+              LEFT JOIN ${productVariants}
+                ON ${productVariants.id} = ${inventoryLevels.variantId}
+               AND ${productVariants.productId} = ${products.id}
+               AND ${productVariants.storeId} = ${inventoryLevels.storeId}
+              INNER JOIN ${storeLocations}
+                ON ${storeLocations.id} = ${inventoryLevels.locationId}
+               AND ${storeLocations.storeId} = ${inventoryLevels.storeId}
+              WHERE ${inventoryLevels.storeId} = ${storeId}::uuid
+                AND ${inArray(inventoryLevels.locationId, scope.locationIds)}
+                AND ${storeLocations.active} = true
+                AND ${products.status} = 'published'
+                AND COALESCE(${products.publishedAt}, ${products.createdAt}) <= ${exposureCutoff}::timestamptz
+                AND ${inventoryLevels.onHand} > 0
+                AND (
+                  (${inventoryLevels.variantId} IS NULL AND ${products.trackInventory} = true)
+                  OR
+                  (${inventoryLevels.variantId} IS NOT NULL AND ${productVariants.trackInventory} = true)
+                )
+            ),
+            sold AS (
+              SELECT
+                ${orderItems.productId} AS "productId",
+                ${orderItems.variantId} AS "variantId",
+                ${orders.locationId} AS "locationId",
+                COALESCE(SUM(${orderItems.quantity}), 0)::int AS "unitsSold",
+                COALESCE(SUM(${orderItems.total}), 0)::numeric AS "salesAmount"
+              FROM ${orderItems}
+              INNER JOIN ${orders} ON ${orders.id} = ${orderItems.orderId}
+              WHERE ${orders.storeId} = ${storeId}::uuid
+                AND ${inArray(orders.locationId, scope.locationIds)}
+                AND ${recognizedOrder()}
+                AND ${orderWindow(range.current)}
+              GROUP BY ${orderItems.productId}, ${orderItems.variantId}, ${orders.locationId}
+            ),
+            candidates AS (
+              SELECT
+                shelf.*,
+                COALESCE(sold."unitsSold", 0)::int AS "unitsSold",
+                COALESCE(sold."salesAmount", 0)::numeric AS "salesAmount"
+              FROM shelf
+              LEFT JOIN sold
+                ON sold."productId" = shelf."productId"
+               AND sold."variantId" IS NOT DISTINCT FROM shelf."variantId"
+               AND sold."locationId" = shelf."locationId"
+              WHERE COALESCE(sold."unitsSold", 0) = 0
+                 OR shelf.stock >= (COALESCE(sold."unitsSold", 0) * 2)
+            )
+            SELECT candidates.*, COUNT(*) OVER ()::int AS "totalMatches"
+            FROM candidates
+            ORDER BY
+              CASE WHEN "unitsSold" = 0 THEN 0 ELSE 1 END,
+              CASE
+                WHEN "unitsSold" = 0 THEN NULL
+                ELSE (stock::numeric / "unitsSold"::numeric)
+              END DESC NULLS FIRST,
+              stock DESC,
+              "locationName" ASC,
+              sku ASC
+            LIMIT ${MAX_SLOW_INVENTORY_CANDIDATES}
+          `),
+    ]);
+    const store = storeRows[0];
+    if (!store) throw new Error("workflow_store_missing");
+    const rows = queryResult.rows as unknown as SlowInventoryQueryRow[];
+    const candidateShelves: SlowInventoryShelfSnapshot[] = rows.map((row) => ({
+      productId: row.productId,
+      variantId: row.variantId,
+      productName: row.productName,
+      variantName: row.variantName,
+      sku: row.sku,
+      locationId: row.locationId,
+      locationName: row.locationName,
+      stock: Number(row.stock),
+      unitsSold: Number(row.unitsSold),
+      salesAmount: Number(row.salesAmount),
+      effectivePrice: Number(row.effectivePrice),
+      unitCost: row.unitCost == null ? null : Number(row.unitCost),
+      productDashboardPath: `/dashboard/products/${row.productId}`,
+      inventoryDashboardPath: `/dashboard/inventory?location=${encodeURIComponent(row.locationId)}`,
+    }));
+    const totalCandidateShelves = Number(rows[0]?.totalMatches ?? 0);
+
+    return {
+      storeName: store.name,
+      period: input.period,
+      periodDays,
+      rangeLabel: range.label,
+      fromInclusive: range.current.from.toISOString(),
+      toExclusive: range.current.to.toISOString(),
+      timeZone: range.timeZone,
+      currency: input.currency,
+      locationLabel: scope.locationLabel,
+      locationCount: scope.locationIds.length,
+      candidateShelves,
+      totalCandidateShelves,
+      truncated: totalCandidateShelves > candidateShelves.length,
+      storeDiscountCeilingPercent: readStoreDiscountCeiling(store.settings),
+      dataAsOf: new Date().toISOString(),
+    };
+  });
 }
 
 export async function collectProductLaunchSnapshot(
@@ -517,4 +693,24 @@ function uniqueImageCount(...groups: Array<Array<string | null>>): number {
       .map((value) => value?.trim())
       .filter((value): value is string => Boolean(value)),
   ).size;
+}
+
+function readStoreDiscountCeiling(value: unknown): number {
+  const settings =
+    value && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {};
+  const features =
+    settings.features &&
+    typeof settings.features === "object" &&
+    !Array.isArray(settings.features)
+      ? (settings.features as Record<string, unknown>)
+      : {};
+  const configured = features["offers.maxTotalDiscountPercent"];
+  return typeof configured === "number" &&
+    Number.isFinite(configured) &&
+    configured > 0 &&
+    configured <= 100
+    ? configured
+    : 50;
 }

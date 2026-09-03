@@ -2986,6 +2986,45 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260903_0073_mink_phase_6d_slow_inventory",
+      "description": "Add the durable location-aware slow-inventory promotion-recommendation workflow",
+      "file": "sql/20260903_0073_mink_phase_6d_slow_inventory.sql",
+      "checksum": "2af4a11c8bb1524881f75f74edfd55e8c14b2ecab4ef7fcfe0439526c5c28050",
+      "transaction": true,
+      "requires": ["20260903_0072_mink_phase_6bc_workflows"],
+      "verify": {},
+      "applyVerify": {
+        "constraints": ["mink_workflow_runs_template_check"],
+        "queries": [
+          {
+            "name": "workflow template constraint includes Phase 6D",
+            "sql": "select count(*)::text from pg_constraint where conname = 'mink_workflow_runs_template_check' and conrelid = 'public.mink_workflow_runs'::regclass and pg_get_constraintdef(oid) like '%slow_inventory_promotion%'",
+            "equals": "1"
+          },
+          {
+            "name": "the Mink guide documents guarded slow-inventory promotion recommendations",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%<h2>Find slow inventory and prepare a promotion</h2>%' and body like '%positive on-hand stock%' and body like '%Zero-stock and untracked items are not called slow inventory%' and body like '%at most 20 highest-priority SKU-location shelves%' and body like '%private recommendation only%' and body like '%not an offer-eligibility boundary%' and body like '%choose a total budget%' and body like '%approve activation in a separate human step%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "constraints": ["mink_workflow_runs_template_check"],
+        "queries": [
+          {
+            "name": "Phase 6D template already exists",
+            "sql": "select count(*)::text from pg_constraint where conname = 'mink_workflow_runs_template_check' and conrelid = 'public.mink_workflow_runs'::regclass and pg_get_constraintdef(oid) like '%slow_inventory_promotion%'",
+            "equals": "1"
+          },
+          {
+            "name": "the Mink guide already documents Phase 6D",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%<h2>Find slow inventory and prepare a promotion</h2>%'",
+            "equals": "1"
+          }
+        ]
+      }
     }
   ]
 }

@@ -450,4 +450,120 @@ describe("Mink catalogue artifact", () => {
       screen.getByText(/Nothing was published, repriced, generated or sent/i),
     ).toBeVisible();
   });
+
+  it("renders a location-aware slow-stock proposal with an explicit approval boundary", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          workflow: {
+            id: "44444444-4444-4444-8444-444444444444",
+            template: "slow_inventory_promotion",
+            status: "completed",
+            currentStep: 3,
+            totalSteps: 3,
+            attemptCount: 3,
+            errorCode: null,
+            errorDetail: null,
+            cancelRequested: false,
+            result: {
+              storeName: "Echos",
+              period: "30d",
+              periodDays: 30,
+              rangeLabel: "Last 30 days",
+              fromInclusive: "2026-08-03T00:00:00.000Z",
+              toExclusive: "2026-09-02T00:00:00.000Z",
+              timeZone: "Asia/Kolkata",
+              currency: "INR",
+              locationLabel: "Shop and Delhi",
+              locationCount: 2,
+              totalCandidateShelves: 1,
+              truncated: false,
+              storeDiscountCeilingPercent: 50,
+              dataAsOf: "2026-09-02T00:01:00.000Z",
+              candidates: [
+                {
+                  productId: "product-1",
+                  variantId: "variant-1",
+                  productName: "Basmati Rice (Sample)",
+                  variantName: "5 kg",
+                  sku: "SKU10010007V028",
+                  locationId: "delhi-1",
+                  locationName: "Delhi",
+                  stock: 20,
+                  unitsSold: 2,
+                  salesAmount: 900,
+                  effectivePrice: 450,
+                  unitCost: 300,
+                  productDashboardPath: "https://attacker.example/product",
+                  inventoryDashboardPath:
+                    "/dashboard/inventory?location=delhi-1",
+                  daysOfCover: 300,
+                  sellThroughPercent: 9.1,
+                  grossMarginPercent: 33.3,
+                  reason: "excess_cover",
+                },
+              ],
+              promotionProposal: {
+                status: "needs_terms",
+                name: "Move slow stock · Shop and Delhi",
+                objective: "Test demand for one evidence-backed slow SKU.",
+                targetSkus: ["SKU10010007V028"],
+                suggestedDiscountPercent: 10,
+                durationDays: 7,
+                budgetRequired: true,
+                activationRequiresSeparateApproval: true,
+                note: "Review actual basket economics before use.",
+              },
+              approvalBoundary: [
+                "This is private; Mink did not create or activate an offer.",
+                "Choose a budget before saving.",
+                "The analysed location is evidence scope, not an offer-eligibility boundary.",
+                "Activation needs separate human approval.",
+              ],
+              caveats: [
+                "Online or unassigned orders are not assigned to a shelf.",
+              ],
+              inventoryDashboardPath: "/dashboard/inventory",
+              offersDashboardPath: "/dashboard/offers/new",
+            },
+            createdAt: "2026-09-02T00:00:00.000Z",
+            updatedAt: "2026-09-02T00:01:00.000Z",
+            completedAt: "2026-09-02T00:01:00.000Z",
+          },
+        }),
+      }),
+    );
+    const artifact: MinkArtifact = {
+      type: "workflow",
+      runId: "44444444-4444-4444-8444-444444444444",
+      template: "slow_inventory_promotion",
+      title: "Slow-inventory promotion proposal",
+      description: "A private slow-stock analysis.",
+      status: "queued",
+      currentStep: 0,
+      totalSteps: 3,
+    };
+
+    render(<MinkArtifacts artifacts={[artifact]} />);
+    await waitFor(() =>
+      expect(
+        screen.getByText("Private promotion recommendation"),
+      ).toBeVisible(),
+    );
+    expect(screen.getByText("Approval boundary")).toBeVisible();
+    expect(screen.getByText(/₹900\.00 sales/i)).toBeVisible();
+    expect(
+      screen.getByText(/not an offer-eligibility boundary/i),
+    ).toBeVisible();
+    expect(screen.getByText(/No offer, price, inventory/i)).toBeVisible();
+    expect(screen.getByRole("link", { name: /Basmati Rice/i })).toHaveAttribute(
+      "href",
+      "/dashboard",
+    );
+    expect(
+      screen.getByRole("link", { name: /Open Offers manually/i }),
+    ).toHaveAttribute("href", "/dashboard/offers/new");
+  });
 });

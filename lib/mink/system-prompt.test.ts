@@ -54,6 +54,16 @@ describe("Mink system prompt document", () => {
       "Use start_product_launch_preparation only when the user explicitly asks",
     );
     expect(template).toContain("does not generate an image");
+    expect(template).toContain(
+      "Use start_slow_inventory_promotion only when the user explicitly asks",
+    );
+    expect(template).toContain(
+      "Do not call zero-stock or untracked items slow inventory",
+    );
+    expect(template).toContain(
+      "not automatically an offer-eligibility boundary",
+    );
+    expect(template).toContain("choose a total budget");
   });
 
   it("renders only trusted actor fields and permission-filtered tool names", () => {

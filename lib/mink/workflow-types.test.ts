@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildProductLaunchPreparationResult,
   buildRevenueDeclineInvestigationResult,
+  buildSlowInventoryPromotionResult,
   buildWeeklyTradingReportResult,
   narrowMinkWorkflowLocationIds,
 } from "./workflow-types";
@@ -295,5 +296,105 @@ describe("product launch preparation result", () => {
 
     expect(result.readinessLabel).toBe("needs_attention");
     expect(result.warnings.join(" ")).toContain("SKU10010007V028 at Delhi");
+  });
+});
+
+describe("slow inventory promotion result", () => {
+  it("builds a bounded margin-aware recommendation without claiming an offer", () => {
+    const result = buildSlowInventoryPromotionResult({
+      storeName: "Echos",
+      period: "30d",
+      periodDays: 30,
+      rangeLabel: "Last 30 days",
+      fromInclusive: "2026-08-03T00:00:00.000Z",
+      toExclusive: "2026-09-02T00:00:00.000Z",
+      timeZone: "Asia/Kolkata",
+      currency: "INR",
+      locationLabel: "Shop and Delhi",
+      locationCount: 2,
+      candidateShelves: [
+        {
+          productId: "product-1",
+          variantId: "variant-1",
+          productName: "Basmati Rice (Sample)",
+          variantName: "5 kg",
+          sku: "SKU10010007V028",
+          locationId: "delhi-1",
+          locationName: "Delhi",
+          stock: 20,
+          unitsSold: 2,
+          salesAmount: 900,
+          effectivePrice: 450,
+          unitCost: 300,
+          productDashboardPath: "/dashboard/products/product-1",
+          inventoryDashboardPath: "/dashboard/inventory?location=delhi-1",
+        },
+      ],
+      totalCandidateShelves: 1,
+      truncated: false,
+      storeDiscountCeilingPercent: 8,
+      dataAsOf: "2026-09-02T00:01:00.000Z",
+    });
+
+    expect(result.candidates[0]).toMatchObject({
+      daysOfCover: 300,
+      sellThroughPercent: 9.1,
+      grossMarginPercent: 33.3,
+      reason: "excess_cover",
+    });
+    expect(result.promotionProposal).toMatchObject({
+      status: "needs_terms",
+      targetSkus: ["SKU10010007V028"],
+      suggestedDiscountPercent: 8,
+      budgetRequired: true,
+      activationRequiresSeparateApproval: true,
+    });
+    expect(result.approvalBoundary.join(" ")).toContain(
+      "did not create or activate an offer",
+    );
+  });
+
+  it("withholds a discount when cost data cannot prove the margin buffer", () => {
+    const result = buildSlowInventoryPromotionResult({
+      storeName: "Echos",
+      period: "90d",
+      periodDays: 90,
+      rangeLabel: "Last 90 days",
+      fromInclusive: "2026-06-04T00:00:00.000Z",
+      toExclusive: "2026-09-02T00:00:00.000Z",
+      timeZone: "Asia/Kolkata",
+      currency: "INR",
+      locationLabel: "Shop",
+      locationCount: 1,
+      candidateShelves: [
+        {
+          productId: "product-2",
+          variantId: null,
+          productName: "Tomatoes (500 g) (Sample)",
+          variantName: null,
+          sku: "SKU100100015",
+          locationId: "shop-1",
+          locationName: "Shop",
+          stock: 10,
+          unitsSold: 0,
+          salesAmount: 0,
+          effectivePrice: 80,
+          unitCost: null,
+          productDashboardPath: "/dashboard/products/product-2",
+          inventoryDashboardPath: "/dashboard/inventory?location=shop-1",
+        },
+      ],
+      totalCandidateShelves: 1,
+      truncated: false,
+      storeDiscountCeilingPercent: 50,
+      dataAsOf: "2026-09-02T00:01:00.000Z",
+    });
+
+    expect(result.candidates[0]).toMatchObject({
+      daysOfCover: null,
+      reason: "no_location_sales",
+    });
+    expect(result.promotionProposal.suggestedDiscountPercent).toBeNull();
+    expect(result.promotionProposal.note).toContain("cost/margin data");
   });
 });

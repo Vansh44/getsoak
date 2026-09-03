@@ -24,6 +24,7 @@ import type { MinkActorContext } from "./types";
 import {
   collectProductLaunchSnapshot,
   collectRevenueDeclineSnapshot,
+  collectSlowInventorySnapshot,
   collectWeeklyTradingSnapshot,
   resolveProductLaunchTarget,
   type WorkflowExecutionScope,
@@ -31,6 +32,7 @@ import {
 import {
   buildProductLaunchPreparationResult,
   buildRevenueDeclineInvestigationResult,
+  buildSlowInventoryPromotionResult,
   buildWeeklyTradingReportResult,
   isMinkWorkflowTemplate,
   isMinkWorkflowStatus,
@@ -47,6 +49,10 @@ import {
   type RevenueDeclineInvestigationResult,
   type RevenueDeclineSnapshot,
   type MinkRevenuePeriod,
+  type MinkSlowInventoryPeriod,
+  type SlowInventoryPromotionInput,
+  type SlowInventoryPromotionResult,
+  type SlowInventorySnapshot,
   type WeeklyTradingReportInput,
   type WeeklyTradingReportResult,
   type WeeklyTradingReportSnapshot,
@@ -56,6 +62,7 @@ const WORKFLOW_STEPS: Record<MinkWorkflowTemplate, readonly string[]> = {
   weekly_trading_report: ["snapshot", "analyse", "finalise"],
   revenue_decline_investigation: ["snapshot", "diagnose", "finalise"],
   product_launch_preparation: ["snapshot", "assess", "finalise"],
+  slow_inventory_promotion: ["snapshot", "prepare", "finalise"],
 };
 const WORKFLOW_LEASE_SECONDS = 120;
 const MAX_WORKFLOW_LOCATIONS = 50;
@@ -145,9 +152,27 @@ export async function enqueueProductLaunchPreparation(
   });
 }
 
+export async function enqueueSlowInventoryPromotion(
+  actor: MinkActorContext,
+  options: { period: MinkSlowInventoryPeriod; locationName?: unknown },
+): Promise<MinkWorkflowView> {
+  assertQueueAuthority(actor, "slow_inventory_promotion");
+  const input: SlowInventoryPromotionInput = {
+    ...(await buildAuthorityInput(actor, options.locationName, false)),
+    period: options.period,
+  };
+  const scopeKey = input.locationIds.join(",") || "no-active-location";
+  return enqueueWorkflow(actor, {
+    template: "slow_inventory_promotion",
+    input,
+    idempotencyKey: `agent-run:${actor.runId}:slow-inventory:${options.period}:${scopeKey}:v1`,
+  });
+}
+
 async function buildAuthorityInput(
   actor: MinkActorContext,
   locationName?: unknown,
+  includeUnassigned = true,
 ): Promise<WeeklyTradingReportInput> {
   const location = await resolveMinkLocation(actor, locationName);
   const locationIds = location.selectedId
@@ -166,9 +191,9 @@ async function buildAuthorityInput(
     // can never silently enter work that was already authorized and queued.
     locationIds,
     restrictedLocationScope: actor.locationIds !== null,
-    includeUnassigned: location.includeUnassigned,
+    includeUnassigned: includeUnassigned && location.includeUnassigned,
     locationLabel:
-      location.includeUnassigned && !location.selectedId
+      includeUnassigned && location.includeUnassigned && !location.selectedId
         ? `${location.label} plus online or unassigned orders`
         : location.label,
     requesterEmail: actor.email?.trim().toLowerCase() ?? null,
@@ -183,7 +208,8 @@ async function enqueueWorkflow(
     input:
       | WeeklyTradingReportInput
       | RevenueDeclineInvestigationInput
-      | ProductLaunchPreparationInput;
+      | ProductLaunchPreparationInput
+      | SlowInventoryPromotionInput;
     idempotencyKey: string;
   },
 ): Promise<MinkWorkflowView> {
@@ -468,9 +494,16 @@ export async function runMinkWorkflowWorker(
         result.workflowsCancelled += 1;
         continue;
       }
-      if (config.betaRequireInvite) {
+      if (
+        config.betaRequireInvite ||
+        run.template === "slow_inventory_promotion"
+      ) {
         const access = await getMinkStoreAccess(run.storeId);
-        if (!access.enabled) {
+        if (
+          (config.betaRequireInvite && !access.enabled) ||
+          (run.template === "slow_inventory_promotion" &&
+            !access.draftingEnabled)
+        ) {
           await cancelClaimedWorkflow(run, workerId, "store_access_revoked");
           result.workflowsCancelled += 1;
           continue;
@@ -600,6 +633,14 @@ function hasWorkflowPermissions(
     return (
       can(permissions, "products", "view", isSuperadmin) &&
       can(permissions, "inventory", "view", isSuperadmin)
+    );
+  }
+  if (template === "slow_inventory_promotion") {
+    return (
+      can(permissions, "analytics", "view", isSuperadmin) &&
+      can(permissions, "products", "view", isSuperadmin) &&
+      can(permissions, "inventory", "view", isSuperadmin) &&
+      can(permissions, "promotions", "manage", isSuperadmin)
     );
   }
   return can(permissions, "analytics", "view", isSuperadmin);
@@ -909,6 +950,38 @@ async function executeClaimedStep(
       workerId,
       stepKey,
       "diagnose",
+    );
+  }
+
+  if (run.template === "slow_inventory_promotion") {
+    const input = readSlowInventoryInput(run.inputJson);
+    if (stepKey === "snapshot") {
+      const snapshot = await collectSlowInventorySnapshot(
+        run.storeId,
+        input,
+        executionScope,
+      );
+      await completeIntermediateStep(run, workerId, stepKey, snapshot);
+      return { completed: false };
+    }
+    if (stepKey === "prepare") {
+      const snapshot = await readStepOutput<SlowInventorySnapshot>(
+        run,
+        "snapshot",
+      );
+      await completeIntermediateStep(
+        run,
+        workerId,
+        stepKey,
+        buildSlowInventoryPromotionResult(snapshot),
+      );
+      return { completed: false };
+    }
+    return finalizeFromStep<SlowInventoryPromotionResult>(
+      run,
+      workerId,
+      stepKey,
+      "prepare",
     );
   }
 
@@ -1385,18 +1458,31 @@ function readProductLaunchInput(value: unknown): ProductLaunchPreparationInput {
   };
 }
 
+function readSlowInventoryInput(value: unknown): SlowInventoryPromotionInput {
+  const row = readObject(value);
+  const authority = readAuthorityInput(value, "invalid_slow_inventory_input");
+  if (!isSlowInventoryPeriod(row.period) || authority.includeUnassigned) {
+    throw new Error("invalid_slow_inventory_input");
+  }
+  return { ...authority, period: row.period };
+}
+
 function readWorkflowInput(
   template: MinkWorkflowTemplate,
   value: unknown,
 ):
   | WeeklyTradingReportInput
   | RevenueDeclineInvestigationInput
-  | ProductLaunchPreparationInput {
+  | ProductLaunchPreparationInput
+  | SlowInventoryPromotionInput {
   if (template === "revenue_decline_investigation") {
     return readRevenueInput(value);
   }
   if (template === "product_launch_preparation") {
     return readProductLaunchInput(value);
+  }
+  if (template === "slow_inventory_promotion") {
+    return readSlowInventoryInput(value);
   }
   return readWeeklyInput(value);
 }
@@ -1454,6 +1540,13 @@ function assertQueueAuthority(
       403,
     );
   }
+  if (template === "slow_inventory_promotion" && !actor.draftingEnabled) {
+    throw new MinkRequestError(
+      "mink_workflow_access_denied",
+      "Mink drafting is not enabled for this store.",
+      403,
+    );
+  }
 }
 
 function assertActorWorkflowAccess(
@@ -1482,10 +1575,23 @@ function assertActorWorkflowAccess(
       403,
     );
   }
+  if (templateValue === "slow_inventory_promotion" && !actor.draftingEnabled) {
+    throw new MinkRequestError(
+      "mink_workflow_access_denied",
+      "You no longer have access to this promotion workflow.",
+      403,
+    );
+  }
 }
 
 function isRevenuePeriod(value: unknown): value is MinkRevenuePeriod {
   return value === "7d" || value === "30d" || value === "90d";
+}
+
+function isSlowInventoryPeriod(
+  value: unknown,
+): value is MinkSlowInventoryPeriod {
+  return value === "30d" || value === "90d";
 }
 
 function workflowStepKey(
@@ -1504,6 +1610,9 @@ function workflowLabel(template: MinkWorkflowTemplate): string {
   if (template === "product_launch_preparation") {
     return "Product launch preparation";
   }
+  if (template === "slow_inventory_promotion") {
+    return "Slow-inventory promotion proposal";
+  }
   return "Weekly trading report";
 }
 
@@ -1511,6 +1620,9 @@ function workflowNotificationUrl(
   template: MinkWorkflowTemplate,
   resultValue: unknown,
 ): string {
+  if (template === "slow_inventory_promotion") {
+    return "/dashboard/inventory";
+  }
   if (template !== "product_launch_preparation") {
     return "/dashboard/analytics";
   }

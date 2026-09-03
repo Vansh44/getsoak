@@ -18,6 +18,7 @@ import type {
   MinkWorkflowView,
   ProductLaunchPreparationResult,
   RevenueDeclineInvestigationResult,
+  SlowInventoryPromotionResult,
   WeeklyTradingReportResult,
 } from "@/lib/mink/workflow-types";
 
@@ -231,6 +232,11 @@ function WorkflowResult({
   if (template === "product_launch_preparation") {
     return (
       <ProductLaunchPackage result={result as ProductLaunchPreparationResult} />
+    );
+  }
+  if (template === "slow_inventory_promotion") {
+    return (
+      <SlowInventoryPromotion result={result as SlowInventoryPromotionResult} />
     );
   }
   return <WeeklyReport result={result as WeeklyTradingReportResult} />;
@@ -605,6 +611,198 @@ function ProductLaunchPackage({
         {formatDate(result.dataAsOf)}. Nothing was published, repriced,
         generated or sent.
       </p>
+    </div>
+  );
+}
+
+function SlowInventoryPromotion({
+  result,
+}: {
+  result: SlowInventoryPromotionResult;
+}) {
+  const proposal = result.promotionProposal;
+  return (
+    <div className="space-y-3">
+      <div className="rounded-xl bg-[#f4fff9] px-3 py-2 text-[10px] text-[#176b49]">
+        <div className="flex items-start gap-2">
+          <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>
+            Slow-stock analysis complete for {result.rangeLabel} ·{" "}
+            {result.locationLabel} · {result.timeZone}
+          </span>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-3 gap-1.5">
+        <MetricTile
+          label="Candidate shelves"
+          value={result.totalCandidateShelves}
+        />
+        <MetricTile label="Locations" value={result.locationCount} />
+        <MetricTile label="Lookback" value={`${result.periodDays} days`} />
+      </div>
+
+      {result.candidates.length ? (
+        <div>
+          <h4 className="text-[10px] font-semibold text-[#302c35]">
+            Slow inventory by shelf
+          </h4>
+          <div className="mt-1 divide-y divide-[#efedf2] overflow-hidden rounded-xl border border-[#efedf2]">
+            {result.candidates.slice(0, 20).map((candidate) => (
+              <div
+                key={`${candidate.locationId}:${candidate.variantId ?? candidate.productId}`}
+                className="px-2.5 py-2"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <a
+                    href={safeDashboardPath(candidate.productDashboardPath)}
+                    className="min-w-0 text-[10px] font-semibold text-[#3f3370] hover:underline"
+                  >
+                    <span className="block truncate">
+                      {candidate.productName}
+                      {candidate.variantName
+                        ? ` · ${candidate.variantName}`
+                        : ""}
+                    </span>
+                    <span className="block truncate text-[9px] font-normal text-[#817c86]">
+                      {candidate.sku}
+                    </span>
+                  </a>
+                  <a
+                    href={safeDashboardPath(candidate.inventoryDashboardPath)}
+                    className="shrink-0 text-right text-[9px] text-[#6841d9] hover:underline"
+                  >
+                    {candidate.locationName}{" "}
+                    <ArrowUpRight className="inline h-3 w-3" />
+                  </a>
+                </div>
+                <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[9px] text-[#625c68]">
+                  <span>{candidate.stock.toLocaleString("en-IN")} on hand</span>
+                  <span>
+                    {candidate.unitsSold.toLocaleString("en-IN")} sold
+                  </span>
+                  <span>
+                    {money(candidate.salesAmount, result.currency)} sales
+                  </span>
+                  <span>
+                    {candidate.daysOfCover == null
+                      ? "No recognized location sales"
+                      : `${candidate.daysOfCover.toLocaleString("en-IN")} days of cover`}
+                  </span>
+                  <span>
+                    {candidate.sellThroughPercent.toLocaleString("en-IN")}%
+                    sell-through
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+          {result.truncated ? (
+            <p className="mt-1 text-[9px] text-[#8a5c10]">
+              Showing the 20 highest-priority shelves out of{" "}
+              {result.totalCandidateShelves.toLocaleString("en-IN")} matches.
+            </p>
+          ) : null}
+        </div>
+      ) : (
+        <p className="rounded-xl border border-[#e6e3e9] bg-[#fafafa] px-3 py-2 text-[10px] text-[#625c68]">
+          No eligible slow-moving positive-stock shelf was found in this scope.
+        </p>
+      )}
+
+      <div className="rounded-xl border border-[#ded8f4] bg-[#faf8ff] px-3 py-2">
+        <div className="flex items-center justify-between gap-3">
+          <div className="text-[10px] font-semibold text-[#40365c]">
+            Private promotion recommendation
+          </div>
+          <span className="rounded-full bg-white px-2 py-1 text-[9px] font-semibold text-[#6f4ce6]">
+            {proposal.status === "no_candidates"
+              ? "No candidates"
+              : "Review required"}
+          </span>
+        </div>
+        <p className="mt-1 text-[10px] font-semibold text-[#27232e]">
+          {proposal.name}
+        </p>
+        <p className="text-[9px] leading-4 text-[#686170]">
+          {proposal.objective}
+        </p>
+        {proposal.targetSkus.length ? (
+          <div className="mt-2 flex flex-wrap gap-1">
+            {proposal.targetSkus.map((sku) => (
+              <span
+                key={sku}
+                className="rounded-full border border-[#ddd5f6] bg-white px-2 py-1 font-mono text-[9px] text-[#51466b]"
+              >
+                {sku}
+              </span>
+            ))}
+          </div>
+        ) : null}
+        {proposal.targetSkus.length ? (
+          <div className="mt-2 grid grid-cols-2 gap-1.5 text-[9px]">
+            <div className="rounded-lg bg-white px-2 py-1.5 text-[#625c68]">
+              Suggested test: {proposal.durationDays} days
+            </div>
+            <div className="rounded-lg bg-white px-2 py-1.5 text-[#625c68]">
+              Discount:{" "}
+              {proposal.suggestedDiscountPercent ?? "Review margin first"}
+              {proposal.suggestedDiscountPercent == null ? "" : "%"}
+            </div>
+          </div>
+        ) : null}
+        <p className="mt-2 text-[9px] leading-4 text-[#6d6282]">
+          {proposal.note}
+        </p>
+      </div>
+
+      <div className="rounded-xl border border-[#f2e5bd] bg-[#fffaf0] px-3 py-2">
+        <div className="flex items-center gap-1.5 text-[10px] font-semibold text-[#805b16]">
+          <AlertTriangle className="h-3.5 w-3.5" /> Approval boundary
+        </div>
+        <ul className="mt-1 list-disc space-y-1 pl-4 text-[9px] leading-4 text-[#78663f]">
+          {result.approvalBoundary.map((item) => (
+            <li key={item}>{item}</li>
+          ))}
+        </ul>
+      </div>
+
+      <ResultList title="How to interpret this" items={result.caveats} />
+      <div className="flex flex-wrap gap-3">
+        <a
+          href={safeDashboardPath(result.inventoryDashboardPath)}
+          className="inline-flex items-center gap-1 text-[10px] font-semibold text-[#6841d9] hover:underline"
+        >
+          Verify inventory <ArrowUpRight className="h-3 w-3" />
+        </a>
+        <a
+          href={safeDashboardPath(result.offersDashboardPath)}
+          className="inline-flex items-center gap-1 text-[10px] font-semibold text-[#6841d9] hover:underline"
+        >
+          Open Offers manually <ArrowUpRight className="h-3 w-3" />
+        </a>
+      </div>
+      <p className="text-[9px] text-[#8a858e]">
+        Private recommendation only · data as of {formatDate(result.dataAsOf)}.
+        No offer, price, inventory, campaign or customer record was changed.
+      </p>
+    </div>
+  );
+}
+
+function MetricTile({
+  label,
+  value,
+}: {
+  label: string;
+  value: number | string;
+}) {
+  return (
+    <div className="rounded-xl border border-[#efedf2] bg-[#fafafa] px-2.5 py-2">
+      <div className="text-[9px] font-medium text-[#77727d]">{label}</div>
+      <div className="mt-0.5 text-sm font-semibold tabular-nums text-[#18181b]">
+        {typeof value === "number" ? value.toLocaleString("en-IN") : value}
+      </div>
     </div>
   );
 }

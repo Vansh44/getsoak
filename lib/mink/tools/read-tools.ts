@@ -16,6 +16,7 @@ import type { MinkActorContext, MinkArtifact } from "../types";
 import {
   enqueueProductLaunchPreparation,
   enqueueRevenueDeclineInvestigation,
+  enqueueSlowInventoryPromotion,
   enqueueWeeklyTradingReport,
 } from "../workflows";
 import type { MinkWorkflowTemplate } from "../workflow-types";
@@ -668,6 +669,64 @@ const startProductLaunchPreparation: MinkTool = {
   },
 };
 
+const SLOW_INVENTORY_PERIODS = ["30d", "90d"] as const;
+
+const startSlowInventoryPromotion: MinkTool = {
+  declaration: {
+    name: "start_slow_inventory_promotion",
+    description:
+      "Queue a durable private slow-inventory analysis and promotion recommendation only when the user explicitly asks Mink to identify slow-moving stock and prepare or draft a promotion. It accepts 30d or 90d and optionally one exact accessible dashboard location. It compares current positive on-hand, published, inventory-tracked SKU shelves with recognized sales attributed to that same physical location, requires the product to predate the complete lookback window, and returns at most 20 shelf candidates. The recommendation may suggest a conservative discount only when saved cost data supports a five-point gross-margin buffer. It never creates or activates an offer, changes price or inventory, attributes online/unassigned demand to a shelf, selects recipients, or contacts customers. A merchant must separately choose a budget and exact SKU scope in Offers, save the offer disabled, review it, and approve activation separately.",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {
+        period: {
+          type: "string",
+          enum: [...SLOW_INVENTORY_PERIODS],
+          description:
+            "Complete sales lookback used for shelf velocity. Defaults to 30d.",
+          default: "30d",
+        },
+        location_name: {
+          type: "string",
+          description:
+            "Optional exact accessible dashboard location name, such as Shop or Delhi warehouse. Never use or invent a location ID.",
+          minLength: 1,
+          maxLength: 100,
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  permission: { section: "analytics", action: "view" },
+  available: (actor) =>
+    actor.draftingEnabled === true &&
+    can(actor.permissions, "products", "view", actor.isSuperadmin) &&
+    can(actor.permissions, "inventory", "view", actor.isSuperadmin) &&
+    can(actor.permissions, "promotions", "manage", actor.isSuperadmin),
+  timeoutMs: 7_000,
+  artifact(output) {
+    return workflowArtifact(output, {
+      template: "slow_inventory_promotion",
+      title: "Slow-inventory promotion proposal",
+      description:
+        "A private, location-aware slow-stock analysis with a guarded promotion recommendation.",
+    });
+  },
+  async execute(actor, args) {
+    const period = readEnum(
+      args.period,
+      SLOW_INVENTORY_PERIODS,
+      "period",
+      "30d",
+    );
+    const workflow = await enqueueSlowInventoryPromotion(actor, {
+      period,
+      locationName: args.location_name,
+    });
+    return { workflow };
+  },
+};
+
 function workflowArtifact(
   output: Record<string, unknown>,
   copy: {
@@ -994,6 +1053,7 @@ export const minkReadToolRegistry = new MinkToolRegistry([
   startWeeklyTradingReport,
   startRevenueDeclineInvestigation,
   startProductLaunchPreparation,
+  startSlowInventoryPromotion,
   listOrdersTool,
   currentOrderTool,
   searchHelpCentreTool,

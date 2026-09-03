@@ -2,6 +2,7 @@ export const MINK_WORKFLOW_TEMPLATES = [
   "weekly_trading_report",
   "revenue_decline_investigation",
   "product_launch_preparation",
+  "slow_inventory_promotion",
 ] as const;
 export type MinkWorkflowTemplate = (typeof MINK_WORKFLOW_TEMPLATES)[number];
 
@@ -17,6 +18,10 @@ export type MinkWorkflowStatus = (typeof MINK_WORKFLOW_STATUSES)[number];
 
 export const MINK_REVENUE_PERIODS = ["7d", "30d", "90d"] as const;
 export type MinkRevenuePeriod = (typeof MINK_REVENUE_PERIODS)[number];
+
+export const MINK_SLOW_INVENTORY_PERIODS = ["30d", "90d"] as const;
+export type MinkSlowInventoryPeriod =
+  (typeof MINK_SLOW_INVENTORY_PERIODS)[number];
 
 export interface MinkWorkflowAuthorityInput {
   timeZone: string;
@@ -260,10 +265,79 @@ export interface ProductLaunchPreparationResult extends ProductLaunchSnapshot {
   };
 }
 
+export interface SlowInventoryPromotionInput extends MinkWorkflowAuthorityInput {
+  period: MinkSlowInventoryPeriod;
+}
+
+export interface SlowInventoryShelfSnapshot {
+  productId: string;
+  variantId: string | null;
+  productName: string;
+  variantName: string | null;
+  sku: string;
+  locationId: string;
+  locationName: string;
+  stock: number;
+  unitsSold: number;
+  salesAmount: number;
+  effectivePrice: number;
+  unitCost: number | null;
+  productDashboardPath: string;
+  inventoryDashboardPath: string;
+}
+
+export interface SlowInventorySnapshot {
+  storeName: string;
+  period: MinkSlowInventoryPeriod;
+  periodDays: number;
+  rangeLabel: string;
+  fromInclusive: string;
+  toExclusive: string;
+  timeZone: string;
+  currency: string;
+  locationLabel: string;
+  locationCount: number;
+  candidateShelves: SlowInventoryShelfSnapshot[];
+  totalCandidateShelves: number;
+  truncated: boolean;
+  storeDiscountCeilingPercent: number;
+  dataAsOf: string;
+}
+
+export interface SlowInventoryCandidate extends SlowInventoryShelfSnapshot {
+  daysOfCover: number | null;
+  sellThroughPercent: number;
+  grossMarginPercent: number | null;
+  reason: "no_location_sales" | "excess_cover";
+}
+
+export interface SlowInventoryPromotionResult extends Omit<
+  SlowInventorySnapshot,
+  "candidateShelves"
+> {
+  candidates: SlowInventoryCandidate[];
+  promotionProposal: {
+    status: "no_candidates" | "needs_terms";
+    name: string;
+    objective: string;
+    targetSkus: string[];
+    suggestedDiscountPercent: number | null;
+    durationDays: 7;
+    budgetRequired: true;
+    activationRequiresSeparateApproval: true;
+    note: string;
+  };
+  approvalBoundary: string[];
+  caveats: string[];
+  inventoryDashboardPath: string;
+  offersDashboardPath: string;
+}
+
 export type MinkWorkflowResult =
   | WeeklyTradingReportResult
   | RevenueDeclineInvestigationResult
-  | ProductLaunchPreparationResult;
+  | ProductLaunchPreparationResult
+  | SlowInventoryPromotionResult;
 
 export interface MinkWorkflowEventView {
   id: string;
@@ -564,6 +638,97 @@ export function buildProductLaunchPreparationResult(
   };
 }
 
+export function buildSlowInventoryPromotionResult(
+  snapshot: SlowInventorySnapshot,
+): SlowInventoryPromotionResult {
+  const { candidateShelves, ...summary } = snapshot;
+  const candidates: SlowInventoryCandidate[] = candidateShelves.map((item) => {
+    const daysOfCover =
+      item.unitsSold > 0
+        ? round((item.stock * snapshot.periodDays) / item.unitsSold, 1)
+        : null;
+    const grossMarginPercent =
+      item.unitCost != null &&
+      item.unitCost > 0 &&
+      item.effectivePrice > 0 &&
+      item.unitCost < item.effectivePrice
+        ? round(
+            ((item.effectivePrice - item.unitCost) / item.effectivePrice) * 100,
+            1,
+          )
+        : null;
+    return {
+      ...item,
+      daysOfCover,
+      sellThroughPercent: round(
+        (item.unitsSold / Math.max(1, item.unitsSold + item.stock)) * 100,
+        1,
+      ),
+      grossMarginPercent,
+      reason: item.unitsSold === 0 ? "no_location_sales" : "excess_cover",
+    };
+  });
+  const targetSkus = Array.from(
+    new Set(candidates.map((candidate) => candidate.sku)),
+  ).slice(0, 5);
+  const targetCandidates = targetSkus
+    .map((sku) => candidates.find((candidate) => candidate.sku === sku))
+    .filter((candidate): candidate is SlowInventoryCandidate =>
+      Boolean(candidate),
+    );
+  const knownMargins = targetCandidates.map(
+    (candidate) => candidate.grossMarginPercent,
+  );
+  const everyMarginKnown =
+    targetCandidates.length > 0 &&
+    knownMargins.every((margin): margin is number => margin != null);
+  const marginBound = everyMarginKnown
+    ? Math.floor(Math.min(...knownMargins) - 5)
+    : 0;
+  const suggestedDiscountPercent =
+    everyMarginKnown && marginBound >= 5
+      ? Math.min(10, marginBound, snapshot.storeDiscountCeilingPercent)
+      : null;
+  const hasCandidates = targetSkus.length > 0;
+
+  return {
+    ...summary,
+    candidates,
+    promotionProposal: {
+      status: hasCandidates ? "needs_terms" : "no_candidates",
+      name: `Move slow stock · ${snapshot.locationLabel}`,
+      objective: hasCandidates
+        ? `Test demand for ${targetSkus.length} evidence-backed slow-moving ${targetSkus.length === 1 ? "SKU" : "SKUs"}.`
+        : "No eligible slow-moving shelf was found in the selected scope.",
+      targetSkus,
+      suggestedDiscountPercent,
+      durationDays: 7,
+      budgetRequired: true,
+      activationRequiresSeparateApproval: true,
+      note: hasCandidates
+        ? suggestedDiscountPercent == null
+          ? "Choose the discount only after checking missing or insufficient cost/margin data, and set a total budget before creating an offer."
+          : `A conservative ${suggestedDiscountPercent}% test preserves at least a 5-point gross-margin buffer for the listed SKUs with known cost data; review actual basket economics before use.`
+        : "No promotion terms were prepared because no eligible candidate was found.",
+    },
+    approvalBoundary: [
+      "This is a private recommendation only; Mink did not create or activate an offer and did not change prices or inventory.",
+      "A merchant must choose a total budget and verify exact product or variant scope in Offers before saving anything.",
+      "The analysed location is evidence scope, not an offer-eligibility boundary; verify that the offer's channel and audience rules cannot discount healthy shelves unintentionally.",
+      "Any saved offer must remain disabled for review; activation is a separate human approval and customer contact is a separate workflow.",
+    ],
+    caveats: [
+      "Slow movement uses recognized order-item sales attributed to the same physical location; online or unassigned orders are not assigned to a shelf.",
+      `Only published, inventory-tracked, positive-stock SKUs whose product predates the complete ${snapshot.periodDays}-day window are eligible; the current shelf stock may have changed during it.`,
+      "Unit movement uses sold order-line quantities; later returns and completed refunds do not rewrite those historical quantities.",
+      "Sales history is evidence of past movement, not a forecast; seasonality, incoming stock, traffic and advertising spend are not included.",
+      "A discount suggestion is withheld when target cost data cannot support a five-point gross-margin buffer.",
+    ],
+    inventoryDashboardPath: "/dashboard/inventory",
+    offersDashboardPath: "/dashboard/offers/new",
+  };
+}
+
 export function isMinkWorkflowStatus(
   value: unknown,
 ): value is MinkWorkflowStatus {
@@ -652,6 +817,11 @@ function check(
 
 function percentageChange(current: number, previous: number): number | null {
   return previous === 0 ? null : ((current - previous) / previous) * 100;
+}
+
+function round(value: number, digits: number): number {
+  const factor = 10 ** digits;
+  return Math.round((value + Number.EPSILON) * factor) / factor;
 }
 
 function formatPercent(value: number): string {
