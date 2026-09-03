@@ -165,6 +165,7 @@ export const EVENT_KEYS = [
   "subscription.payment_failed",
   "ai.credits_low",
   "ai.credits_purchased",
+  "mink.workflow_completed",
   // ── Data (CSV import/export) ────────────────────────────────────────────
   "data.import_started",
   "data.imported",
@@ -700,6 +701,16 @@ export const EVENTS: readonly EventDef[] = [
     section: "ai",
     severity: "success",
     audiences: { "store-admins": IN_APP },
+  },
+  {
+    key: "mink.workflow_completed",
+    label: "Mink report ready",
+    description: "A requested Mink background report finished safely.",
+    group: "Plan & billing",
+    section: "analytics",
+    severity: "success",
+    audiences: { "store-admins": IN_APP },
+    configurable: false,
   },
 
   // ── Data (CSV import/export) ─────────────────────────────────────────────

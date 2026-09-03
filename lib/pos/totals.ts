@@ -27,6 +27,15 @@ export interface PosTotalsLine {
   gross: number;
   /** Per-line markdown (a damaged tin), already capped at `gross`. */
   lineDiscount: number;
+  /**
+   * This line's share of an OFFER, as allocated by `lib/offers/apply.ts`.
+   *
+   * ★ ALLOCATED, NEVER RE-DERIVED HERE. The engine decides which line an offer
+   * discounts and by how much; this function only spends the number. A second
+   * place computing it is how the till's quote and the charge drift apart —
+   * which is the exact failure this module exists to prevent.
+   */
+  offerDiscount?: number;
   /** Resolved tax-class rate as a percentage (0..100). 0 when tax is off. */
   rate: number;
   /** Tax class name, for the invoice's per-rate breakdown. */
@@ -37,9 +46,12 @@ export interface PosTotals {
   /** Sum of line gross, before any discount. */
   subtotal: number;
   lineDiscountTotal: number;
-  /** The order-level discount, capped at what's left after line markdowns. */
+  /** Σ of the engine's per-line offer allocations. */
+  offerDiscountTotal: number;
+  /** The manual order-level discount, capped at what's left after line
+   *  markdowns AND offers. */
   orderDiscount: number;
-  /** lineDiscountTotal + orderDiscount. */
+  /** lineDiscountTotal + offerDiscountTotal + orderDiscount. */
   discount: number;
   tax: number;
   /** What the customer pays — the ONLY number to quote or tender against. */
@@ -67,15 +79,24 @@ export function posTotals({
 
   let subtotal = 0;
   let lineDiscountTotal = 0;
+  let offerDiscountTotal = 0;
   const taxLines = safe.map((l) => {
     const gross = Number.isFinite(l.gross) ? Math.max(0, l.gross) : 0;
     const lineDiscount = Number.isFinite(l.lineDiscount)
       ? Math.min(Math.max(0, l.lineDiscount), gross)
       : 0;
+    // An offer works on what is left after the manual markdown — a markdown is
+    // a human decision about this specific item, and an offer must neither
+    // undo it nor double it.
+    const offerDiscount = Number.isFinite(l.offerDiscount)
+      ? Math.min(Math.max(0, l.offerDiscount as number), gross - lineDiscount)
+      : 0;
     subtotal += gross;
     lineDiscountTotal += lineDiscount;
+    offerDiscountTotal += offerDiscount;
     return {
       amount: gross - lineDiscount,
+      discount: offerDiscount,
       rate: taxEnabled && Number.isFinite(l.rate) ? Math.max(0, l.rate) : 0,
       label: l.label,
     };
@@ -84,7 +105,7 @@ export function posTotals({
   const orderDiscount = Number.isFinite(requestedOrderDiscount)
     ? Math.min(
         Math.max(0, requestedOrderDiscount),
-        Math.max(0, subtotal - lineDiscountTotal),
+        Math.max(0, subtotal - lineDiscountTotal - offerDiscountTotal),
       )
     : 0;
 
@@ -95,7 +116,7 @@ export function posTotals({
     enabled: taxEnabled,
   });
 
-  const discount = lineDiscountTotal + orderDiscount;
+  const discount = lineDiscountTotal + offerDiscountTotal + orderDiscount;
   // Inclusive prices already contain the tax — adding it again would charge it
   // twice; the carve-out is for the invoice's benefit only.
   const total = Math.max(
@@ -106,6 +127,7 @@ export function posTotals({
   return {
     subtotal: round2(subtotal),
     lineDiscountTotal: round2(lineDiscountTotal),
+    offerDiscountTotal: round2(offerDiscountTotal),
     orderDiscount: round2(orderDiscount),
     discount: round2(discount),
     tax: round2(taxResult.totalTax),

@@ -7,6 +7,7 @@ const MINK_ARTIFACT_TYPES = new Set<MinkArtifact["type"]>([
   "records",
   "sources",
   "proposal",
+  "workflow",
 ]);
 
 export function readMinkArtifacts(value: unknown): MinkArtifact[] {
@@ -42,6 +43,34 @@ export function readMinkArtifacts(value: unknown): MinkArtifact[] {
                   row.description.length <= 200))
             );
           })
+        );
+      }
+      if (type === "workflow") {
+        const workflow = artifact as Record<string, unknown>;
+        return (
+          typeof workflow.runId === "string" &&
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+            workflow.runId,
+          ) &&
+          workflow.template === "weekly_trading_report" &&
+          typeof workflow.title === "string" &&
+          workflow.title.length <= 120 &&
+          typeof workflow.description === "string" &&
+          workflow.description.length <= 300 &&
+          [
+            "queued",
+            "running",
+            "waiting_approval",
+            "completed",
+            "failed",
+            "cancelled",
+          ].includes(String(workflow.status)) &&
+          Number.isInteger(workflow.currentStep) &&
+          Number(workflow.currentStep) >= 0 &&
+          Number.isInteger(workflow.totalSteps) &&
+          Number(workflow.totalSteps) >= 1 &&
+          Number(workflow.totalSteps) <= 20 &&
+          Number(workflow.currentStep) <= Number(workflow.totalSteps)
         );
       }
       if (type !== "catalog") return true;

@@ -46,9 +46,19 @@ export function ShopCard({
   product: p,
   storeLowStockThreshold = 0,
   headingLevel = 3,
+  offerBadge,
 }: {
   product: ShopCardProduct;
   storeLowStockThreshold?: number;
+  /**
+   * A line-level offer's saving on THIS product, from `offerBadgeFor`.
+   *
+   * ★ OPTIONAL, so every existing call site (homepage sections, related
+   * carousels, search) keeps working untouched and simply shows no badge —
+   * a card that renders a stale or absent offer is worse than one that renders
+   * none. Pass it from a page that has already loaded the store's offers.
+   */
+  offerBadge?: { label: string } | null;
   /** Shop grids sit directly below the page h1; homepage/related carousels
    * sit below a section h2. Keep the shared card's heading hierarchy valid in
    * both contexts. */
@@ -117,6 +127,9 @@ export function ShopCard({
             <NameHeading className="shop-card-name">{p.name}</NameHeading>
           </div>
           <div className="shrink-0 ml-2 flex flex-col items-end gap-1">
+            {/* ★ STOCK OUTRANKS THE OFFER, always. "20% off" beside "Sold
+                Out" invites a shopper to try to buy something they cannot, and
+                the offer is the less urgent of the two facts. */}
             {isOutOfStock ? (
               <span className="text-[10px] font-bold uppercase tracking-wider bg-zinc-200 text-zinc-600 px-1.5 py-0.5 rounded-sm">
                 Sold Out
@@ -125,6 +138,8 @@ export function ShopCard({
               <span className="text-[10px] font-bold uppercase tracking-wider bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded-sm">
                 Only {lowStockAmount} left!
               </span>
+            ) : offerBadge ? (
+              <span className="sm-offer-badge">{offerBadge.label}</span>
             ) : null}
           </div>
         </div>

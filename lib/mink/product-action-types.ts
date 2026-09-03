@@ -11,6 +11,15 @@ export const MINK_DOMAIN_ACTION_TOOLS = [
   "update_coupon",
   "create_customer_group",
   "update_customer_group",
+  // ★★ THREE TOOLS, NOT TWO, and the third is the whole point. An offer is
+  // created DISABLED and activating it is its OWN approval with its own preview
+  // (plan §14c). "Mink is capable of everything" and "one approval does
+  // everything" are different claims; a disabled offer costs exactly nothing,
+  // so the review can take as long as it needs, while a live automatic offer
+  // applies itself to every qualifying order from the instant it goes live.
+  "create_offer",
+  "update_offer",
+  "activate_offer",
 ] as const;
 
 export const MINK_INVENTORY_ACTION_TOOLS = [
@@ -112,6 +121,9 @@ export const MINK_ACTION_TOOL_LABELS: Record<MinkActionTool, string> = {
   publish_blog: "Blog publication and scheduling",
   send_campaign: "Coupon email campaigns",
   bulk_update_prices: "Bulk price updates",
+  create_offer: "Disabled offer creation",
+  update_offer: "Disabled offer updates",
+  activate_offer: "Turning an offer on",
 };
 
 export function actionToolForDraftKind(

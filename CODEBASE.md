@@ -31,16 +31,16 @@ tokens were renamed to `--sm-*` and `WHOLESIP_STORE_ID` to `FALLBACK_STORE_ID`.
 
 ## 2. Tech stack
 
-| Layer     | Tech                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Framework | Next.js 16 (App Router, `--turbopack` dev) — **breaking-changes version; read `node_modules/next/dist/docs/` before writing code** (see AGENTS.md)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| UI        | React 19, Tailwind CSS v4, shadcn/ui (`components/ui/`), Base UI, lucide-react, sonner (toasts), recharts (charts), TipTap (rich-text editor), CodeMirror 6 (`@uiw/react-codemirror` — website-builder code editor, lazy-loaded)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| Backend   | Supabase (Postgres + Auth + Storage + RLS), server actions in `app/actions/`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| Email     | Resend + nodemailer (`lib/email/`), authenticated `/api/cron/send-emails` queue heartbeat (Cloud Scheduler every minute after Phase 5E rollout; `vercel.json` is non-production documentation)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| AI        | Gemini (`lib/ai/gemini.ts`); per-store brand voice (`lib/ai/brand-voice.ts` + `store_brand_profiles`) with plan-capped usage metering (`lib/ai/quota.ts`); task prompts in `brand/tasks/`. The dashboard Mink drawer has a default-on, invitation-gated Vertex/Gemini 3.7 beta in `lib/mink/` + `app/api/mink/`: its marked runtime system prompt is `docs/mink-ai-system-prompt.md`, validated and rendered by `lib/mink/system-prompt.ts`. Phase 2 streams permission/location-aware store, catalogue, sales, order, inventory and Help reads; vague multi-location catalogue-stock questions now produce permission-safe multiple-choice clarification instead of silently using a combined total, while explicit comparison returns shelf-level counts. Phase 3 adds separately opted-in private proposals. Phase 4A adds independently gated product description/SEO actions; 4B adds unpublished, untracked draft-product creation; 4C adds disabled/hidden coupon create/update; and 4D adds customer-group metadata create/update. Phase 5A adds an independently gated, human-approved adjustment for one exact tracked SKU at one exact active accessible location; Phase 5B adds a separate 5-credit, maximum-20-line bulk inventory proposal and atomic approval; Phase 5C adds a separate one-credit, one-order, one-forward-step online-delivery status proposal/approval for pending → processing → shipped → delivered; Phase 5D adds a separate immediate/scheduled publication approval for one exact saved blog proposal plus a bounded conflict-safe worker; Phase 5E adds independently gated coupon-email audience selection, exact non-PII preview, final confirmation and immediate/scheduled queueing; Phase 5F adds an independently gated 1–20 exact-SKU bulk price proposal, one-unit basket impact review and atomic conflict-safe execution. Every action uses a saved proposal, exact short-lived human approval, tenant/permission/tool/version rechecks, idempotent transactional execution and append-only outcomes; Phase 4 supports checkpointed safe rollback, while inventory, order-status, blog-publication, campaign and price corrections use fresh/manual domain workflows. Gemini receives checkpoint/proposal tools but no live execute tool. Transfers, cancellation/refunds/payment/shipment changes, pickup/POS lifecycle, product/page/storefront/bulk publication, arbitrary customer contact/group membership, unbounded catalogue repricing and arbitrary coding remain unavailable. Operators control every gate and inspect redacted metrics at `/dashboard/mink`; the 50-case live harness is `npm run mink:eval`, and the phase-wise manual catalogue is `docs/mink-ai-test-prompts.md`. An explicit global disable or missing invite retains the canned coming-soon response. Architecture and phased rollout are tracked in `docs/mink-ai-dashboard-plan.md`. |
-| Testing   | Vitest + Testing Library + jsdom, coverage via v8 (`coverage/` is generated output — never edit)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| Browsers  | **`browserslist` in package.json is the stated floor: Chrome/Edge 111, Firefox 128, Safari/iOS 16.4.** Not a preference — Tailwind v4 depends on `@property` and `color-mix()` and does not work below it, so this records a constraint a dependency already imposed rather than inventing one. Two authored CSS features sit BELOW that floor and so are always available: `:has()` (Chrome 105+/Safari 15.4+/Firefox 121+) and container queries (Chrome 105+/Safari 16+/Firefox 110+), both used by the dashboard table compaction, which is nonetheless wrapped in `@supports selector(:has(+ *)) and (container-type: inline-size)` so the dependency is stated where it is used and stays graceful if the floor is ever lowered. **⚠ There is NO cross-browser test infrastructure** — vitest runs in jsdom, which renders nothing. Chrome is the only browser this has been exercised in                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| Deploy    | **Google Cloud Run** via branch-specific Cloud Build triggers (`dev` → `storemink-web-dev`, `staging` → `storemink-web`, `main` → `storemink-web-prod`; Dockerfile + `cloudbuild.yaml`). The Cloud Build deploy owns the complete runtime environment; Mink's model/limit settings and separate invited-beta requirement are declared as substitutions. The global runtime defaults enabled, while the per-store invitation requirement defaults on and remains the fail-closed merchant boundary. CI on GitHub Actions (`.github/workflows/ci.yml`: lint → typecheck → test → test:shuffle → prettier → build); `npm run typecheck` runs `next typegen` before `tsc --noEmit` because the Next-managed `next-env.d.ts` is deliberately gitignored and a clean checkout otherwise has no static-image or route declarations. Database DDL is a separate, checksummed release gate (`npm run db:migrate`; see `drizzle/manual/README.md`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| Layer     | Tech                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Framework | Next.js 16 (App Router, `--turbopack` dev) — **breaking-changes version; read `node_modules/next/dist/docs/` before writing code** (see AGENTS.md)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| UI        | React 19, Tailwind CSS v4, shadcn/ui (`components/ui/`), Base UI, lucide-react, sonner (toasts), recharts (charts), TipTap (rich-text editor), CodeMirror 6 (`@uiw/react-codemirror` — website-builder code editor, lazy-loaded)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| Backend   | Supabase (Postgres + Auth + Storage + RLS), server actions in `app/actions/`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| Email     | Resend + nodemailer (`lib/email/`), authenticated `/api/cron/send-emails` queue heartbeat (Cloud Scheduler every minute after Phase 5E rollout; `vercel.json` is non-production documentation)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| AI        | Gemini (`lib/ai/gemini.ts`); per-store brand voice (`lib/ai/brand-voice.ts` + `store_brand_profiles`) with plan-capped usage metering (`lib/ai/quota.ts`); task prompts in `brand/tasks/`. The dashboard Mink drawer has a default-on, invitation-gated Vertex/Gemini 3.7 beta in `lib/mink/` + `app/api/mink/`: its marked runtime system prompt is `docs/mink-ai-system-prompt.md`, validated and rendered by `lib/mink/system-prompt.ts`. Phase 2 streams permission/location-aware store, catalogue, sales, order, inventory and Help reads; vague multi-location catalogue-stock questions now produce permission-safe multiple-choice clarification instead of silently using a combined total, while explicit comparison returns shelf-level counts. Phase 3 adds separately opted-in private proposals. Phase 4A adds independently gated product description/SEO actions; 4B adds unpublished, untracked draft-product creation; 4C adds disabled/hidden coupon create/update; and 4D adds customer-group metadata create/update. Phase 5A adds an independently gated, human-approved adjustment for one exact tracked SKU at one exact active accessible location; Phase 5B adds a separate 5-credit, maximum-20-line bulk inventory proposal and atomic approval; Phase 5C adds a separate one-credit, one-order, one-forward-step online-delivery status proposal/approval for pending → processing → shipped → delivered; Phase 5D adds a separate immediate/scheduled publication approval for one exact saved blog proposal plus a bounded conflict-safe worker; Phase 5E adds independently gated coupon-email audience selection, exact non-PII preview, final confirmation and immediate/scheduled queueing; Phase 5F adds an independently gated 1–20 exact-SKU bulk price proposal, one-unit basket impact review and atomic conflict-safe execution. Phase 6A adds a durable leased workflow runtime and an idempotent, read-only weekly trading report with persisted steps/events, safe cancellation, token-free waiting and background completion notification. Every action uses a saved proposal, exact short-lived human approval, tenant/permission/tool/version rechecks, idempotent transactional execution and append-only outcomes; Phase 4 supports checkpointed safe rollback, while inventory, order-status, blog-publication, campaign and price corrections use fresh/manual domain workflows. Gemini receives checkpoint/proposal tools but no live execute tool; its weekly-report tool queues internal read work only. Transfers, cancellation/refunds/payment/shipment changes, pickup/POS lifecycle, product/page/storefront/bulk publication, arbitrary customer contact/group membership, unbounded catalogue repricing and arbitrary coding remain unavailable. Operators control every gate and inspect redacted metrics at `/dashboard/mink`; the 50-case live harness is `npm run mink:eval`, and the phase-wise manual catalogue is `docs/mink-ai-test-prompts.md`. An explicit global disable or missing invite retains the canned coming-soon response. Architecture and phased rollout are tracked in `docs/mink-ai-dashboard-plan.md`. |
+| Testing   | Vitest + Testing Library + jsdom, coverage via v8 (`coverage/` is generated output — never edit)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| Browsers  | **`browserslist` in package.json is the stated floor: Chrome/Edge 111, Firefox 128, Safari/iOS 16.4.** Not a preference — Tailwind v4 depends on `@property` and `color-mix()` and does not work below it, so this records a constraint a dependency already imposed rather than inventing one. Two authored CSS features sit BELOW that floor and so are always available: `:has()` (Chrome 105+/Safari 15.4+/Firefox 121+) and container queries (Chrome 105+/Safari 16+/Firefox 110+), both used by the dashboard table compaction, which is nonetheless wrapped in `@supports selector(:has(+ *)) and (container-type: inline-size)` so the dependency is stated where it is used and stays graceful if the floor is ever lowered. **⚠ There is NO cross-browser test infrastructure** — vitest runs in jsdom, which renders nothing. Chrome is the only browser this has been exercised in                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Deploy    | **Google Cloud Run** via branch-specific Cloud Build triggers (`dev` → `storemink-web-dev`, `staging` → `storemink-web`, `main` → `storemink-web-prod`; Dockerfile + `cloudbuild.yaml`). The Cloud Build deploy owns the complete runtime environment; Mink's model/limit settings and separate invited-beta requirement are declared as substitutions. The global runtime defaults enabled, while the per-store invitation requirement defaults on and remains the fail-closed merchant boundary. CI on GitHub Actions (`.github/workflows/ci.yml`: lint → typecheck → test → test:shuffle → prettier → build); `npm run typecheck` runs `next typegen` before `tsc --noEmit` because the Next-managed `next-env.d.ts` is deliberately gitignored and a clean checkout otherwise has no static-image or route declarations. Database DDL is a separate, checksummed release gate (`npm run db:migrate`; see `drizzle/manual/README.md`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 
 ## 3. Multi-tenancy architecture (the core concept)
 
@@ -368,7 +368,11 @@ wholesip/
 │   │   │                      # builder.css (tokenised on --dash-*)
 │   │   │   └── settings/      # Website settings ("Website" registry group, e.g.
 │   │   │                      # pages.customCode) — linked from the builder top bar
-│   │   ├── marketing/coupons/ # coupon CRUD + coupon email campaigns
+│   │   ├── marketing/coupons/ # RETIRED as a destination — 307s to offers/
+│   │   │                      # (§39). Coupon email campaigns still live here
+│   │   ├── offers/            # ★ OFFERS (§39): one engine for every discount.
+│   │   │                      # List + new/ + [id]/edit + the shared settings
+│   │   │                      # card. Permission section is still `promotions`
 │   │   ├── enquiries/         # enquiry inbox + @modal detail
 │   │   ├── users/             # customers + user_groups/ (segments)  [superadmin only]
 │   │   ├── admins/ roles/     # staff invites + role management
@@ -560,7 +564,23 @@ wholesip/
 │   │   │                      # upsertAddress (profile add/edit), setDefaultAddress,
 │   │   │                      # deleteAddress. Prefills checkout + /profile address book.
 │   │   ├── platform.ts        # Platform-admin actions
-│   │   └── _test-helpers.ts   # Shared mocks for action tests (co-located *.test.ts)
+│   │   └── _test-helpers.ts   # Shared mocks for action tests (co-located *.test.ts).
+│   │                          # ★ `makeDbMock` serves selects TWO ways:
+│   │                          # `selectQueue` is POSITIONAL (Nth select → Nth
+│   │                          # entry) and `selectByTable` is a queue PER TABLE
+│   │                          # (Nth read of that table → its Nth entry),
+│   │                          # drained independently so the two can be mixed.
+│   │                          # ★★ The table mode exists because a positional
+│   │                          # queue cannot reach a read you cannot COUNT — one
+│   │                          # behind a conditional, among reads whose number
+│   │                          # varies with the input. `placeOrder`'s gift-product
+│   │                          # read is the case that forced it: no position
+│   │                          # reached it, so a real bug (§38's gift line taking
+│   │                          # `undefined` into a NOT NULL column) shipped
+│   │                          # unpinned. Rows are chosen at `.from(table)`, not
+│   │                          # at `select()`, which is safe only because Drizzle
+│   │                          # always chains the two in one expression — check
+│   │                          # that still holds before deferring anything else.
 │   │
 │   └── api/
 │       ├── mink/stream/      # ★ Internal bounded Mink agent SSE boundary.
@@ -578,6 +598,8 @@ wholesip/
 │       │   └── [conversationId]/ # actor/store's last ten; load or same-origin delete one.
 │       ├── mink/feedback/    # ★ Authenticated same-origin rating/issue endpoint; accepts
 │       │                      # only the actor's own tenant run and stores redacted detail.
+│       ├── mink/workflows/[workflowId]/ # ★ Phase 6A no-store owner/tenant-scoped status,
+│       │                      # strict same-origin cancellation and approval-resume boundary.
 │       ├── mink/drafts/[draftId]/ # ★ No-store private-draft read/save/rollback API;
 │       │                      # same-origin writes, optimistic versions, actor/store/RBAC scope.
 │       │   ├── product-action/ # ★ Phase 4A same-origin preview/execute/rollback endpoint;
@@ -621,6 +643,8 @@ wholesip/
 │       │                      # work remains, and returns 503 on provider failure
 │       ├── cron/mink-publications/ # ★ Every minute: CRON_SECRET-gated bounded Phase 5D
 │       │                      # due-blog publisher; exact-version conflict detection + SKIP LOCKED.
+│       ├── cron/mink-workflows/ # ★ Every minute: CRON_SECRET-gated Phase 6A lease worker;
+│       │                      # bounded deterministic steps, retries, cancellation and completion.
 │       ├── cron/domain-reconcile/ # ★ HOURLY (§30): finishes every custom domain
 │       │                      # whose certificate issued after the merchant closed
 │       │                      # the tab. Without it a domain only ever goes live if
@@ -755,6 +779,18 @@ wholesip/
 │   │                          # NOT in the "use server" file, or the sweep would be
 │   │                          # a public unauthenticated endpoint). Tested, plus a
 │   │                          # RUN_DOMAIN_INTEGRATION=1 live provisioning test.
+│   ├── money/allocate.ts      # ★ §39: splitting one amount across lines in
+│   │                          # PAISE, exactly. Shared by the offer engine
+│   │                          # (allocating a reward at sale time) and
+│   │                          # refundBreakdown (undoing it) — a second copy is
+│   │                          # how a full return comes back a paisa short
+│   ├── offers/                # ★ §39: types.ts (client-safe registry +
+│   │                          # validation), apply.ts (PURE — best offer wins
+│   │                          # as a bounded scenario comparison, per-line
+│   │                          # allocation, four limits, near-miss reporting),
+│   │                          # resolve.ts + cart.ts (server-only: load,
+│   │                          # reserve, release, record — every read FAILS
+│   │                          # OPEN so the deploy can precede its migration)
 │   ├── analytics/             # ★ §20 dashboard contracts plus platform feature gates;
 │   │                          # merchant-pixels.ts validates/fail-closes the GA4 + Meta
 │   │                          # settings stored under stores.settings.marketing;
@@ -1048,6 +1084,8 @@ wholesip/
 │   │                          # snapshots, branded sample, final confirmation and queue scheduling;
 │   │                          # bulk-price-policy/targets/action-types/actions add Phase 5F exact-SKU
 │   │                          # tuple validation, one-unit impact review and atomic guarded repricing;
+│   │                          # workflow-types.ts + workflows.ts add Phase 6A durable leased runs,
+│   │                          # idempotent checkpoints/events and the read-only weekly report;
 │   │                          # action-integrity.ts gives approval payloads canonical JSON hashes.
 │   │                          # Transfer, cancellation, refund, shipment, arbitrary customer
 │   │                          # contact and non-blog publication authority remain unavailable.
@@ -1492,6 +1530,8 @@ wholesip/
 │                              # constraints, variant parent-version trigger and Help guidance;
 │                              # 0055 documents automatic POS HTTP→HTTPS entry; 0056 documents
 │                              # the phone-safe Mink full-screen/scroll/composer behavior;
+│                              # 0058 adds service-only durable workflow runs/steps/events and
+│                              # the weekly-report Help contract;
 │                              # missing/draft/empty guide drift is repaired before publication.
 │                              # It follows the 0049/0050 UX migrations.
 ├── scripts/
@@ -2111,6 +2151,42 @@ allow-popups"` + `srcDoc`, **never `allow-same-origin`**: the session cookie
       exceeded under concurrent checkouts. The reservation is released
       (`decrement_coupon_usage`) if the order then fails to persist; a transient
       RPC error fails open (never blocks a sale over the counter).
+    - **★★ RE-READING THE PRICE IS NOT THE SAME AS READING THE RIGHT COLUMN.**
+      `placeOrder` re-read `products`/`product_variants` faithfully and still
+      charged the wrong amount, because it selected only
+      `product_variants.selling_price` — never `special_price` — and a variant
+      on sale is sold at the latter. So the anti-tampering rule above was
+      satisfied while a variant at 450/500 DISPLAYED ₹450 on the PDP, CHARGED
+      ₹450 at the till (`placePosSale` has always applied the rule) and BILLED
+      ₹500 online. The cart summary disagreed with itself too: its subtotal came
+      from `CartItem.price` (the sale price, captured on the PDP) while
+      `getCartTaxRates` taxed the regular price, and the checkout shipping quote
+      valued the basket at the regular price when deciding free delivery — while
+      the PDP's PIN quote, which carried its own INLINE copy of the rule, valued
+      it at the sale price. Five surfaces, three different answers.
+      **`lib/pricing.variantEffectiveSelling` is now the ONE rule** — display
+      (PDP + shop grid), the cart's tax basis (`getCartTaxRates`), both shipping
+      quotes and the charge (`placeOrder`) all call it, and its parameter type is
+      narrowed to exactly the two columns it reads so a server row that selects
+      only those is a valid input. **Do not inline `special ?? selling`** — an
+      inline copy is what let the two shipping quotes diverge. Blast radius when
+      found: production held ONE such variant and ZERO live orders, so nobody was
+      ever overcharged; it was latent. Regression-tested in both directions,
+      including an assertion that the charge path actually SELECTS the column —
+      the db mock serves canned rows, so the price assertions alone stay green if
+      someone drops it. Same class of defect `lib/pos/totals.ts` exists to
+      prevent (§22).
+      **★ AND IT UNBLOCKED `offers.onSalePrice` ONLINE.** The offer engine reads
+      `unitPrice` (what will be charged) alongside `regularUnitPrice` (the
+      non-sale price), where **absent or equal means "not on sale"** — a default
+      that fails SILENTLY. `placePosSale` passed the pair; `placeOrder` passed
+      only `unitPrice`, so online every sale line looked full-price and `skip`
+      did not skip while `stack` did not stack, with no error anywhere. That was
+      correct while nothing online charged a sale price; both halves move
+      together, so `placeOrder` now passes `regularUnitPrice` = the variant's
+      `selling_price` — never `base_price`, which is a struck-through MRP and
+      would let `best` discount from a much higher base (docs/offers-plan.md
+      §14).
     - **Service-role writes**: `orders`/`order_items` have **no customer INSERT
       RLS policy** by design; the writes run with `createAdminClient()` (service
       role) _after_ all the above validation. Customers get RLS `SELECT` on their
@@ -3246,6 +3322,49 @@ the trusted `store_id`, and direct customer PII is minimized/masked.
      constraints, partial indexes, parent-version trigger and published Help
      contract.
 
+     Phase 6A adds the model-visible `start_weekly_trading_report` tool only for
+     admins with Analytics View. It is not a live business mutation: one
+     explicit create/prepare/run/generate request inserts or reuses a workflow
+     keyed to the originating Mink run, snapshots the exact active location IDs
+     currently accessible to that admin, and returns a persisted progress card.
+     Ordinary sales questions continue to use the synchronous sales summary.
+     Before every background step, the worker rechecks current Analytics access,
+     suspension/platform status, invitation access and any explicitly restricted
+     location assignments; captured locations are narrowed when access is
+     removed and never widened by locations added after queueing.
+
+     `mink_workflow_runs`, `mink_workflow_steps` and `mink_workflow_events` are
+     RLS-enabled service-only operational tables. The CRON_SECRET-only
+     `/api/cron/mink-workflows` route claims at most 15 short leases per minute
+     with `FOR UPDATE SKIP LOCKED`; expired leases are reclaimable after a Cloud
+     Run restart. The weekly template checkpoints authoritative 7-day versus
+     previous-period sales, then deterministic analysis, then final delivery.
+     Every completed step and support event has a unique idempotency key.
+     Transient failures use bounded exponential retry, terminal failure clears
+     the lease, an exhausted expired lease is reaped rather than staying stuck,
+     and global/invitation revocation fails closed. The report range is anchored
+     to the original request instant so retrying across local midnight cannot
+     change the period. Background steps call no model and consume no additional
+     Gemini tokens.
+
+     `GET/POST /api/mink/workflows/[workflowId]` re-derives the authenticated
+     actor, Analytics permission, invitation and exact owner/store predicates.
+     The write boundary is same-origin, 1KB streamed-body limited, strict-key
+     and rate-limited; it accepts only cancel or generic approval-resume.
+     Queued/waiting reports cancel immediately, running reports set a durable
+     request checked before the next step, and cancelled runs can never resume.
+     The first template is read-only and never enters approval, but the runtime
+     can persist a token-free `waiting_approval` checkpoint for later Phase 6
+     templates. Completion writes a permission-routed in-dashboard
+     `mink.workflow_completed` notification. A partial unique activity-event
+     key plus reconciliation on later heartbeats makes completion fan-out
+     retry/concurrency safe even if a worker stops after committing the report.
+     Migration
+     `20260902_0058_mink_phase_6a_durable_workflows` owns the tables, tenant
+     composite keys, lease/completion invariants, service grants and Help
+     contract. Cloud Scheduler must add `storemink-mink-workflows` only after
+     that migration and matching application deploy.
+
      Migration
      `20260829_0038_mink_phase_1b` adds retry/partial-usage/versioned micro-USD
      cost columns and a cross-store run index. `/dashboard/mink`, gated at its
@@ -3257,7 +3376,7 @@ the trusted `store_id`, and direct customer PII is minimized/masked.
      `docs/mink-ai-test-prompts.md` catalogue covers phase-wise manual prompts
      plus UX, permission, tenancy, credit, approval, conflict, idempotency and
      rollback acceptance scenarios. The original migration
-     publishes the guide; migrations 0036–0054 keep
+     publishes the guide; migrations 0036–0058 keep
      `use-mink-ai-in-your-dashboard` aligned with these capabilities and limits.
 
 21. **Help Centre (`help.storemink.com`) — platform-global, operator-managed
@@ -7922,7 +8041,459 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       merchant's Twilio number needs a messaging webhook pointed at us. Until
       then opt-out is enforced on send but can only be recorded by hand.
 
-38. **The operator console — one screen per job.** `app/platform/dashboard/(console)`
+38. **Offers — one engine for every discount** (Phases A–I shipped, the whole
+    plan; design in **`docs/offers-plan.md`**, sequenced as roadmap Step 22).
+    Coupons were the only discount mechanism and were order-level only: a
+    percentage or a rupee amount off the whole cart, on a code, online only.
+    Offers replace that with one engine reaching both counters.
+    - **★ A CODE IS A DELIVERY METHOD, NOT A KIND OF OFFER.** One `offers`
+      table with `delivery` ∈ `automatic | code | link`; every coupon row
+      migrated in place. Two systems would mean two engines, two stacking
+      policies and no way to turn a code into an automatic offer.
+      `/dashboard/marketing/coupons` and `/dashboard/promotions` both **307**
+      to `/dashboard/offers` (307 not 308 — admin paths behind a login have no
+      SEO signals to consolidate, and a 308 is cached indefinitely).
+      **⚠ `/dashboard/promotions` had no route behind it at all**: the
+      permission section pointed there, so every merchant granted it saw a
+      sidebar link that 404'd.
+    - **★ THE PERMISSION KEY IS STILL `promotions`.** Roles store the KEY, so
+      renaming it to `offers` silently revokes the grant on every saved role —
+      the `navigation` precedent (§11). Label and href changed; key untouched.
+      The `Coupons` CHILD was removed instead, which is safe for the opposite
+      reason: a child carries no key.
+    - **★★ THE DISCOUNT LANDS ON LINES, NOT THE ORDER, and that is the whole
+      design.** `computeTax` allocates `orders.discount` across lines
+      **proportionally**, and `refundBreakdown` re-allocates it the same way. A
+      product-scoped or Buy-1-Get-1 reward is **not** proportional, so routing
+      it through `orders.discount` applies the WRONG allocation twice over:
+      ₹200 off a ₹1,000 18% shirt beside a ₹1,000 5% book taxes as ₹207 spread
+      instead of ₹194, misstating GST on the invoice with nothing reporting an
+      error; and returning the free half of a B1G1 refunds its full ₹1,000, so
+      the customer keeps a free shirt AND takes the money. So
+      `order_items.offer_discount` carries the engine's exact per-line share,
+      `order_item_offers` records which offer and its SNAPSHOTTED name (a
+      rename must not change an issued invoice), `computeTax` gained a per-line
+      `discount`, and `refundBreakdown` subtracts it DIRECTLY while
+      re-allocating only the genuine order-level remainder. Both directions
+      tested.
+    - **★ BEST OFFER WINS** (owner, 2026-09-02): exclusive selection BY VALUE —
+      one offer per line, one order-level offer — with `priority` demoted to a
+      tie-break. Implemented as a **bounded scenario comparison**, never a
+      search: optimal assignment is exponential and its cost would scale with
+      how many offers a merchant creates. `order_only` genuinely beats
+      `line_and_order` because a claimed line LEAVES the order offer's base
+      (5% off shakes + 20% off order on ₹100+₹900 scores ₹185 vs ₹200), which
+      is the whole reason the comparison exists. `line_only` is provably
+      dominated and evaluated anyway as the base case — do not delete it as
+      dead. Ties break savings → priority → age → id, thresholds are measured
+      against the **undiscounted** subtotal (testing after is circular), and
+      the result reports the losing scenarios so a counter can explain the
+      choice.
+    - **★★ ONE PURE ENGINE, EVERY SURFACE.** `lib/offers/apply.ts` is called by
+      `placeOrder`, `placePosSale`, `posTotals`, the cart/checkout summary and
+      the register screen. This is the `posTotals` incident, not a preference:
+      shipping the engine behind `placeOrder` alone guarantees a second
+      implementation for the till within a week. The register gets the live
+      offers in **`RegisterConfig`**, exactly as `taxRates` already arrive and
+      for the same reason (zero-network pricing) — **in the config, never the
+      IndexedDB catalogue**, or an ended offer keeps being quoted until the next
+      sync. Applied offers render BY NAME at the till, because "offer" is not
+      an answer to a customer asking why the price changed.
+    - **★ FOUR CEILINGS, THREE OF THEM CLAIMED ATOMICALLY.**
+      `reserve_offer_use` puts the redemption cap, the budget cap AND the
+      per-customer cap inside ONE conditional UPDATE (the
+      `increment_coupon_usage` pattern), claimed BEFORE the order exists and
+      released from the single unwind helper each counter already calls — 7
+      sites online, 4 at the till. `offer_redemptions` is a TABLE because
+      `used_count` knows how many times a code was used, never by whom.
+      `offers.maxTotalDiscountPercent` is the fourth: a per-order depth ceiling
+      that best-offer-wins makes load-bearing, since the engine actively seeks
+      out the most generous applicable rule. A cap refusal is reported; a
+      transient failure fails OPEN (invariant 6).
+    - **★★ EVERY OFFER READ FAILS OPEN, and that is a deploy decision.** DDL is
+      a separate release gate, so this code reaches production before
+      20260902_0059 does. `isSchemaNotReady` (`lib/db/errors.ts`, 42P01/42883/ 42703) tells "the migration has not run" from a real outage, and either
+      way a sale completes at full price. **`resolveOffersForCart` returning
+      `null` means OFFERS ARE UNAVAILABLE, not "nothing applied"** — the legacy
+      coupon path is the fallback whenever the engine applies nothing, which
+      three live cases need: the pre-migration window, a Mink Phase 4C coupon
+      row that is not an offer, and a coupon the migration left behind. Only
+      one path can produce a discount, so nothing double-counts.
+    - **★ SEALED COLUMNS, AND THE SERVICE SCOPE THAT FOLLOWS FROM THEM.**
+      `budget_paise`, `spent_paise`, the redemption counts and **`code`** are
+      withheld by a COLUMN GRANT: spend would let anyone watch a budget drain
+      in real time and time their order, and the storefront never needs to READ
+      a code (it validates one the shopper typed). ⚠ Column grants apply to
+      `authenticated` — which is what a store admin is — and no policy can
+      re-grant a column, so every read and write in
+      `app/actions/offer-actions.ts` uses `withService` after
+      `getManagerIdentity("promotions")`, the `store_pages` draft pattern.
+      Reading them with `withUser` returns nothing for the merchant who owns
+      them.
+    - **★ `offers.onSalePrice` APPLIES IN BOTH CHANNELS**
+      (`best` | `skip` | `stack`, default `best` — the only value that cannot
+      give away more than intended, which matters because the engine seeks out
+      compounding). Both `placePosSale` and `placeOrder` charge a variant's
+      `special_price` and pass `listed_price` as the engine's
+      `regularUnitPrice`, so the same basket is priced the same way at either
+      counter. ⚠ NOT `base_price`: MRP is a struck-through list price, not a
+      sale price, and treating it as one would let `best` mode discount from a
+      much higher base. For a line that is not on sale the two are equal, which
+      the engine reads as "no sale" and every mode collapses to the same
+      arithmetic.
+      **★★ IT WAS INERT ONLINE WHEN PHASE A SHIPPED, and the cause is worth
+      keeping.** `placeOrder` re-read prices faithfully and still charged the
+      wrong amount, because it selected only `product_variants.selling_price` —
+      so there was no sale price online for an offer to interact with, and
+      "Skip sale items" silently skipped nothing. Fixed separately (§12), which
+      is what made this setting a truthful store-wide choice rather than a
+      POS-only one.
+    - **★ THE NEAR-MISS NUDGE COMES FROM THE ENGINE.** "Add ₹200 more for free
+      delivery" is a claim about what happens if the shopper adds something,
+      and under best-offer-wins only the engine knows whether the offer would
+      actually win. **Never for a code or group-restricted offer** — nudging
+      "₹200 from 20% off with WHOLESALE20" leaks a targeted code to every
+      visitor. One nudge, the closest.
+    - **★ NO `offer_applied` AUDIT ROW OR ACTIVITY EVENT, deliberately.** §22
+      does not audit a gateway tender because "the cashier chose nothing" and
+      noise is what makes an audit stop being read; an auto-applied offer is
+      that case, and `order_item_offers` + `offer_redemptions` carry strictly
+      more than a log line would. §24's rule keeps per-row events out of the
+      activity feed. Revisit if the till ever takes a code — that IS a choice.
+    - **Plan gating:** `maxActiveOffers` free 3 / Basic+ unlimited, every type
+      on every plan. ★ It counts the MERGED pool, since coupons are offers now —
+      counting separately would hand a free store 3 + 3. Gating offers behind
+      Basic would have removed the three active coupons free stores already
+      have, which is invariant 1. `assertCanActivateOffer` takes the same
+      per-store advisory lock and counts inside the writing transaction.
+    - **Migration `20260902_0059_offers_phase_a`** (applied: NO — DDL is its own
+      gate). It was verified against a throwaway local Postgres: it applies
+      clean, every cap behaves, and the coupon migration handles each branch —
+      `max_uses = 0` becomes NULL (unlimited), not a cap of zero. ★ The code
+      filter mirrors `normalizeCode` EXACTLY (uppercase, all whitespace
+      stripped), which is provably the set of REDEEMABLE coupons: a coupon
+      stored `save10` or `SAVE 10` cannot be redeemed today, and migrating
+      those is the only way the insert could collide. ★ The code column accepts
+      1–200 characters because `coupons.code` never had a length rule; a
+      friendlier 3-char minimum for NEW offers lives in the action, where it can
+      change without a migration.
+    - **★ PHASE B (shipped): scope means TWO different things, and the reward
+      level decides which.** `percent_off_items` / `fixed_price` are line-level
+      — the scope says what gets DISCOUNTED. `percent_off` / `amount_off` with a
+      `contains_product` / `contains_category` condition are order-level — the
+      scope says what QUALIFIES, and the whole basket is discounted once it
+      does. Collapsing them would make "10% off your order when it includes a
+      shake" impossible to express, so `claimOrderOffer` deliberately does NOT
+      filter by scope. ⚠ A no-op for anything Phase A created, since an empty
+      scope matches every line.
+      **★ A contents condition qualifies off the offer's OWN scope** — one list,
+      so "10% off shakes if the cart holds shoes" cannot be built by accident —
+      and it respects `onSalePrice`: under `skip` a cart of only on-sale
+      matching lines does not qualify, because the reward would apply to
+      nothing. **★ A `fixed_price` never marks an item UP**, is worth a
+      different amount on every product it covers, and is refused at ₹0 (a free
+      item must go through Phase G, which reserves stock).
+      **★ The card badge IS the engine's answer**, priced through `applyOffers`
+      on a one-line cart, so it cannot promise a saving the cart declines —
+      which a naive "the offer says 20%" badge would do under `skip`, under
+      `best` against a deeper special price, and for every `fixed_price`.
+      Line-level rewards only: an order-level offer is not a fact about one
+      product. Stock badges outrank it. The cart's category comes from
+      `getCartTaxRates`, NOT from `CartItem` (which holds a category NAME and
+      no id) — otherwise every persisted cart would mis-price a scoped offer
+      until the shopper re-added the item.
+      Migration `20260902_0061` widens the two allowlists and adds a DEFERRED
+      constraint trigger, so a contents condition cannot be saved without a
+      scope even by a direct write; deferral is what lets the scope rows arrive
+      after the offer row in the same transaction.
+    - **★★ PHASE C (shipped): buy X get Y is the first reward valued across
+      MULTIPLE lines, and that is why it needed its own claim pass.** Every
+      earlier reward is separable — a percentage or a target price on one line
+      depends only on that line, so the best offer per line can be chosen
+      independently and the answer is exact. "Buy 2 get 1" over three lines of
+      one unit each is ONE set spanning three lines, which no per-line view can
+      see. So `claimGroupOffer` flattens every eligible line into UNITS, counts
+      sets over that flat list, and the **cheapest units are the discounted
+      ones** (the retail convention, the customer-favourable reading, and
+      deterministic because ties break on line index).
+      **★ A SET IS `buy + get` UNITS** — three items on buy-1-get-1 is one set
+      plus one ordinary paid item, not one and a half.
+      **★ A GROUP OFFER COMPETES ON VALUE**, taking its lines only when it
+      beats what those lines already had; otherwise it would override a deeper
+      per-line offer purely by being evaluated later. Best-offer-wins holds
+      across reward SHAPES, not only within one shape, and each line still
+      carries exactly one offer.
+      **★ `maxSets` EXISTS BECAUSE THE FIRST ONE A MERCHANT BUILDS IS
+      UNLIMITED** — a basket of 20 on buy-1-get-1 gives 10 away. 0 in the form
+      means no limit and is stored ABSENT, the `max_uses` rule again.
+      The near-miss gained a second shape: `kind: "units"` ("add 1 more and one
+      is free") beside `kind: "spend"`. ★ Two shapes rather than one number,
+      because a single `gap` would force the UI to guess which it held — and it
+      only fires when the cart ALREADY holds a qualifying item, since
+      suggesting a set to somebody with none is an advert, not a nudge.
+      Migration `20260902_0062` widens the allowlist, constrains the config
+      shape, and widens the deferred trigger so EVERY item-level reward must
+      name its items. ★★ Its CHECK coalesces each required key: a CHECK is
+      SATISFIED when it evaluates to NULL, and `(config ->> 'buyQuantity') ~ '…'`
+      is NULL when the key is ABSENT — so the obvious spelling accepted a
+      buy-X-get-Y row with no quantities at all, which the engine values at zero
+      while the merchant's list shows it active. Caught by running it against a
+      real Postgres, not by reading it.
+    - **Phase D — ladders (`tiered`, `volume_break`).** Spend-more-save-more is
+      an ORDER-level reward (`{minSubtotal, value}` rungs plus
+      `tierMode: percent | amount`); buy-more-save-more is a LINE-level GROUP
+      reward (`{minQuantity, percent}`). **The highest qualifying rung applies;
+      rungs never sum** — a ₹3,000 cart on a 5/10/15 ladder gets 10%.
+      ★ ONE OFFER, NOT ONE PER RUNG: three separate offers would compete under
+      best-offer-wins and the deepest would always win, which is the opposite of
+      a ladder. Both resolve on the UNDISCOUNTED subtotal, the `min_subtotal`
+      anti-circularity rule — a rung that lowered the subtotal below its own
+      threshold would deselect itself.
+      ★★ A QUANTITY LADDER IS A GROUP REWARD because units are counted ACROSS
+      the scope: six of one flavour and six of another reach the twelve-unit
+      rung together, where per-line evaluation would find six and six and award
+      nothing. Once a rung is reached EVERY scoped unit gets it, not only those
+      above the threshold. It still competes — a 25%-off-shakes offer is not
+      displaced by a 15% case price merely because one is a ladder.
+      ★ `tiered` is DELIBERATELY EXEMPT from the name-your-items rule: it
+      discounts the ORDER, so an unscoped "spend ₹2,000, save 15%" is its
+      commonest form. `volume_break` is subject to it like every other
+      line-level reward.
+      **The tier-UPGRADE nudge needed its own collector**
+      (`collectLadderUpgrade`): `collectNearMiss` only ever sees REFUSED
+      offers, so an upgrade — nothing disqualified it, the cart just has not
+      reached the rung above — was invisible to it, which would leave a
+      three-rung ladder only ever advertising its bottom step. `NearMissOffer`
+      gained `currentPercent`/`currentAmount`, present only for an upgrade:
+      ★ "Add ₹200 more to get 15% off" reads to somebody already on 10% as
+      though they get nothing today, so the honest sentence and the misleading
+      one differ by three words. A quantity gap arrives as `kind: "units"` like
+      a set, so the nudge branches on `rewardType` — "add 2 more and one is
+      free" is flatly wrong for a case price.
+      ★ `offerBadgeFor` correctly badges NOTHING for a case price (it prices a
+      one-unit cart): "15% off when you buy 10" is not a claim about buying one,
+      and a card that promised the rung price would be exactly the
+      cart-declines-it failure the badge exists to prevent.
+      Migrations `20260903_0063` + `0064`.
+    - **★★ AND PHASE D FOUND THAT TWO EARLIER REWARD TYPES WERE SILENTLY
+      INERT.** `loadLiveOffers` decoded `reward_config` by listing the fields it
+      wanted — `percent` and `amount` — and was never extended when Phase B
+      added `fixed_price` or Phase C added `buy_x_get_y`. So **a correctly
+      configured "buy 1 get 1 free" discounted nothing at checkout or at the
+      till**: `buyQuantity` arrived undefined and `claimGroupOffer` returned an
+      empty claim. Nothing failed — the offers list showed it active, the editor
+      read it back perfectly (a SECOND, complete decoder), the live summary
+      sentence described it exactly, no error was logged. The only symptom was a
+      customer not getting their free item. `decodeReward` in
+      `lib/offers/types.ts` is now the ONE exhaustive decoder, shared by the
+      engine loader and the editor's `mapRow` so the two cannot read a stored
+      reward differently, and `types.test.ts` asserts every editor-writable
+      field survives the round trip. **A field-by-field copy out of a jsonb
+      column is an invitation to forget one, and what you forget is invisible.**
+    - **★★ THE NULL TRAP, A SECOND TIME, IN A DIFFERENT LANGUAGE.** Phase C's
+      CHECK needed `coalesce` because a CHECK is SATISFIED by NULL. Phase D's
+      rung validation cannot be a CHECK at all — examining every rung needs
+      `jsonb_array_elements`, a subquery, which **Postgres refuses in a CHECK**
+      ("cannot use subquery in check constraint") — so it became a plpgsql
+      constraint trigger, `offers_ladder_shape_valid`, and reproduced the trap:
+      `jsonb_typeof` returns NULL for an absent key, `NULL <> 'number'` is NULL,
+      `NULL AND NULL` is NULL, and **plpgsql reads a NULL condition as false**.
+      `{"tiers":[{"minSubtotal":1000}]}` — a threshold with no discount — was
+      accepted, and the follow-on `v_value <= 0` guard could not catch it either
+      (`coalesce` of two NULLs is NULL; `NULL <= 0` is NULL). Two guards, one
+      value, both bypassed. Repaired by `0064`.
+      ★ **Found by INSERTing thirteen deliberately malformed ladders against a
+      real Postgres and reading which were accepted**, not by reading the code,
+      which looks correct. That probe is the recommended step for any new
+      database-level shape rule here.
+    - **Plan gating is a COUNT, not a type list** — `maxActiveOffers` (3 on
+      Free, unlimited above) with every reward type available on every plan, so
+      Phase D needed no gate.
+    - **Phase E — extra conditions (`offers.conditions`, a jsonb LIST).** Four
+      kinds: `payment_method`, `fulfilment_type`, `first_order`, `time_window`.
+      ★★ A LIST, NOT MORE `trigger_type` VALUES, because the offer merchants
+      want is "₹50 off prepaid orders over ₹500" — a payment rule AND a
+      threshold, which alternative trigger types cannot both hold. ★ **AND,
+      never OR**: an OR needs grouping and precedence and a merchant could not
+      read their own offer back; two alternatives are two offers, which
+      best-offer-wins already resolves. ★ `customer_group` and location subset
+      were ALREADY built as SCOPE (plan §5 is explicit that scope is not a
+      trigger, since modelling location as one invites reading it from the
+      cart) and were not rebuilt.
+      **★★ TWO OF THEM CANNOT WORK AT A REGISTER, AND ARE REFUSED AT SAVE.**
+      `payment_method` cannot: `lib/pos/totals.ts` exists so the till screen and
+      `placePosSale` agree on ONE total (§22), and the till's flow is
+      total-THEN-tender — a tender-dependent discount would change the total
+      after it had been quoted to the customer. `fulfilment_type` cannot either:
+      a register sale is neither a delivery nor a collection, and
+      `orders.fulfilment_type` carries the legacy `delivery` default for POS
+      rows that never meant a courier promise. Both refused for a POS-inclusive
+      offer — INCLUDING one with no channels, since that means every channel —
+      rather than saved and silently never matching (§23's rule). Enforced in
+      the pure validator, the action AND the database trigger, which re-fires
+      when an offer's CHANNELS change: widening a website-only offer to the
+      till is exactly how a saved condition becomes unenforceable.
+      **★ EVERY MISSING INPUT FAILS CLOSED** — no stated method, no fulfilment
+      type, `isFirstOrder: null` (guest or unreadable), no/invalid store
+      timezone. ★★ And an UNPARSEABLE stored condition REFUSES THE WHOLE OFFER:
+      dropping it and applying anyway would silently WIDEN the offer, so one
+      restricted to first orders would start discounting every order with
+      nothing to see. Failing closed costs a discount somebody expected; failing
+      open gives away money nobody authorised.
+      **`first_order` counts every prior order EXCEPT a cancellation whose
+      payment failed.** Ignoring cancellations opens the order-cancel-reorder
+      farm; counting all of them punishes the customer whose first attempt the
+      pending-payment reaper cancelled. Excluding exactly that case closes both
+      holes. A guest never qualifies — no history to check, and "unknown means
+      first" would hand every guest the discount forever.
+      **`time_window` resolves in the STORE's IANA zone** via `Intl` (offsets
+      change twice a year, so hand-rolled minutes are wrong at exactly the
+      boundaries a happy hour cares about), defaulting to `Asia/Kolkata` like
+      `lib/analytics/range.ts` — never the container's UTC, which would put
+      every Indian happy hour 5½ hours early. ★★ A WRAPPED WINDOW BELONGS TO THE
+      DAY IT BEGINS ON: "Friday 22:00–02:00" is one evening, so 01:00 SATURDAY
+      is inside it and 01:00 Friday is not. Checking the current day's bit gives
+      the opposite answer and halves every late-night offer, silently, on the
+      day the merchant chose. Ranges are half-open.
+      **★ A BLOCKED OFFER IS NEVER NUDGED** — conditions are checked BEFORE the
+      trigger, so only `trigger_unmet` reaches the near-miss collector. "You're
+      ₹200 from an offer you cannot have because you chose cash" is worse than
+      silence. One skip reason per condition, since that list is what answers
+      "why didn't my offer apply?".
+      Migration `20260903_0065`; the NULL trap is documented there for the THIRD
+      time (`jsonb_array_length` is satisfied on a non-array). Verified by 21
+      adversarial inserts against real Postgres.
+    - **★★ AND PHASE E CLOSED AN EXISTING PREVIEW GAP.** The client cannot
+      derive `groupIds` (a membership read) or `isFirstOrder` (order history), so
+      `loadOffersForStorefront` now ships both as server-resolved `viewer`
+      facts. Group-restricted offers had exactly that gap before: the bundle
+      filtered them to the ones the viewer qualifies for and `useCartOffers`
+      then re-rejected every one by passing an empty group list — so a member's
+      group offer never appeared in the cart and then applied at `placeOrder`,
+      dropping the total at the last step. The shopper's live payment method and
+      fulfilment type come from the checkout UI instead, which is NOT a trust
+      problem: `placeOrder` re-prices against what it will actually RECORD, so a
+      client claiming otherwise changes only its own preview. The cart drawer
+      passes neither, so a prepaid offer appears once the shopper picks a method
+      — promising it in the drawer would promise a discount on terms nobody has
+      agreed to. At the till `isFirstOrder` rides along with the customer lookup
+      like `exhaustedOfferIds`, GATED on a customer actually being attached: a
+      stale `true` with nobody attached would quote a discount the server
+      refuses, making the total go UP at completion, which is the one direction
+      of divergence that is indefensible in front of a customer.
+    - **Phase F — `free_shipping`, ITS OWN AXIS.** `rewardLevel` returns
+      `"shipping"`, so it never enters the merchandise scenario comparison — a
+      shopper must not lose free delivery because a category discount scored
+      higher; they are different pockets of the bill.
+      ★★ CHEAPEST WINS, AND IT IS ONE LINE: `freeShippingApplies` gained a third
+      argument and ORs it in, so both quote paths pick it up with no special
+      case. That is what makes "free above ₹500" work — a store whose standing
+      policy is free-above-₹999 has temporarily lowered its threshold. Any other
+      rule produces a cart where ADDING ITEMS INCREASES DELIVERY COST.
+      ★ `CheckoutShippingOption.offerWaivedAmount` separates the OFFER's waiver
+      from the store's own threshold, and is the only place both facts are
+      known: an offer that waived nothing (the cart already shipped free) is
+      charged nothing against its budget, or a ₹5,000 free-delivery campaign
+      burns on orders that were always going to ship free.
+      ★ THE WAIVER IS RESERVED AFTER THE QUOTE, not with the merchandise
+      offers — the engine is pure and never sees a carrier quote, so it reports
+      `amount: 0` and `placeOrder` fills it in, then PUSHES it onto
+      `reservedOffers` so all seven failure paths release it through the one
+      existing unwind helper. Refused for a POS-inclusive offer: a register sale
+      has no delivery charge to waive. ⚠ For a Shiprocket store the merchant
+      still pays the courier — the waiver zeroes the CUSTOMER's charge and the
+      cost appears nowhere on the order.
+    - **Phase G — `free_item`, AND A GIFT IS STOCK LEAVING THE SHELF.**
+      `rewardLevel` returns `"gift"`; the engine NAMES it and the caller prices,
+      adds and reserves it. Both counters APPEND IT TO THE PRICED LINES before
+      tax, stock and the insert, so each path handles it with no special case —
+      same reservation, same tax call, same order-items write, and it appears on
+      the order, invoice, receipt and confirmation email because it genuinely is
+      part of the order.
+      ★★ THE ENGINE STOPS OFFERING A GIFT WITH NO STOCK. `loadLiveOffers`
+      resolves availability against `on_hand − reserved` in ONE query for every
+      gift offer; promising it and failing at reserve time is the worst outcome
+      available, because the shopper has been told they are getting a tumbler
+      and the failure arrives after they commit. `undefined` means UNCHECKED,
+      not unavailable, so a historical replay or a cached register catalogue
+      does not make every gift offer silently vanish.
+      ★★ THE TILL SHOWS A "HAND OVER" ROW. The gift is worth ₹0, so nothing in
+      the totals moves and `posTotals` agrees perfectly — which is exactly why
+      the row is essential: without it the register reserves a tumbler and
+      prints it on the receipt while the cashier, seeing no change on screen,
+      hands over the bag and nothing else. Worse than a total mismatch, because
+      the stock has already gone on paper.
+      **⚠⚠ THE GST TREATMENT IS NOT PROFESSIONALLY REVIEWED.** The plan gated
+      this phase on a professional confirming it; what ships is the §25/§28
+      posture this codebase already takes for policy text and credit notes — the
+      DATA is right (the gift line records its own tax class, so the figures
+      exist if the treatment requires valuing it at open market value) with tax
+      on a zero taxable value computed as zero. The migration, the Help guide
+      and the offer editor each say so. Get a CA to confirm before anyone files.
+    - **Phase H — `bundle_price` and `credit_back`.** A bundle is "any N from
+      this set for ₹X", the bundle retail actually runs and the one the existing
+      scope machinery expresses; a strict "these exact three products" bundle
+      needs a composition table and is deliberately not built.
+      ★★ THE DEAREST UNITS GO INTO THE BUNDLE. ₹500+₹400+₹300+₹200 on "any 3 for
+      ₹999": bundling the three dearest charges ₹999 for ₹1,200 of goods and
+      leaves the ₹200 at full price; bundling the three CHEAPEST would charge
+      ₹999 for ₹900 — A MARK-UP on an offer advertised as a saving. So
+      dearest-first is both the customer-favourable reading and the only one
+      that cannot invert the offer's meaning. The opposite of `buy_x_get_y`,
+      where the cheapest are free — same rule in both: give away the most. A set
+      worth less than the bundle price is skipped.
+      ★ A TEST CAUGHT A REAL DEFECT: `bundle_price` was first classified
+      order-level and every bundle returned zero, because the group claim is
+      reached only through the LINE candidate list. Reclassifying it made
+      migration `0069` necessary — a line-level reward's scope is what it
+      discounts, and unscoped "any 3 for ₹999" would bundle any three items in
+      the catalogue.
+      ★ `credit_back` CHANGES NOTHING ABOUT WHAT THE CUSTOMER PAYS. Credit is a
+      PAYMENT here (§29), so netting cashback off `orders.total` would
+      understate the sale, mis-compute GST and make the invoice disagree with
+      the charge. Issued after the order commits, idempotent on the order, never
+      fails the sale, and under ITS OWN ledger kind — §29 keeps `reinstate`
+      apart from `grant` for exactly this reason, and promotional credit is a
+      third thing again.
+    - **Phase I — Mink offer authority, three DEFAULT-OFF gates**
+      (`create_offer` / `update_offer` / `activate_offer`), following the Phase
+      4C pattern: saved private proposal, exact short-lived human approval,
+      tenant/permission/tool/version rechecks, idempotent transactional
+      execution, append-only outcome. No model tool executes.
+      ★★ ACTIVATION IS ITS OWN APPROVAL, which is the design and not an extra
+      step: a disabled offer costs exactly nothing so its review can take as
+      long as it needs, while a live automatic offer applies itself to every
+      qualifying order from the instant it goes live. Create and update pin
+      `status: "disabled"` LITERALLY, so even a tampered payload cannot produce
+      a live offer.
+      ★★ A BUDGET CAP IS MANDATORY IN FIVE PLACES — the draft field, the
+      proposal, the preview, execution, AND activation again (an offer whose
+      budget was cleared by hand after Mink created it would otherwise go live
+      uncapped) — plus a sixth as a database constraint on the approval row,
+      which is the durable artefact an execution replays from.
+      ★ THE DEPTH CAP IS READ LIVE, not taken from the approval, so tightening
+      `offers.maxTotalDiscountPercent` reaches proposals already written; it
+      fails to the registry default, never to 100.
+      ★ THE REWARD SHAPE IS NARROW BY DESIGN — a percentage or a rupee amount
+      off the order. Bundles, gifts, ladders and free delivery change stock,
+      liability or delivery cost in ways one approval screen cannot show
+      honestly. Rollback deletes only an offer never switched on and never
+      applied to an order, since `offer_redemptions` and `order_item_offers`
+      point at it.
+      ★★ AND THE ADVERSARIAL PROBE CAUGHT A FOURTH ALLOWLIST. `0070` widened
+      three tool vocabularies found by reading the constraints on the tables
+      expected; `mink_action_approvals` carries its OWN `tool_check` too, which
+      it missed — so every offer approval, valid ones included, was refused and
+      the whole execution path would have failed at runtime. Repaired by `0071`.
+      **The rule: when a vocabulary is enumerated in more than one constraint,
+      find them by QUERYING for an existing member
+      (`pg_get_constraintdef(oid) LIKE '%create_coupon%'`) rather than by
+      listing the tables you expect.** That query returned three; enumerating by
+      hand returned two.
+    - `PosCatalogItem` carries `categoryId` (cache SCHEMA_VERSION v4) so the
+      till prices a scoped offer identically.
+
+39. **The operator console — one screen per job.** `app/platform/dashboard/(console)`
     - `lib/platform/`. Full IA + rationale: **`docs/operator-console.md`**.
     - **★ IT USED TO BE ONE PAGE.** The store table, the pricing editor and the
       theme seeder all rendered on `page.tsx`, under a metric row, so the home

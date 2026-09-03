@@ -5,7 +5,11 @@ import type {
   MinkProductActionStatus,
 } from "./product-action-types";
 
-export type MinkDomainResourceType = "product" | "coupon" | "customer_group";
+export type MinkDomainResourceType =
+  | "product"
+  | "coupon"
+  | "customer_group"
+  | "offer";
 export type MinkDomainActionValues = Record<string, string | null>;
 
 export interface MinkDomainActionApproval {
@@ -42,6 +46,9 @@ export function domainActionToolForDraftKind(
   if (kind === "coupon_update") return "update_coupon";
   if (kind === "customer_group_create") return "create_customer_group";
   if (kind === "customer_group_update") return "update_customer_group";
+  if (kind === "offer_create") return "create_offer";
+  if (kind === "offer_update") return "update_offer";
+  if (kind === "offer_activate") return "activate_offer";
   return null;
 }
 
@@ -50,11 +57,38 @@ export function resourceTypeForDomainTool(
 ): MinkDomainResourceType {
   if (tool === "create_product") return "product";
   if (tool === "create_coupon" || tool === "update_coupon") return "coupon";
+  // ★★ NAMED EXPLICITLY, BEFORE THE FALLTHROUGH. This function ended
+  // `return "customer_group"`, so every tool it did not recognise was
+  // silently reported as a customer group — and TypeScript is happy, because
+  // the return type is satisfied either way. A new tool added without touching
+  // this line would write an offer while the approval, the audit row and the
+  // dashboard link all said "customer group". Same shape as the reward decoder
+  // that made two whole reward types silently inert (plan §19).
+  if (
+    tool === "create_offer" ||
+    tool === "update_offer" ||
+    tool === "activate_offer"
+  ) {
+    return "offer";
+  }
   return "customer_group";
 }
 
 export function isCreateDomainTool(tool: MinkDomainActionTool) {
   return tool.startsWith("create_");
+}
+
+/**
+ * Turning an offer on is its OWN approval, with its own preview.
+ *
+ * ★★ THE POINT OF SEPARATING IT (plan §14c). A disabled offer costs exactly
+ * nothing, so its review can take as long as it needs; a live automatic offer
+ * applies itself to every qualifying order from the instant it goes live. One
+ * approval that both wrote the terms AND switched them on would collapse those
+ * two very different decisions into one click.
+ */
+export function isActivationTool(tool: MinkDomainActionTool) {
+  return tool === "activate_offer";
 }
 
 export function domainActionFields(
@@ -86,6 +120,26 @@ export function domainActionFields(
       "status",
       "show_on_storefront",
       "audience",
+    ];
+  }
+  if (
+    tool === "create_offer" ||
+    tool === "update_offer" ||
+    tool === "activate_offer"
+  ) {
+    return [
+      "name",
+      "description",
+      "reward_type",
+      "reward_value",
+      "min_subtotal",
+      "budget",
+      "max_redemptions",
+      "valid_until",
+      // ★ CARRIED IN THE FIELD LIST so the approval hash binds it. Create and
+      // update pin it to "disabled"; only `activate_offer` moves it, and that
+      // is the entire difference between the two decisions.
+      "status",
     ];
   }
   return ["name", "description", "color"];
@@ -128,6 +182,14 @@ export function draftValuesForDomainAction(
     values.status = "disabled";
     values.show_on_storefront = "no";
     values.audience = "all customers (no group restriction)";
+  }
+  // ★★ CREATED AND UPDATED DISABLED, ALWAYS — pinned here rather than trusted
+  // from the proposal, so a model that asks for an active offer gets a
+  // disabled one and the approval screen says "disabled". Activation is a
+  // separate approval (plan §14c). Not pinned for `activate_offer`, which is
+  // the one tool whose whole job is to move this field.
+  if (tool === "create_offer" || tool === "update_offer") {
+    values.status = "disabled";
   }
   return values;
 }

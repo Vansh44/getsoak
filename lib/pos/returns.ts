@@ -20,6 +20,8 @@
 // "₹0.01 less than they paid" — the kind of difference a customer notices at a
 // counter and nobody can explain.
 
+import { allocateProportional, toPaise, toRupees } from "@/lib/money/allocate";
+
 /** One line of the original sale, as stored. */
 export interface ReturnableLine {
   /** order_items.id */
@@ -29,6 +31,18 @@ export interface ReturnableLine {
   lineTotal: number;
   /** order_items.tax_amount — already net of the allocated order discount. */
   taxAmount: number;
+  /**
+   * `order_items.offer_discount` — this line's share of an OFFER, as the engine
+   * allocated it at sale time (`docs/offers-plan.md` §8).
+   *
+   * ★ SUBTRACTED DIRECTLY, NEVER RE-ALLOCATED. That is the whole difference
+   * between this and `orderDiscount`. An offer's reward may belong entirely to
+   * one line — "20% off shirts", or the free half of a Buy-1-Get-1 — so
+   * spreading it proportionally would refund a line money it never paid.
+   * Concretely, on a B1G1 the free shirt comes back at full price: the customer
+   * keeps a free shirt AND takes ₹1,000.
+   */
+  offerDiscount?: number;
   /** How many units have been returned on earlier returns. */
   alreadyReturned?: number;
 }
@@ -49,9 +63,6 @@ export interface RefundBreakdown {
   tax: number;
   total: number;
 }
-
-const toPaise = (n: number) => Math.round((Number(n) || 0) * 100);
-const toRupees = (p: number) => Math.round(p) / 100;
 
 /**
  * Units originally sold on a line, floored at zero.
@@ -75,10 +86,11 @@ export function remainingQty(line: ReturnableLine): number {
 /**
  * What to hand back for a requested set of lines and quantities.
  *
- * `orderDiscount` is the ORDER-level discount only — recover it as
- * `orders.discount − Σ order_items.line_discount`, because the stored
- * `orders.discount` includes both and the line markdowns are already inside
- * `lineTotal`.
+ * `orderDiscount` is the ORDER-level remainder only — recover it as
+ * `orders.discount − Σ order_items.line_discount − Σ order_items.offer_discount`,
+ * because the stored `orders.discount` is the sum of all three, the line
+ * markdowns are already inside `lineTotal`, and offer shares are passed
+ * per-line above.
  *
  * A request for more than remains is clamped rather than rejected: the caller
  * validates and reports, and this function's job is to never produce a number
@@ -92,35 +104,26 @@ export function refundBreakdown(input: {
   const { lines, request } = input;
 
   // Allocate the order discount across lines exactly as the sale did:
-  // proportionally to each line's amount, in paise, with the remainder given
-  // to the largest lines so the parts sum to the whole.
+  // proportionally to each line's amount, in paise, remainder to the largest
+  // fractional parts so the parts sum to the whole.
+  //
+  // ★ THE SAME ALLOCATOR THE SALE USED. `lib/money/allocate.ts` is shared with
+  // the offer engine, which allocates an order-level reward at sale time. A
+  // second copy here would eventually drift by a paisa, and the symptom is a
+  // full return that comes back short of what the customer paid.
   const grossPaise = lines.map((l) => toPaise(l.lineTotal));
-  const grossTotal = grossPaise.reduce((a, b) => a + b, 0);
-  const discountPaise = Math.min(
-    Math.max(0, toPaise(input.orderDiscount ?? 0)),
-    grossTotal,
+  // Each line's own offer share comes off first and is never spread. What is
+  // left is the base the order-level remainder is allocated across — the same
+  // order `computeTax` applies them in at sale time, so the refund undoes
+  // exactly what the sale did.
+  const offerPaise = lines.map((l, i) =>
+    Math.min(Math.max(0, toPaise(l.offerDiscount ?? 0)), grossPaise[i]),
   );
-
-  const share = new Array<number>(lines.length).fill(0);
-  if (discountPaise > 0 && grossTotal > 0) {
-    let handed = 0;
-    const exact = grossPaise.map((g) => (g * discountPaise) / grossTotal);
-    exact.forEach((e, i) => {
-      share[i] = Math.floor(e);
-      handed += share[i];
-    });
-    // Largest fractional parts absorb the remainder — otherwise the last line
-    // silently carries everyone's rounding.
-    const order = exact
-      .map((e, i) => ({ i, frac: e - Math.floor(e) }))
-      .sort((a, b) => b.frac - a.frac);
-    let left = discountPaise - handed;
-    for (const { i } of order) {
-      if (left <= 0) break;
-      share[i] += 1;
-      left -= 1;
-    }
-  }
+  const netAfterOffers = grossPaise.map((g, i) => g - offerPaise[i]);
+  const share = allocateProportional(
+    netAfterOffers,
+    toPaise(input.orderDiscount ?? 0),
+  );
 
   const byId = new Map(lines.map((l, i) => [l.id, i]));
   const out: RefundLine[] = [];
@@ -154,9 +157,9 @@ export function refundBreakdown(input: {
     // At least 1 as a divisor guard; remainingQty above has already proved
     // it is, so this can only ever be the sold quantity itself.
     const sold = Math.max(1, soldQty(line));
-    // Net of this line's share of the order discount — the number the customer
-    // actually paid for these goods.
-    const netP = grossPaise[i] - share[i];
+    // Net of this line's offer share AND its share of the order discount — the
+    // number the customer actually paid for these goods.
+    const netP = netAfterOffers[i] - share[i];
     const lineAmountP = Math.round((netP * qty) / sold);
     const lineTaxP = Math.round((toPaise(line.taxAmount) * qty) / sold);
 

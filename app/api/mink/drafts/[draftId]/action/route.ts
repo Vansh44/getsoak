@@ -13,6 +13,7 @@ import { emitEvent } from "@/lib/notifications/record";
 import { logError, logWarn } from "@/lib/observability/logger";
 import { rateLimit } from "@/lib/rate-limit";
 import { TAGS } from "@/lib/storefront/tags";
+import type { MinkDomainResourceType } from "@/lib/mink/domain-action-types";
 
 export const runtime = "nodejs";
 
@@ -135,10 +136,17 @@ function privateJson(value: unknown) {
   });
 }
 
-function invalidate(
-  type: "product" | "coupon" | "customer_group",
-  id: string | null,
-) {
+function invalidate(type: MinkDomainResourceType, id: string | null) {
+  if (type === "offer") {
+    revalidatePath("/dashboard/offers");
+    if (id) revalidatePath(`/dashboard/offers/${id}/edit`);
+    // ★ NO STOREFRONT TAG TO BUST, deliberately: `loadLiveOffers` is uncached
+    // (`resolveOffersForCart` reads live on every cart), precisely so that
+    // activating an offer takes effect on the next cart rather than after a
+    // revalidation window. Inventing a tag here would revalidate nothing and
+    // read as though a cache were being handled.
+    return;
+  }
   if (type === "product") {
     revalidatePath("/dashboard/products");
     if (id) revalidatePath(`/dashboard/products/${id}`);

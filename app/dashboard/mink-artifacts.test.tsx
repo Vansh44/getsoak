@@ -1,7 +1,11 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MinkArtifact } from "@/lib/mink/types";
 import { MinkArtifacts } from "./mink-artifacts";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("Mink catalogue artifact", () => {
   it("renders product and SKU counts with inspectable publication and stock tags", () => {
@@ -148,5 +152,81 @@ describe("Mink catalogue artifact", () => {
       ),
     ).toBeVisible();
     expect(screen.queryByText("No matching products or variants.")).toBeNull();
+  });
+
+  it("polls and renders a completed durable workflow with safe dashboard links", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          workflow: {
+            id: "11111111-1111-4111-8111-111111111111",
+            template: "weekly_trading_report",
+            status: "completed",
+            currentStep: 3,
+            totalSteps: 3,
+            attemptCount: 3,
+            errorCode: null,
+            errorDetail: null,
+            cancelRequested: false,
+            result: {
+              rangeLabel: "Last 7 days",
+              comparisonLabel: "Previous 7 days",
+              fromInclusive: "2026-08-25T00:00:00.000Z",
+              toExclusive: "2026-09-01T00:00:00.000Z",
+              timeZone: "Asia/Kolkata",
+              currency: "INR",
+              locationLabel: "Shop",
+              netSales: 12500,
+              netSalesTrendPercent: 12.5,
+              orders: 20,
+              ordersTrendPercent: 10,
+              averageOrderValue: 625,
+              averageOrderValueTrendPercent: 2,
+              unitsSold: 31,
+              unitsSoldTrendPercent: 8,
+              topProducts: [
+                {
+                  id: "product-1",
+                  name: "Basmati Rice",
+                  units: 12,
+                  amount: 4800,
+                  dashboardPath: "https://attacker.example/product",
+                },
+              ],
+              channels: [],
+              dataAsOf: "2026-09-01T00:01:00.000Z",
+              highlights: ["Net sales grew 12.5% versus the previous period."],
+              analyticsPath: "/dashboard/analytics?range=7d&compare=previous",
+            },
+            createdAt: "2026-09-01T00:00:00.000Z",
+            updatedAt: "2026-09-01T00:01:00.000Z",
+            completedAt: "2026-09-01T00:01:00.000Z",
+          },
+        }),
+      }),
+    );
+    const artifact: MinkArtifact = {
+      type: "workflow",
+      runId: "11111111-1111-4111-8111-111111111111",
+      template: "weekly_trading_report",
+      title: "Weekly trading report",
+      description: "A durable report.",
+      status: "queued",
+      currentStep: 0,
+      totalSteps: 3,
+    };
+
+    render(<MinkArtifacts artifacts={[artifact]} />);
+    expect(screen.getByText(/Queued for background processing/i)).toBeVisible();
+    await waitFor(() => expect(screen.getByText("₹12,500.00")).toBeVisible());
+    expect(screen.getByRole("link", { name: /Basmati Rice/i })).toHaveAttribute(
+      "href",
+      "/dashboard",
+    );
+    expect(
+      screen.getByRole("link", { name: /Open Analytics/i }),
+    ).toHaveAttribute("href", "/dashboard/analytics?range=7d&compare=previous");
   });
 });

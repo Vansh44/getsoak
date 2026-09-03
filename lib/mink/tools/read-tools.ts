@@ -13,6 +13,7 @@ import {
 } from "../catalog-health-read";
 import { MinkToolInputError } from "../errors";
 import type { MinkActorContext, MinkArtifact } from "../types";
+import { enqueueWeeklyTradingReport } from "../workflows";
 import { resolveMinkLocation } from "./location-scope";
 import { MinkToolRegistry, type MinkTool } from "./registry";
 import { currentOrderTool, listOrdersTool } from "./order-tools";
@@ -537,6 +538,38 @@ const listLowStock: MinkTool = {
   },
 };
 
+const startWeeklyTradingReport: MinkTool = {
+  declaration: {
+    name: "start_weekly_trading_report",
+    description:
+      "Queue a durable, read-only weekly trading report only when the user explicitly asks Mink to create, run, prepare, or generate that report. It uses the signed-in admin's exact current location scope, the store timezone, the last 7 days and the preceding equal period. The workflow runs in the background, consumes no additional model tokens while queued, never mutates business records, and returns a progress card. Do not call it for an ordinary one-off sales question; use get_sales_summary instead.",
+    parametersJsonSchema: EMPTY_OBJECT_SCHEMA,
+  },
+  permission: { section: "analytics", action: "view" },
+  timeoutMs: 7_000,
+  artifact(output) {
+    const workflow = (output.workflow ?? {}) as Record<string, unknown>;
+    return {
+      type: "workflow",
+      runId: String(workflow.id ?? ""),
+      template: "weekly_trading_report",
+      title: "Weekly trading report",
+      description:
+        "A durable 7-day sales report compared with the previous period.",
+      status: (workflow.status ?? "queued") as Extract<
+        MinkArtifact,
+        { type: "workflow" }
+      >["status"],
+      currentStep: Number(workflow.currentStep ?? 0),
+      totalSteps: Number(workflow.totalSteps ?? 3),
+    };
+  },
+  async execute(actor) {
+    const workflow = await enqueueWeeklyTradingReport(actor);
+    return { workflow };
+  },
+};
+
 function catalogSummaryArtifact(output: Record<string, unknown>): MinkArtifact {
   if (output.requiresClarification === true) {
     const choices = Array.isArray(output.choices)
@@ -836,6 +869,7 @@ export const minkReadToolRegistry = new MinkToolRegistry([
   getCurrentProduct,
   getSalesSummary,
   listLowStock,
+  startWeeklyTradingReport,
   listOrdersTool,
   currentOrderTool,
   searchHelpCentreTool,

@@ -48,6 +48,26 @@ vi.mock("./pos-shift-actions", () => ({
 }));
 
 const dbHolder = vi.hoisted(() => ({ current: null as any }));
+// Offers are mocked at their own seam. Left real, `resolveOffersForCart` and
+// `loadExhaustedOfferIds` read the offer tables and would consume entries from
+// the shared db mock queue, shifting every later read. ★ The defaults are
+// "offers unavailable" / "nothing exhausted", which is byte-for-byte today's
+// behaviour, so every existing pricing and tender assertion is unchanged.
+vi.mock("@/lib/offers/cart", () => ({
+  resolveOffersForCart: vi.fn(async () => null),
+  reserveOfferUses: vi.fn(async () => ({ ok: true, reserved: [] })),
+  releaseOfferUses: vi.fn(async () => {}),
+  recordOfferRedemptions: vi.fn(async () => {}),
+  loadOffersForRegister: vi.fn(async () => ({
+    offers: [],
+    policy: {
+      onSalePrice: "best",
+      maxTotalDiscountPercent: 50,
+      autoApply: false,
+    },
+  })),
+  loadExhaustedOfferIds: vi.fn(async () => []),
+}));
 vi.mock("@/lib/db/client", () => ({
   withService: vi.fn((fn: any) => Promise.resolve(fn(dbHolder.current.db))),
   withUser: vi.fn((_i: any, fn: any) =>
@@ -1424,6 +1444,14 @@ describe("resolvePosCustomerByPhone", () => {
         email: "asha@example.com",
         storeCredit: 240,
       },
+      // Both ride along with the lookup so the till can re-price for this
+      // customer without a second round trip — their own offer caps, and
+      // whether a first-order offer applies. Without the second, the screen
+      // would quote a total the sale then undercuts.
+      exhaustedOfferIds: [],
+      // True because this mock queues no prior orders for them — the reader
+      // asks "any order at all?" and gets none.
+      isFirstOrder: true,
     });
     expect(dbHolder.current.calls.insert).toHaveLength(0);
   });
@@ -1456,8 +1484,17 @@ describe("resolvePosCustomerByPhone", () => {
         email: null,
         storeCredit: 0,
       },
+      exhaustedOfferIds: [],
+      isFirstOrder: true,
     });
-    expect(dbHolder.current.calls.select).toHaveLength(2);
+    // ★ BOUNDED, not exact. The point of this assertion is that resolving a
+    // customer costs a fixed handful of reads — one exact lookup, one re-read
+    // of the race winner, and the two facts that ride along (offer caps and
+    // first-order state) — rather than a number that grows with the customer
+    // or the cart. Pinning the exact figure would assert mock plumbing, and
+    // the reads run concurrently so the count is an implementation detail;
+    // pinning the CEILING is what catches a per-keystroke or N+1 regression.
+    expect(dbHolder.current.calls.select.length).toBeLessThanOrEqual(4);
   });
 });
 

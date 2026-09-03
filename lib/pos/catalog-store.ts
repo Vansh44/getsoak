@@ -19,6 +19,9 @@ const STORE = "catalog";
  * entries are keyed by it, so an older shape simply isn't found and the
  * register re-syncs instead of serving items missing the new field.
  *
+ * v4 added `categoryId`, which offer scoping needs: without it the sell screen
+ * would quote a different total from the one `placePosSale` charges as soon as
+ * a category-scoped offer exists (docs/offers-plan.md).
  * v2 added `taxClassId` — without it a cached line resolves to the store's
  * default tax rate, which would quote the customer a total the server then
  * charges differently. A cache may serve a stale PRICE for a few minutes
@@ -28,7 +31,7 @@ const STORE = "catalog";
 // and a v2 entry has none. Serving one would make the first sync a delta with
 // no `since`, which the server reads as a FULL pull — correct, but only by
 // accident. A version bump re-syncs once and removes the accident.
-const SCHEMA_VERSION = "v3";
+const SCHEMA_VERSION = "v4";
 
 /** One cached catalog per register: a location's stock is its own truth, and
  *  an operator can legitimately move between stores on a shared browser. */

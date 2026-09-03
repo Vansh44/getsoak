@@ -53,12 +53,27 @@ export async function quoteShippingForOrder(input: {
   merchandiseSubtotal: number;
   parcel: ShippingPackage;
   settings?: ShippingSettings;
+  /**
+   * A `free_shipping` offer applies to this order (plan §14).
+   *
+   * ★ THREADED IN RATHER THAN RESOLVED HERE. This module quotes; it does not
+   * decide which offers a cart earns. Resolving offers inside the quote would
+   * duplicate `resolveOffersForCart` and, worse, give the PDP's cheap
+   * availability probe a different answer from checkout's.
+   */
+  offerWaivesShipping?: boolean;
 }): Promise<{ options: CheckoutShippingOption[]; error?: string }> {
   const settings =
     input.settings ?? (await readShippingSettings(input.storeId));
   if (settings.mode !== "shiprocket") {
     return {
-      options: [manualShippingOption(settings, input.merchandiseSubtotal)],
+      options: [
+        manualShippingOption(
+          settings,
+          input.merchandiseSubtotal,
+          input.offerWaivesShipping ?? false,
+        ),
+      ],
     };
   }
 
@@ -125,6 +140,7 @@ export async function quoteShippingForOrder(input: {
       raw,
       settings,
       input.merchandiseSubtotal,
+      input.offerWaivesShipping ?? false,
     );
     return options.length
       ? { options }
@@ -143,6 +159,7 @@ export async function quoteShippingForOrder(input: {
               mode: settings.flatRate > 0 ? "flat" : "free",
             },
             input.merchandiseSubtotal,
+            input.offerWaivesShipping ?? false,
           ),
         ],
       };

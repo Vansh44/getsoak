@@ -100,6 +100,9 @@ export function useCartTax(
     return {
       enabled: true,
       inclusive: rates.inclusive,
+      // Passed through for `useCartOffers`, which needs each line's category
+      // and would otherwise repeat this fetch (see CartTaxResult.lines).
+      lines: rates.lines,
       tax: result.totalTax,
       byRate: result.byRate.map((b) => ({
         rate: b.rate,

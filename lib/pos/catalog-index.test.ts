@@ -27,6 +27,7 @@ const item = (over: Partial<CatalogItem> & { name: string }): CatalogItem => ({
   trackInventory: true,
   allowBackorder: false,
   taxClassId: null,
+  categoryId: null,
   ...over,
 });
 
@@ -372,6 +373,7 @@ describe("mergeCatalogDelta", () => {
       sku: null,
       image: null,
       taxClassId: null,
+      categoryId: null,
     }) as unknown as CatalogItem;
 
   it("leaves untouched products alone", () => {

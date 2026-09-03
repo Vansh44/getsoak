@@ -62,6 +62,11 @@ export const SETTING_KEYS = [
   "returns.allowInStore",
   "returns.ownerOnlyRefunds",
   "returns.maxRefundWithoutApproval",
+  "offers.autoApply",
+  "offers.showBadges",
+  "offers.showNearMiss",
+  "offers.onSalePrice",
+  "offers.maxTotalDiscountPercent",
 ] as const;
 
 export type SettingKey = (typeof SETTING_KEYS)[number];
@@ -584,6 +589,86 @@ export const SETTINGS: readonly SettingDef[] = [
     defaultValue: 0,
     min: 0,
     max: 1000000,
+  },
+  // --- Offers (docs/offers-plan.md §15) -------------------------------------
+  {
+    key: "offers.autoApply",
+    label: "Apply offers automatically",
+    description:
+      "Let offers apply themselves at checkout without a code. Offers set to use a discount code always work, whatever this is set to.",
+    group: "Offers",
+    section: "promotions",
+    type: "boolean",
+    // ★ BACKFILLS OFF. Invariant 1: a migration may not change what a live
+    // store does, and a store that has only ever had discount CODES must not
+    // wake up applying discounts by itself. New stores get it on at signup —
+    // a creation default and a backfill value are different questions.
+    defaultValue: false,
+  },
+  {
+    key: "offers.showBadges",
+    label: "Show offer badges on your storefront",
+    description:
+      "Display a small “20% off” badge on product cards and product pages when an offer applies.",
+    group: "Offers",
+    section: "promotions",
+    type: "boolean",
+    defaultValue: true,
+  },
+  {
+    key: "offers.showNearMiss",
+    label: "Tell shoppers when they are close to an offer",
+    description:
+      "Show “add ₹200 more to get free delivery” in the cart. Never shown for offers that need a code or are limited to a customer group.",
+    group: "Offers",
+    section: "promotions",
+    type: "boolean",
+    defaultValue: true,
+  },
+  {
+    key: "offers.onSalePrice",
+    label: "Products already on a sale price",
+    description: "What an offer does when a product already has a sale price.",
+    group: "Offers",
+    section: "promotions",
+    type: "select",
+    // ★ `best` IS THE MARGIN-SAFE DEFAULT, and that matters more here than
+    // elsewhere: under best-offer-wins the engine actively seeks out the most
+    // generous rule, so `stack` compounds two markdowns on the products
+    // already sold cheapest. A merchant who wants "extra 20% off sale" picks
+    // it deliberately; nobody arrives at it by accident.
+    defaultValue: "best",
+    options: [
+      {
+        value: "best",
+        label: "Charge whichever is lower",
+        description:
+          "The customer pays the sale price or the offer price, whichever is cheaper. They are never combined.",
+      },
+      {
+        value: "skip",
+        label: "Skip products on a sale price",
+        description: "Offers do not apply to anything already discounted.",
+      },
+      {
+        value: "stack",
+        label: "Apply the offer on top of the sale price",
+        description:
+          "Discounts twice. This is what an “extra 20% off sale” promotion needs.",
+      },
+    ],
+  },
+  {
+    key: "offers.maxTotalDiscountPercent",
+    label: "Most an offer may take off one order",
+    description:
+      "A ceiling on how deep any single order can be discounted, whatever combination of offers applies. Set to 0 to stop offers discounting anything.",
+    group: "Offers",
+    section: "promotions",
+    type: "number",
+    defaultValue: 50,
+    min: 0,
+    max: 100,
   },
 ];
 

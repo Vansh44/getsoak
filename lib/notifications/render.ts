@@ -380,6 +380,13 @@ export function renderNotification(
       };
     }
 
+    case "mink.workflow_completed":
+      return {
+        title: "Mink report ready",
+        body: subject ?? "Your weekly trading report is complete.",
+        url: "/dashboard/analytics",
+      };
+
     // The merchant's own welcome. Deliberately separate from
     // platform.store_created below, which is the operators' copy of the same
     // moment — different audience, different words, different destination.

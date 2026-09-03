@@ -384,7 +384,11 @@ describe("getCheckoutShippingOptions", () => {
     });
 
     expect(result.options[0].amount).toBe(80);
-    expect(manualShippingOption).toHaveBeenCalledWith(SETTINGS, 400);
+    // ★ The third argument is whether a `free_shipping` OFFER waives delivery,
+    // resolved SERVER-side here — never accepted from the browser, since "an
+    // offer waives my delivery charge" is precisely the claim a client would
+    // like to make about itself. False when no offer applies.
+    expect(manualShippingOption).toHaveBeenCalledWith(SETTINGS, 400, false);
     expect(sqlParamValues(dbHolder.current.calls.where[0])).toContain(
       "store-1",
     );
@@ -412,7 +416,7 @@ describe("getCheckoutShippingOptions", () => {
       postalCode: "110001",
       paymentMethod: "razorpay",
     });
-    expect(manualShippingOption).toHaveBeenCalledWith(SETTINGS, 540);
+    expect(manualShippingOption).toHaveBeenCalledWith(SETTINGS, 540, false);
     expect(packageForShippingLines).not.toHaveBeenCalled();
   });
 

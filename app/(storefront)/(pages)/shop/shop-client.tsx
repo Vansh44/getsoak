@@ -55,6 +55,17 @@ type Props = {
   // Store-wide default low-stock threshold (inventory.lowStockThreshold),
   // resolved by the page; drives each card's "Only X left" badge.
   storeLowStockThreshold?: number;
+  /**
+   * Per-product offer badge labels, keyed by product id, resolved on the
+   * SERVER by `offerBadgeFor`.
+   *
+   * ★ A MAP OF ANSWERS, NOT THE OFFERS THEMSELVES. Shipping the offer list and
+   * pricing each card in the browser would be a second implementation of the
+   * engine on the one surface where being wrong is most visible — and it would
+   * disagree with the server the moment `onSalePrice` or a special price
+   * enters. The page resolves each product once and sends the label.
+   */
+  offerBadges?: Record<string, { label: string }>;
 };
 
 export default function ShopClient({
@@ -64,6 +75,7 @@ export default function ShopClient({
   initialQuery,
   grocery = false,
   storeLowStockThreshold = 0,
+  offerBadges,
 }: Props) {
   // Map the deep-link slug to its category id; fall back to "all" when absent
   // or unknown.
@@ -215,6 +227,7 @@ export default function ShopClient({
                         product={p}
                         storeLowStockThreshold={storeLowStockThreshold}
                         headingLevel={2}
+                        offerBadge={offerBadges?.[p.id]}
                       />
                     ))}
                   </div>

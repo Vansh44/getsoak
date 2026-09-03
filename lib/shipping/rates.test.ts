@@ -116,3 +116,77 @@ describe("checkout shipping rates", () => {
     });
   });
 });
+
+describe("free shipping — cheapest wins between the policy and an offer", () => {
+  it("★ an offer LOWERS the threshold and never raises the charge", () => {
+    // A store whose standing policy is free-above-₹999 and whose offer is
+    // free-above-₹500 has temporarily lowered its threshold. Any rule other
+    // than cheapest-wins produces a cart where ADDING items increases delivery
+    // cost, which no shopper reads as anything but a bug.
+    const config = settings({ mode: "flat", flatRate: 60, freeAbove: 999 });
+
+    // ₹600: below the standing threshold, but the offer applies.
+    expect(freeShippingApplies(config, 600, true)).toBe(true);
+    expect(freeShippingApplies(config, 600, false)).toBe(false);
+
+    // ₹1,200: already free under the standing policy, with or without it.
+    expect(freeShippingApplies(config, 1200, true)).toBe(true);
+    expect(freeShippingApplies(config, 1200, false)).toBe(true);
+  });
+
+  it("defaults to no offer, so every existing caller is unchanged", () => {
+    const config = settings({ mode: "flat", flatRate: 60, freeAbove: 999 });
+    expect(freeShippingApplies(config, 600)).toBe(false);
+  });
+
+  it("credits the OFFER only with what it actually waived", () => {
+    // ★ The budget question. An offer that waived nothing — because the cart
+    // already shipped free — must be charged nothing, or a merchant who capped
+    // a free-delivery campaign at ₹5,000 would watch it burn on orders that
+    // were always going to ship free.
+    const config = settings({ mode: "flat", flatRate: 60, freeAbove: 999 });
+
+    const belowThreshold = manualShippingOption(config, 600, true);
+    expect(belowThreshold.amount).toBe(0);
+    expect(belowThreshold.offerWaivedAmount).toBe(60);
+
+    const alreadyFree = manualShippingOption(config, 1200, true);
+    expect(alreadyFree.amount).toBe(0);
+    expect(alreadyFree.offerWaivedAmount).toBe(0);
+
+    const noOffer = manualShippingOption(config, 600, false);
+    expect(noOffer.amount).toBe(60);
+    expect(noOffer.offerWaivedAmount).toBe(0);
+  });
+
+  it("credits nothing on an always-free store", () => {
+    const config = settings({ mode: "free" });
+    expect(manualShippingOption(config, 100, true).offerWaivedAmount).toBe(0);
+  });
+
+  it("waives the MARKED-UP carrier rate, which is what the shopper would have paid", () => {
+    const config = settings({
+      mode: "shiprocket",
+      freeAbove: null,
+      carrierAdjustmentType: "percentage",
+      carrierAdjustmentValue: 10,
+    });
+    const raw = {
+      data: {
+        available_courier_companies: [
+          {
+            courier_company_id: 7,
+            courier_name: "Bluedart",
+            rate: 100,
+            etd: "2 days",
+          },
+        ],
+      },
+    };
+    const [option] = shiprocketShippingOptions(raw, config, 600, true);
+    expect(option.amount).toBe(0);
+    // 100 + 10% markup — the merchant's margin was part of that price too.
+    expect(option.offerWaivedAmount).toBe(110);
+    expect(option.carrierCost).toBe(100);
+  });
+});

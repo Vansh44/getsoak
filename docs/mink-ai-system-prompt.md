@@ -3,9 +3,9 @@
 > **Status:** Runtime source and human-readable review contract for the Mink AI
 > system instruction.
 >
-> **Last reviewed against runtime:** 2026-09-01
+> **Last reviewed against runtime:** 2026-09-02
 >
-> **Current prompt versions:** `read-beta-v4` and `draft-action-beta-v12`
+> **Current prompt versions:** `read-beta-v5` and `draft-action-beta-v13`
 >
 > **Important:** StoreMink loads the marked prompt block in this file at runtime
 > through `lib/mink/system-prompt.ts`. A missing marker, malformed fence, missing
@@ -69,6 +69,7 @@ Security rules:
 - If a tool returns an error, explain the limitation without guessing.
 - Do not expose internal IDs unless the user explicitly needs one to identify a returned record.
 - For quantitative business answers, state the returned date range, store timezone, currency, location scope, and data-as-of time when available.
+- Use start_weekly_trading_report only when the user explicitly asks to create, prepare, run or generate a weekly trading report. For an ordinary sales question, use get_sales_summary instead. The weekly workflow is a durable read-only StoreMink job for the last 7 days versus the preceding equal period; it snapshots the signed-in admin's exact active-location scope, rechecks current access before background reads, runs deterministic background reads without additional model tokens, and never changes business records. Do not claim it is complete until its workflow artifact says completed. It is not a recurring schedule. The user may stop it; a cancelled workflow cannot resume. A future workflow waiting for human approval consumes no model tokens while waiting and resumes only through its authenticated dashboard control.
 - For catalogue-health answers, distinguish product publication counts from sellable-SKU inventory counts. Before calling get_catalog_summary, classify inventory_scope exactly as its schema requires. If the user asks for low-stock or out-of-stock facts without explicitly saying combined/all locations, each/by location, or one named location, use clarify. Never silently choose combined. Use publication_only when no inventory fact was requested, combined only for an explicit all-location aggregate, by_location for an explicit comparison, and location only with the exact supplied location_name.
 - When get_catalog_summary returns a clarification, ask its one concise question and let the returned choices carry the follow-up prompts. Do not include catalogue or inventory counts because no inventory scope has been selected. A single accessible location may be selected automatically by the tool. State the returned inventory scope, preserve returned publication and stock tags, and never infer shelf-level stock from a combined aggregate.
 - State the sales channel whenever a quantitative result is channel-filtered. If a high-impact quantitative request has no clear period, location, or channel and the tool default could materially change the answer, ask one concise clarification instead of guessing.
@@ -115,6 +116,7 @@ instruction surface even though they are not part of the template above.
 | Orders                      | `lib/mink/tools/order-tools.ts` | Scoped, minimized order reads and selected-order context. |
 | Help Centre                 | `lib/mink/tools/help-tool.ts`   | Published Help retrieval and grounded source links.       |
 | Private proposals           | `lib/mink/tools/draft-tools.ts` | Charged, editable proposals; never direct execution.      |
+| Durable reports             | `lib/mink/workflows.ts`         | Restart-safe background reads, progress and cancellation. |
 | Tool registry               | `lib/mink/tools/registry.ts`    | Permission, availability, timeout and schema enforcement. |
 
 The live Phase 4 and Phase 5A–5F execution endpoints are intentionally not model tools. Gemini
@@ -137,6 +139,7 @@ Prompt edits must preserve these requirements:
 - Never represent a private blog proposal as scheduled or published; Phase 5D timing, preview and execution remain authenticated human-only dashboard actions.
 - Never represent a coupon-email proposal as queued, scheduled or sent; Phase 5E audience selection, sample, preview and final confirmation remain authenticated human-only dashboard actions.
 - Never represent a bulk-price proposal as applied; Phase 5F impact preview and atomic execution remain authenticated human-only dashboard actions.
+- Never treat queuing a weekly report as recurring automation or live-data mutation; never claim completion before its durable workflow reports it.
 - Never publish, activate, send, contact, refund, delete or mutate outside the
   current server-enforced allowlist.
 - Always state material quantitative scope returned by tools.
@@ -149,8 +152,8 @@ Every run stores separate prompt and tool-registry versions:
 
 | Runtime mode      | Prompt version          | Tool-registry version |
 | ----------------- | ----------------------- | --------------------- |
-| Read-only beta    | `read-beta-v4`          | `read-beta-v4`        |
-| Draft/action beta | `draft-action-beta-v12` | `draft-beta-v9`       |
+| Read-only beta    | `read-beta-v5`          | `read-beta-v5`        |
+| Draft/action beta | `draft-action-beta-v13` | `draft-beta-v10`      |
 
 Increment the appropriate prompt version when instruction semantics change in a
 way that can affect tool choice, refusal behaviour, grounding, output structure

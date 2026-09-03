@@ -7,7 +7,9 @@ Three design docs stay authoritative for HOW an already-shipped piece works —
 `docs/pos-plan.md` (register, staff, devices, shifts),
 `docs/inventory-fulfilment-roadmap.md` (locations, routing, reservations) and
 `docs/returns-exchanges-plan.md` (returns, exchanges, refunds). This file is the
-sequence AND the spec for everything still to build.
+sequence AND the spec for everything still to build — with one exception:
+`docs/offers-plan.md` is authoritative for Step 22 (offers and discounts), which
+is large enough to need its own decisions doc BEFORE any of it is built.
 
 - **Acceptance tests:** `docs/pos-acceptance.md` — a step is not done until its
   user stories are in there
@@ -70,6 +72,7 @@ sequence AND the spec for everything still to build.
 | **19** | Catalogue delta sync                                              | M    | ✅ done |
 | **20** | `placePosSale` round trips (11 → few)                             | M    | ✅ done |
 | **5**  | **Receipts — SMS opt-out webhook, then a real send (POS 6)**      | M    | ⏭ next |
+| **22** | **Offers — Phase A shipped; B–I to build (docs/offers-plan.md)**  | XL   | ◐ part  |
 | **6**  | Channel stock policy, per location and configurable (LOC H)       | M    | ⏳      |
 | **7**  | Transfer dispatch note (LOC I — rescoped, no in-transit state)    | S    | ⏳      |
 | **8**  | More routing strategies (LOC J)                                   | M    | ⏳      |
@@ -1310,6 +1313,83 @@ rather than a cheaper substitute.
 
 ---
 
+## Step 22 — Offers _(spec: `docs/offers-plan.md`)_
+
+One engine for every discount: codes, automatic offers, product/category
+scoping, Buy X get Y, tiers, free shipping, gift with purchase — across the
+storefront, the till, or both. **`docs/offers-plan.md` is authoritative**; this
+is the place in the sequence and the reason it sits here.
+
+**Today merchants have two shapes and no others**: a coupon code taking a
+percentage or a rupee amount off the whole cart, and a cashier typing a number.
+No automatic discount, nothing scoped to a product or category, nothing at the
+till, no per-customer limit, no budget cap. And `/dashboard/promotions` is a
+registered sidebar entry with **no route behind it** — every merchant whose role
+grants it sees a link that 404s.
+
+**★ WHY IT SITS SECOND, ABOVE 6–11.** Every step below it improves something a
+shop already does; this is the largest thing a merchant expects and cannot do at
+all. It is also the step whose foundations cannot be retrofitted — see the phase
+note below.
+
+**★ PHASE A IS THE WHOLE RISK, and it is deliberately one big phase.** Four of
+its pieces cannot be added later without rewriting what shipped:
+
+1. **Per-line discount allocation.** `orders.discount` is allocated across lines
+   _proportionally_ by `computeTax`, and `refundBreakdown` re-allocates it the
+   same way. A product-scoped or BXGY discount is **not** proportional, so
+   storing it there mis-files GST on every discounted invoice and over-refunds
+   every partial return — a returned Buy-1-Get-1 free item refunds full price,
+   so the customer keeps the goods and takes the money. `offers-plan.md` §8.
+2. **One pure engine, wired to both counters on day one.** This is the
+   `posTotals` incident (a ₹238 cart rung at ₹249.90, change short by ₹11.90,
+   and the panel refusing the total it had just quoted). Shipping the engine
+   behind `placeOrder` alone guarantees a second implementation for the till.
+3. **Best-offer-wins evaluation** (owner, 2026-09-02). The engine picks the
+   combination that saves the customer most — exclusive selection by value, via
+   a bounded three-scenario comparison, with `priority` demoted to a tie-break.
+   ★ It must NOT be built as optimal assignment: that is exponential and
+   unbounded in the number of offers a merchant creates. It also shapes the
+   evaluation loop, which the near-miss nudge shares.
+4. **Limits — now load-bearing, not prudent.** `increment_coupon_usage` is one
+   global counter and structurally cannot answer "once per customer". And
+   because best-offer-wins takes the choice of which offer applies away from the
+   merchant, the **budget cap** and a **per-order depth ceiling** are the only
+   things standing between a mistyped offer and every order taking it.
+
+**Watch for:** the free-shipping offer versus the existing
+`store_shipping_settings` free-above threshold — two authorities over one number
+(§14 of the plan; an offer may only ever make shipping cheaper). A free gift is
+stock leaving the shelf and needs the same reservation as a paid line, plus a
+GST answer before it ships. And **do not re-propose discounting at the
+collection counter** — Step 18 dropped it, twice: offers apply at sale creation,
+never to a sale already invoiced.
+
+**★ ALSO IN PHASE A, BECAUSE DECISION 3 MAKES THEM REQUIREMENTS:** the
+**near-miss nudge** ("₹200 away from free delivery" — it needs the engine to
+evaluate _unsatisfied_ triggers rather than short-circuiting, so it is the same
+loop) and the offer editor's **historical replay** ("this would have applied to
+34 of your last 100 orders") — the only way a merchant can predict a system that
+no longer follows their ordering.
+
+**Decisions: all settled** (owner, 2026-09-02; plan §18). Best offer wins ·
+`maxActiveOffers` free 3 / Basic+ unlimited with every type on every plan · Mink
+gets full offer authority behind its own default-off gate, with a mandatory
+budget cap and activation as a separate approval · `offers.onSalePrice` is
+configurable (`best` | `skip` | `stack`) · an offer may only ever make shipping
+cheaper · the near-miss nudge ships.
+
+**Phase A is SHIPPED** (2026-09-02): the engine, per-line allocation, the four
+limits, both counters, the near-miss nudge, `/dashboard/offers`, coupons
+migrated, and the dead `promotions` link answered. Architecture in
+`CODEBASE.md` §39. ⚠ Migration `20260902_0059` is NOT applied — DDL is its own
+release gate — and every offer read fails open until it is, so the deploy is
+order-independent. Phases B–I remain.
+
+**Effort: XL across 9 phases; Phase A alone was L.**
+
+---
+
 ## Step 6 — Channel stock policy _(LOC H)_
 
 Per-location, per-channel reserve buffers: "never sell the last 2 online at this
@@ -1957,6 +2037,24 @@ They are the ones already paid for in bugs.
 - **Auto-refund is OFF by default** (owner, 2026-08-09), a switch each merchant
   turns on. Consistent with every other new behaviour here: nothing changes for
   an existing store until they ask for it.
+
+- **Offers: BEST OFFER WINS** (owner, 2026-09-02). The engine picks the
+  combination saving the customer most, not the merchant's priority order.
+  ⚠ The recommendation had been exclusive-with-priority, on the grounds that
+  best-offer-wins is harder to test and harder for a cashier to explain. The
+  decision stands; the cost is paid by three Phase A requirements that would
+  otherwise have been optional — a bounded scenario comparison instead of a
+  search, a per-order discount ceiling, and a historical-replay preview so a
+  merchant can still predict what an offer will do. `docs/offers-plan.md` §10.
+- **Offers: full Mink authority** (owner, 2026-09-02) — read, propose, create,
+  update and activate, behind its own default-off gate. Two offer-specific
+  tightenings on top of the Phase 4C coupon pattern: a **budget cap is mandatory
+  in every proposal** (an automatic offer needs nobody to type it), and
+  **activation is a separate approval** from creation. Plan §14c.
+- **Offers: every type on every plan** (owner, 2026-09-02), capped at 3 active
+  on free — a straight generalisation of `maxActiveCoupons`. Gating offers
+  behind Basic would have removed the three coupons free stores already have,
+  which is invariant 1. Plan §15.
 
 **Open — the owner's to settle before the step they affect starts**
 

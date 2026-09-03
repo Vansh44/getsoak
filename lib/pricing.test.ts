@@ -6,6 +6,7 @@ import {
   variantEffectiveSelling,
   hasSpecialPrice,
 } from "./pricing";
+import type { PricedVariant } from "./pricing";
 
 // formatPrice() is the storefront's currency formatter — rupees, Indian
 // grouping (lakh/crore commas), no trailing zeros.
@@ -184,43 +185,48 @@ describe("effectivePricing", () => {
   });
 });
 
-// variantEffectiveSelling — exported helper used by the PDP/cart to resolve a
-// single variant's "what is it being sold at right now" price.
+// variantEffectiveSelling — THE one rule for what a variant costs, shared by
+// the PDP/shop display, the cart's tax basis (getCartTaxRates) and the
+// authoritative charge (placeOrder). `base_price` is deliberately absent from
+// these fixtures: the helper never reads it, and its parameter type is narrowed
+// to exactly the two columns it does read so a server row that selects only
+// those is a valid input.
 describe("variantEffectiveSelling", () => {
   // No special price → regular selling_price.
   it("returns selling_price when no special_price set", () => {
-    expect(
-      variantEffectiveSelling({ base_price: 100, selling_price: 80 }),
-    ).toBe(80);
+    expect(variantEffectiveSelling({ selling_price: 80 })).toBe(80);
   });
 
   // special_price (when > 0) wins over selling_price.
   it("returns special_price when set", () => {
     expect(
-      variantEffectiveSelling({
-        base_price: 100,
-        selling_price: 80,
-        special_price: 60,
-      }),
+      variantEffectiveSelling({ selling_price: 80, special_price: 60 }),
     ).toBe(60);
   });
 
   // null / 0 special_price is treated as "not set".
   it("ignores null or zero special_price", () => {
     expect(
-      variantEffectiveSelling({
-        base_price: 100,
-        selling_price: 80,
-        special_price: null,
-      }),
+      variantEffectiveSelling({ selling_price: 80, special_price: null }),
     ).toBe(80);
     expect(
-      variantEffectiveSelling({
-        base_price: 100,
-        selling_price: 80,
-        special_price: 0,
-      }),
+      variantEffectiveSelling({ selling_price: 80, special_price: 0 }),
     ).toBe(80);
+  });
+
+  // ★ A FULL VARIANT ROW MUST STILL BE ACCEPTED. The PDP passes a whole
+  // `PricedVariant` (base_price, sort_order and all) and `effectivePricing`
+  // passes one internally, so narrowing the parameter must not have broken
+  // that — this pins the assignability rather than leaving it to a compile
+  // that nobody re-runs.
+  it("accepts a full PricedVariant row", () => {
+    const row: PricedVariant = {
+      base_price: 100,
+      selling_price: 80,
+      special_price: 60,
+      sort_order: 0,
+    };
+    expect(variantEffectiveSelling(row)).toBe(60);
   });
 });
 
