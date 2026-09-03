@@ -2952,7 +2952,7 @@
       "id": "20260903_0072_mink_phase_6bc_workflows",
       "description": "Add durable read-only revenue-decline investigation and product-launch preparation workflows",
       "file": "sql/20260903_0072_mink_phase_6bc_workflows.sql",
-      "checksum": "16e9d57f4bb0920bef7d9bc54eee4c75b0e859a6f54b222cdc750bc97e752e6a",
+      "checksum": "a7ab06ac1bfe14a651479036edc8206ac1dee3e565e970da5e1f83a5b45a3e35",
       "transaction": true,
       "requires": ["20260903_0071_mink_offer_approval_tool"],
       "verify": {},
