@@ -44,6 +44,16 @@ describe("Mink system prompt document", () => {
       "Use start_weekly_trading_report only when the user explicitly asks",
     );
     expect(template).toContain("a cancelled workflow cannot resume");
+    expect(template).toContain(
+      "Use start_revenue_decline_investigation only when the user explicitly asks",
+    );
+    expect(template).toContain(
+      "measured correlations, never as proven causation",
+    );
+    expect(template).toContain(
+      "Use start_product_launch_preparation only when the user explicitly asks",
+    );
+    expect(template).toContain("does not generate an image");
   });
 
   it("renders only trusted actor fields and permission-filtered tool names", () => {

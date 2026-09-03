@@ -6,6 +6,8 @@ const mocks = vi.hoisted(() => ({
   readByLocation: vi.fn(),
   resolveLocation: vi.fn(),
   enqueueWorkflow: vi.fn(),
+  enqueueRevenueWorkflow: vi.fn(),
+  enqueueLaunchWorkflow: vi.fn(),
 }));
 vi.mock("../catalog-health-read", () => ({
   readMinkCatalogHealth: mocks.readCatalog,
@@ -16,6 +18,8 @@ vi.mock("./location-scope", () => ({
 }));
 vi.mock("../workflows", () => ({
   enqueueWeeklyTradingReport: mocks.enqueueWorkflow,
+  enqueueRevenueDeclineInvestigation: mocks.enqueueRevenueWorkflow,
+  enqueueProductLaunchPreparation: mocks.enqueueLaunchWorkflow,
 }));
 
 import { minkReadToolRegistry } from "./read-tools";
@@ -66,6 +70,20 @@ beforeEach(() => {
     currentStep: 0,
     totalSteps: 3,
   });
+  mocks.enqueueRevenueWorkflow.mockResolvedValue({
+    id: "22222222-2222-4222-8222-222222222222",
+    template: "revenue_decline_investigation",
+    status: "queued",
+    currentStep: 0,
+    totalSteps: 3,
+  });
+  mocks.enqueueLaunchWorkflow.mockResolvedValue({
+    id: "33333333-3333-4333-8333-333333333333",
+    template: "product_launch_preparation",
+    status: "queued",
+    currentStep: 0,
+    totalSteps: 3,
+  });
 });
 
 describe("Mink read-tool declarations", () => {
@@ -79,6 +97,8 @@ describe("Mink read-tool declarations", () => {
       "get_sales_summary",
       "list_low_stock",
       "start_weekly_trading_report",
+      "start_revenue_decline_investigation",
+      "start_product_launch_preparation",
       "list_orders",
       "search_help_centre",
     ]);
@@ -134,6 +154,7 @@ describe("Mink read-tool declarations", () => {
       "get_store_profile",
       "get_sales_summary",
       "start_weekly_trading_report",
+      "start_revenue_decline_investigation",
       "search_help_centre",
     ]);
     expect(declared({ dashboard: ["view"], inventory: ["view"] })).toEqual([
@@ -141,11 +162,57 @@ describe("Mink read-tool declarations", () => {
       "list_low_stock",
       "search_help_centre",
     ]);
+    expect(
+      declared({
+        dashboard: ["view"],
+        products: ["view"],
+        inventory: ["view"],
+      }),
+    ).toEqual([
+      "get_store_profile",
+      "get_catalog_summary",
+      "search_products",
+      "list_low_stock",
+      "start_product_launch_preparation",
+      "search_help_centre",
+    ]);
     expect(declared({ dashboard: ["view"], orders: ["view"] })).toEqual([
       "get_store_profile",
       "list_orders",
       "search_help_centre",
     ]);
+  });
+
+  it("queues bounded Phase 6B and 6C workflows through permission-gated tools", async () => {
+    const actor = { ...ACTOR, runId: "run-1" };
+    const revenue = await minkReadToolRegistry.execute(actor, {
+      id: "call-revenue",
+      name: "start_revenue_decline_investigation",
+      args: { period: "30d", location_name: "Shop" },
+    });
+    expect(mocks.enqueueRevenueWorkflow).toHaveBeenCalledWith(actor, {
+      period: "30d",
+      locationName: "Shop",
+    });
+    expect(revenue.artifact).toMatchObject({
+      type: "workflow",
+      template: "revenue_decline_investigation",
+      runId: "22222222-2222-4222-8222-222222222222",
+    });
+
+    const launch = await minkReadToolRegistry.execute(actor, {
+      id: "call-launch",
+      name: "start_product_launch_preparation",
+      args: { product_sku: "SKU10010007V028" },
+    });
+    expect(mocks.enqueueLaunchWorkflow).toHaveBeenCalledWith(actor, {
+      productSku: "SKU10010007V028",
+    });
+    expect(launch.artifact).toMatchObject({
+      type: "workflow",
+      template: "product_launch_preparation",
+      runId: "33333333-3333-4333-8333-333333333333",
+    });
   });
 
   it("queues the durable report only through its Analytics-gated tool", async () => {

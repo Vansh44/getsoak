@@ -229,4 +229,225 @@ describe("Mink catalogue artifact", () => {
       screen.getByRole("link", { name: /Open Analytics/i }),
     ).toHaveAttribute("href", "/dashboard/analytics?range=7d&compare=previous");
   });
+
+  it("renders a bounded revenue investigation with evidence caveats", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          workflow: {
+            id: "22222222-2222-4222-8222-222222222222",
+            template: "revenue_decline_investigation",
+            status: "completed",
+            currentStep: 3,
+            totalSteps: 3,
+            attemptCount: 3,
+            errorCode: null,
+            errorDetail: null,
+            cancelRequested: false,
+            result: {
+              period: "30d",
+              rangeLabel: "Last 30 days",
+              comparisonLabel: "Previous 30 days",
+              fromInclusive: "2026-08-02T00:00:00.000Z",
+              toExclusive: "2026-09-01T00:00:00.000Z",
+              comparisonFromInclusive: "2026-07-03T00:00:00.000Z",
+              comparisonToExclusive: "2026-08-02T00:00:00.000Z",
+              timeZone: "Asia/Kolkata",
+              currency: "INR",
+              locationLabel: "Shop and Delhi",
+              current: {
+                netSales: 8000,
+                orders: 16,
+                averageOrderValue: 500,
+                unitsSold: 25,
+              },
+              previous: {
+                netSales: 10000,
+                orders: 20,
+                averageOrderValue: 500,
+                unitsSold: 30,
+              },
+              currentChannels: [],
+              previousChannels: [],
+              currentLocations: [],
+              previousLocations: [],
+              currentProducts: [],
+              previousProducts: [],
+              dataAsOf: "2026-09-01T00:01:00.000Z",
+              metrics: [
+                {
+                  key: "netSales",
+                  label: "Net sales",
+                  current: 8000,
+                  previous: 10000,
+                  delta: -2000,
+                  deltaPercent: -20,
+                  format: "currency",
+                },
+              ],
+              findings: ["Recognized net sales fell 20%."],
+              channelMovements: [
+                {
+                  key: "online",
+                  name: "Online",
+                  currentAmount: 5000,
+                  previousAmount: 7000,
+                  delta: -2000,
+                  deltaPercent: -28.6,
+                },
+              ],
+              locationMovements: [],
+              productMovements: [],
+              caveats: [
+                "These are correlations in StoreMink data, not proof of causation.",
+              ],
+              analyticsPath: "/dashboard/analytics?range=30d&compare=previous",
+            },
+            createdAt: "2026-09-01T00:00:00.000Z",
+            updatedAt: "2026-09-01T00:01:00.000Z",
+            completedAt: "2026-09-01T00:01:00.000Z",
+          },
+        }),
+      }),
+    );
+    const artifact: MinkArtifact = {
+      type: "workflow",
+      runId: "22222222-2222-4222-8222-222222222222",
+      template: "revenue_decline_investigation",
+      title: "Revenue decline investigation",
+      description: "A durable investigation.",
+      status: "queued",
+      currentStep: 0,
+      totalSteps: 3,
+    };
+
+    render(<MinkArtifacts artifacts={[artifact]} />);
+    await waitFor(() =>
+      expect(screen.getByText("Evidence summary")).toBeVisible(),
+    );
+    expect(screen.getByText(/not proof of causation/i)).toBeVisible();
+    expect(
+      screen.getByRole("link", { name: /Verify in Analytics/i }),
+    ).toHaveAttribute(
+      "href",
+      "/dashboard/analytics?range=30d&compare=previous",
+    );
+  });
+
+  it("renders a private launch package and sanitizes product links", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          workflow: {
+            id: "33333333-3333-4333-8333-333333333333",
+            template: "product_launch_preparation",
+            status: "completed",
+            currentStep: 3,
+            totalSteps: 3,
+            attemptCount: 3,
+            errorCode: null,
+            errorDetail: null,
+            cancelRequested: false,
+            result: {
+              storeName: "Echos",
+              productId: "product-1",
+              productName: "Basmati Rice (Sample)",
+              requestedSku: "SKU10010007V028",
+              requestedVariantName: "5 kg",
+              status: "published",
+              categoryName: "Groceries",
+              featured: false,
+              descriptionLength: 120,
+              seoTitleLength: 40,
+              seoDescriptionLength: 120,
+              imageCount: 2,
+              variantsTruncated: false,
+              locationLabel: "Shop and Delhi",
+              timeZone: "Asia/Kolkata",
+              currency: "INR",
+              skus: [
+                {
+                  productId: "product-1",
+                  variantId: "variant-1",
+                  productName: "Basmati Rice (Sample)",
+                  variantName: "5 kg",
+                  sku: "SKU10010007V028",
+                  basePrice: 500,
+                  sellingPrice: 450,
+                  specialPrice: null,
+                  trackInventory: true,
+                  lowStockThreshold: 5,
+                  totalStock: 20,
+                  locationStocks: [],
+                  requiresShipping: true,
+                  shippingMeasurementsComplete: true,
+                  dashboardPath: "https://attacker.example/product",
+                },
+              ],
+              locationStock: [
+                {
+                  id: "shop-1",
+                  name: "Shop",
+                  type: "shop",
+                  stock: 20,
+                  dashboardPath: "/dashboard/inventory?location=shop-1",
+                },
+              ],
+              dataAsOf: "2026-09-01T00:01:00.000Z",
+              productDashboardPath: "/dashboard/products/product-1",
+              inventoryDashboardPath: "/dashboard/inventory",
+              readinessScore: 100,
+              readinessLabel: "ready",
+              checks: [
+                {
+                  key: "publication",
+                  label: "Publication state",
+                  status: "ready",
+                  detail: "Product is published.",
+                },
+              ],
+              blockers: [],
+              warnings: [],
+              checklist: ["Review the final product page."],
+              suggestedCopy: {
+                headline: "Meet Basmati Rice (Sample) — 5 kg",
+                subheading: "Discover it from Echos.",
+                callToAction: "Shop now",
+              },
+            },
+            createdAt: "2026-09-01T00:00:00.000Z",
+            updatedAt: "2026-09-01T00:01:00.000Z",
+            completedAt: "2026-09-01T00:01:00.000Z",
+          },
+        }),
+      }),
+    );
+    const artifact: MinkArtifact = {
+      type: "workflow",
+      runId: "33333333-3333-4333-8333-333333333333",
+      template: "product_launch_preparation",
+      title: "Product launch preparation",
+      description: "A private readiness package.",
+      status: "queued",
+      currentStep: 0,
+      totalSteps: 3,
+    };
+
+    render(<MinkArtifacts artifacts={[artifact]} />);
+    await waitFor(() =>
+      expect(screen.getByText(/Launch readiness/i)).toBeVisible(),
+    );
+    expect(screen.getByText("Grounded starter copy")).toBeVisible();
+    expect(screen.getByRole("link", { name: /5 kg/i })).toHaveAttribute(
+      "href",
+      "/dashboard",
+    );
+    expect(
+      screen.getByText(/Nothing was published, repriced, generated or sent/i),
+    ).toBeVisible();
+  });
 });

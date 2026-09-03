@@ -1,6 +1,6 @@
 # Mink AI Dashboard Agent — Architecture and Delivery Plan
 
-> **Status:** Phases 0–4, Phases 5A–5F and Phase 6A are implemented in code. Phase 2
+> **Status:** Phases 0–4, Phases 5A–5F and Phases 6A–6C are implemented in code. Phase 2
 > remains the invited read-only merchant beta. Phase 3 adds a separate,
 > fail-closed operator opt-in
 > for private versioned drafts and atomic weighted credits through migration
@@ -38,6 +38,9 @@
 > leased workflow runs, idempotent step/event checkpoints, cancellation,
 > approval-resume state, completion notifications and the first deterministic
 > read-only weekly trading report template.
+> Migration `20260903_0072_mink_phase_6bc_workflows` adds the deterministic,
+> read-only revenue-decline investigation and private exact-SKU product-launch
+> preparation templates on the same runtime.
 > No transfer,
 > cancellation, refund, payment/shipment/pickup/POS lifecycle, product/page/
 > storefront or bulk publication, arbitrary-recipient or direct customer
@@ -1076,10 +1079,12 @@ Exit criteria:
 
 **Duration:** 5–7 weeks
 
-**Implementation split:** Phase 6A is now built. It establishes the durable
-runtime and weekly trading report without exposing live mutation authority.
-Phases 6B–6E will add the remaining templates one at a time after restart,
-lease-expiry, cancellation, owner/tenant and Scheduler acceptance passes.
+**Implementation split:** Phases 6A–6C are now built. Phase 6A establishes the
+durable runtime and weekly trading report without exposing live mutation
+authority. Phase 6B adds a revenue-decline investigation and Phase 6C adds a
+private exact-SKU launch-readiness package. Phases 6D–6E will add the remaining
+templates after restart, lease-expiry, cancellation, owner/tenant and Scheduler
+acceptance passes.
 
 Deliver:
 
@@ -1118,6 +1123,45 @@ Phase 6A delivered:
 - deterministic background reads with no additional Gemini calls or tokens;
 - the CRON_SECRET-only `/api/cron/mink-workflows` heartbeat, capped at 15 claims
   per invocation, plus explicit Cloud Scheduler rollout documentation.
+
+Phase 6B delivered:
+
+- a model-visible `start_revenue_decline_investigation` tool only for an
+  explicit investigate/diagnose/explain request and Analytics View permission;
+  quick totals stay on the synchronous sales tool;
+- exact 7-, 30- or 90-day windows anchored to request time and compared with
+  the preceding equal period, optionally narrowed through one exact accessible
+  location name;
+- two four-read batches covering exact current/previous sales, order volume,
+  average order value, units, channels, locations and the top-ten product sets,
+  with bounded movement lists and no background model tokens;
+- deterministic evidence summaries that label correlations rather than
+  claiming causation and explicitly disclose refunds, merchandise-line totals
+  and unavailable external traffic/advertising context.
+
+Phase 6C delivered:
+
+- a model-visible `start_product_launch_preparation` tool that appears only
+  with both Products View and Inventory View and accepts one exact existing
+  parent-product or variant SKU; tenant and target identity are resolved by the
+  server and persisted as trusted IDs;
+- a maximum-20-sellable-SKU snapshot of publication, parent/relevant variant
+  media, description/SEO coverage, price hierarchy, captured
+  accessible-location stock and thresholds, and shipping-measurement
+  completeness; missing shelf rows count as zero and combined stock cannot hide
+  a location-level gap;
+- deterministic blockers, warnings, ready checks, readiness score, location
+  stock, an ordered checklist and starter copy grounded only in stored
+  store/product/category names;
+- a private result with no image generation, publication, price/inventory
+  mutation, campaign/audience action, customer contact, code deployment or
+  other live side effect.
+
+The shared runtime now derives permissions per template at queue, worker and
+owner-status boundaries. Active locations are revalidated before each step;
+scope may narrow after access removal but can never widen after queueing. All
+three templates retain the same checkpoint, retry, cancellation, notification
+and support-history guarantees.
 
 Evaluate managed Agent Runtime only here. Move a workflow only if it improves
 reliability, isolation or operations enough to justify a second deployment
@@ -1385,33 +1429,36 @@ would move risk into production rather than remove work.
 
 ## 21. Immediate next sprint
 
-The next sprint should validate and safely roll out Phase 6A before Phase 6B:
+The next sprint should validate and safely roll out Phases 6B/6C before Phase
+6D:
 
-1. Apply `20260902_0058_mink_phase_6a_durable_workflows` after 0057 in a
-   controlled environment and verify all three tables, constraints, RLS and
-   app_user revocations before deploying the application.
-2. Keep `storemink-mink-workflows` absent/paused until both DB and route are
-   live. Then create the one-minute CRON_SECRET job and prove missing/wrong
-   bearer credentials return 401 before any claim.
-3. Queue the same report twice through one forced provider/tool retry. Exactly
-   one run and three steps may exist for that origin run; a fresh user request
-   may create a separate report.
-4. Kill Cloud Run after each claim and after each expensive read, let the lease
-   expire, then restart. The run must resume without duplicate completion,
-   event or notification.
-5. Race two worker requests and multiple browser polls/cancels. SKIP LOCKED must
-   isolate claims; cancellation must stop before the next step; cancelled runs
-   must reject resume.
-6. Compare report range, timezone, exact captured locations, online/unassigned
-   inclusion, refunds, sales metrics, top products and channels with Analytics.
-   Add a new location after queueing and prove it does not enter that report;
-   remove an assigned location and prove the next read narrows to current scope.
-7. Remove Analytics permission, suspend/revoke the requester and test foreign
-   admin/store workflow IDs. Worker and browser reads must fail closed without
-   disclosing existence or report data.
-8. Run the complete P6A pack and inspect query plans, retry latency, queue age,
-   event reconstruction and notification fan-out. Only after this is stable,
-   begin Phase 6B's read-only revenue-decline investigation template.
+1. Apply `20260903_0072_mink_phase_6bc_workflows` after 0071 and verify the
+   workflow-template constraint plus both Help Centre sections before deploying
+   the application.
+2. Run the complete Echos P6B/P6C prompt pack. Compare every 7/30/90-day metric,
+   Shop/Delhi scope, channel, location and product movement with Analytics and
+   verify the workflow never presents correlation as proven causation.
+3. Prepare launch packages for the exact Echos parent and variant SKUs listed in
+   the test pack. Compare status, images, copy/SEO coverage, price hierarchy,
+   Shop/Delhi shelf stock, thresholds and shipping measurements with the live
+   product and inventory screens.
+4. Remove Analytics permission during 6B and Products or Inventory View during
+   6C; suspend/revoke the requester and remove a location assignment. The next
+   step must cancel or narrow before reading, and old result URLs must fail
+   closed through the owner/tenant boundary.
+5. Force provider tool retries, worker overlap, lease expiry, cancellation and
+   Cloud Run restart for both templates. One originating request must retain one
+   run, three steps, one completed result and one notification.
+6. Inspect database query plans and pool concurrency. A 6B step runs at most one
+   four-read batch at a time; 6C persists at most 20 SKU rows and 50 captured
+   active locations. Large stores must receive a bounded error rather than
+   silently truncated authorization scope.
+7. Confirm 6C creates no drafts, credits, product events, stock movements,
+   campaigns or publication rows, and that all background steps add zero Gemini
+   token usage.
+8. After these gates pass, begin Phase 6D: identify slow inventory and prepare a
+   private promotion proposal, with a new explicit approval boundary rather than
+   automatic discounting or customer contact.
 
 The intended outcome is not “Gemini 3.7 answered impressively.” It is:
 

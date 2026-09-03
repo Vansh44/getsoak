@@ -2947,6 +2947,45 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260903_0072_mink_phase_6bc_workflows",
+      "description": "Add durable read-only revenue-decline investigation and product-launch preparation workflows",
+      "file": "sql/20260903_0072_mink_phase_6bc_workflows.sql",
+      "checksum": "16e9d57f4bb0920bef7d9bc54eee4c75b0e859a6f54b222cdc750bc97e752e6a",
+      "transaction": true,
+      "requires": ["20260903_0071_mink_offer_approval_tool"],
+      "verify": {},
+      "applyVerify": {
+        "constraints": ["mink_workflow_runs_template_check"],
+        "queries": [
+          {
+            "name": "workflow template constraint includes Phase 6B and 6C",
+            "sql": "select count(*)::text from pg_constraint where conname = 'mink_workflow_runs_template_check' and conrelid = 'public.mink_workflow_runs'::regclass and pg_get_constraintdef(oid) like '%revenue_decline_investigation%' and pg_get_constraintdef(oid) like '%product_launch_preparation%'",
+            "equals": "1"
+          },
+          {
+            "name": "the Mink guide documents revenue investigations and private launch packages",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%<h2>Investigate a revenue decline</h2>%' and body like '%reports evidence and correlations, not invented causes%' and body like '%<h2>Prepare a private product launch package</h2>%' and body like '%exact existing product or variant SKU%' and body like '%flags a location-level gap%' and body like '%does not generate an image%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "constraints": ["mink_workflow_runs_template_check"],
+        "queries": [
+          {
+            "name": "Phase 6B and 6C templates already exist",
+            "sql": "select count(*)::text from pg_constraint where conname = 'mink_workflow_runs_template_check' and conrelid = 'public.mink_workflow_runs'::regclass and pg_get_constraintdef(oid) like '%revenue_decline_investigation%' and pg_get_constraintdef(oid) like '%product_launch_preparation%'",
+            "equals": "1"
+          },
+          {
+            "name": "the Mink guide already documents Phase 6B and 6C",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%<h2>Investigate a revenue decline</h2>%' and body like '%<h2>Prepare a private product launch package</h2>%'",
+            "equals": "1"
+          }
+        ]
+      }
     }
   ]
 }

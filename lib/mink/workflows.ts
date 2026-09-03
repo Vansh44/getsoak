@@ -1,11 +1,7 @@
 import "server-only";
 
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
-import {
-  getSalesAnalytics,
-  getSalesByChannel,
-  getTopProducts,
-} from "@/app/dashboard/analytics/data";
+import { can, normalizePermissions } from "@/app/dashboard/lib/permissions";
 import {
   activityEvents,
   adminLocations,
@@ -15,8 +11,8 @@ import {
   minkWorkflowSteps,
   platformAdmins,
   roles,
+  storeLocations,
 } from "@/drizzle/schema";
-import { parseAnalyticsRange } from "@/lib/analytics/range";
 import { withService, type Db } from "@/lib/db/client";
 import { recordEvent } from "@/lib/notifications/record";
 import { logError, logInfo, logWarn } from "@/lib/observability/logger";
@@ -26,18 +22,43 @@ import { MinkRequestError, MinkToolInputError } from "./errors";
 import { resolveMinkLocation } from "./tools/location-scope";
 import type { MinkActorContext } from "./types";
 import {
+  collectProductLaunchSnapshot,
+  collectRevenueDeclineSnapshot,
+  collectWeeklyTradingSnapshot,
+  resolveProductLaunchTarget,
+  type WorkflowExecutionScope,
+} from "./workflow-template-data";
+import {
+  buildProductLaunchPreparationResult,
+  buildRevenueDeclineInvestigationResult,
   buildWeeklyTradingReportResult,
+  isMinkWorkflowTemplate,
   isMinkWorkflowStatus,
+  narrowMinkWorkflowLocationIds,
   type MinkWorkflowEventView,
+  type MinkWorkflowResult,
   type MinkWorkflowStatus,
+  type MinkWorkflowTemplate,
   type MinkWorkflowView,
+  type ProductLaunchPreparationInput,
+  type ProductLaunchPreparationResult,
+  type ProductLaunchSnapshot,
+  type RevenueDeclineInvestigationInput,
+  type RevenueDeclineInvestigationResult,
+  type RevenueDeclineSnapshot,
+  type MinkRevenuePeriod,
   type WeeklyTradingReportInput,
   type WeeklyTradingReportResult,
   type WeeklyTradingReportSnapshot,
 } from "./workflow-types";
 
-const WORKFLOW_STEPS = ["snapshot", "analyse", "finalise"] as const;
+const WORKFLOW_STEPS: Record<MinkWorkflowTemplate, readonly string[]> = {
+  weekly_trading_report: ["snapshot", "analyse", "finalise"],
+  revenue_decline_investigation: ["snapshot", "diagnose", "finalise"],
+  product_launch_preparation: ["snapshot", "assess", "finalise"],
+};
 const WORKFLOW_LEASE_SECONDS = 120;
+const MAX_WORKFLOW_LOCATIONS = 50;
 export const MAX_MINK_WORKFLOW_CLAIMS_PER_RUN = 15;
 
 type WorkflowRow = typeof minkWorkflowRuns.$inferSelect;
@@ -67,30 +88,83 @@ export interface MinkWorkflowWorkerResult {
   notificationsDelivered: number;
 }
 
-interface WorkflowExecutionScope {
-  locationIds: string[];
-  locationLabel: string;
-}
-
 class WorkflowCancellationRequestedError extends Error {}
 
 /** Queue one deterministic read-only report. Model retries reuse source run. */
 export async function enqueueWeeklyTradingReport(
   actor: MinkActorContext,
 ): Promise<MinkWorkflowView> {
-  if (!actor.runId) {
+  assertQueueAuthority(actor, "weekly_trading_report");
+  const input = await buildAuthorityInput(actor);
+  return enqueueWorkflow(actor, {
+    template: "weekly_trading_report",
+    input,
+    idempotencyKey: `agent-run:${actor.runId}:weekly-trading-report:v1`,
+  });
+}
+
+export async function enqueueRevenueDeclineInvestigation(
+  actor: MinkActorContext,
+  options: { period: MinkRevenuePeriod; locationName?: unknown },
+): Promise<MinkWorkflowView> {
+  assertQueueAuthority(actor, "revenue_decline_investigation");
+  const input: RevenueDeclineInvestigationInput = {
+    ...(await buildAuthorityInput(actor, options.locationName)),
+    period: options.period,
+  };
+  const scopeKey = input.includeUnassigned
+    ? "accessible-scope"
+    : input.locationIds[0];
+  return enqueueWorkflow(actor, {
+    template: "revenue_decline_investigation",
+    input,
+    idempotencyKey: `agent-run:${actor.runId}:revenue-decline:${options.period}:${scopeKey}:v1`,
+  });
+}
+
+export async function enqueueProductLaunchPreparation(
+  actor: MinkActorContext,
+  options: { productSku: unknown },
+): Promise<MinkWorkflowView> {
+  assertQueueAuthority(actor, "product_launch_preparation");
+  const target = await resolveProductLaunchTarget(
+    actor.storeId,
+    options.productSku,
+  );
+  const input: ProductLaunchPreparationInput = {
+    ...(await buildAuthorityInput(actor)),
+    productId: target.productId,
+    variantId: target.variantId,
+    requestedSku: target.sku,
+    defaultLowStockThreshold: actor.defaultLowStockThreshold,
+  };
+  return enqueueWorkflow(actor, {
+    template: "product_launch_preparation",
+    input,
+    idempotencyKey: `agent-run:${actor.runId}:product-launch:${target.productId}:${target.variantId ?? "all"}:v1`,
+  });
+}
+
+async function buildAuthorityInput(
+  actor: MinkActorContext,
+  locationName?: unknown,
+): Promise<WeeklyTradingReportInput> {
+  const location = await resolveMinkLocation(actor, locationName);
+  const locationIds = location.selectedId
+    ? [location.selectedId]
+    : location.availableLocations.map((item) => item.id);
+  if (locationIds.length > MAX_WORKFLOW_LOCATIONS) {
     throw new MinkToolInputError(
-      "A weekly report can be queued only from an active Mink AI run.",
+      `This workflow supports at most ${MAX_WORKFLOW_LOCATIONS} accessible active locations. Choose one exact location.`,
     );
   }
-  const location = await resolveMinkLocation(actor, undefined);
   const now = new Date().toISOString();
-  const input: WeeklyTradingReportInput = {
+  return {
     timeZone: actor.analyticsTimeZone,
     currency: actor.currency,
-    // Snapshot exact active location authority. Never store null/all because
-    // a later location could otherwise silently enter an already queued job.
-    locationIds: location.availableLocations.map((item) => item.id),
+    // Persist exact active IDs instead of null/all. A location created later
+    // can never silently enter work that was already authorized and queued.
+    locationIds,
     restrictedLocationScope: actor.locationIds !== null,
     includeUnassigned: location.includeUnassigned,
     locationLabel:
@@ -100,8 +174,26 @@ export async function enqueueWeeklyTradingReport(
     requesterEmail: actor.email?.trim().toLowerCase() ?? null,
     requestedAt: now,
   };
-  const idempotencyKey = `agent-run:${actor.runId}:weekly-trading-report:v1`;
+}
 
+async function enqueueWorkflow(
+  actor: MinkActorContext,
+  options: {
+    template: MinkWorkflowTemplate;
+    input:
+      | WeeklyTradingReportInput
+      | RevenueDeclineInvestigationInput
+      | ProductLaunchPreparationInput;
+    idempotencyKey: string;
+  },
+): Promise<MinkWorkflowView> {
+  if (!actor.runId) {
+    throw new MinkToolInputError(
+      "A workflow can be queued only from an active Mink AI run.",
+    );
+  }
+  const steps = WORKFLOW_STEPS[options.template];
+  const now = options.input.requestedAt;
   return withService(async (db) => {
     const inserted = await db
       .insert(minkWorkflowRuns)
@@ -109,11 +201,11 @@ export async function enqueueWeeklyTradingReport(
         storeId: actor.storeId,
         adminId: actor.adminId,
         sourceRunId: actor.runId,
-        template: "weekly_trading_report",
+        template: options.template,
         status: "queued",
-        idempotencyKey,
-        inputJson: input,
-        totalSteps: WORKFLOW_STEPS.length,
+        idempotencyKey: options.idempotencyKey,
+        inputJson: options.input,
+        totalSteps: steps.length,
         maxAttempts: 6,
         runAfter: now,
         updatedAt: now,
@@ -129,7 +221,7 @@ export async function enqueueWeeklyTradingReport(
     let run = inserted[0];
     if (run) {
       await db.insert(minkWorkflowSteps).values(
-        WORKFLOW_STEPS.map((stepKey, position) => ({
+        steps.map((stepKey, position) => ({
           runId: run!.id,
           storeId: actor.storeId,
           stepKey,
@@ -142,7 +234,7 @@ export async function enqueueWeeklyTradingReport(
         storeId: actor.storeId,
         eventKey: "queued",
         eventType: "queued",
-        detail: { template: "weekly_trading_report" },
+        detail: { template: options.template },
       });
     } else {
       const existing = await db
@@ -152,7 +244,7 @@ export async function enqueueWeeklyTradingReport(
           and(
             eq(minkWorkflowRuns.storeId, actor.storeId),
             eq(minkWorkflowRuns.adminId, actor.adminId),
-            eq(minkWorkflowRuns.idempotencyKey, idempotencyKey),
+            eq(minkWorkflowRuns.idempotencyKey, options.idempotencyKey),
           ),
         )
         .limit(1);
@@ -182,6 +274,7 @@ export async function getMinkWorkflow(
         404,
       );
     }
+    assertActorWorkflowAccess(actor, run.template, run.inputJson);
     const events = includeEvents
       ? await db
           .select()
@@ -230,6 +323,7 @@ export async function cancelMinkWorkflow(
         404,
       );
     }
+    assertActorWorkflowAccess(actor, run.template, run.inputJson);
     if (["completed", "failed", "cancelled"].includes(run.status)) {
       return toWorkflowView(run);
     }
@@ -306,6 +400,7 @@ export async function resumeMinkWorkflow(
         404,
       );
     }
+    assertActorWorkflowAccess(actor, run.template, run.inputJson);
     if (run.status !== "waiting_approval") {
       throw new MinkRequestError(
         "mink_workflow_not_resumable",
@@ -418,9 +513,12 @@ export async function runMinkWorkflowWorker(
 async function revalidateWorkflowAuthority(
   run: ClaimedWorkflow,
 ): Promise<WorkflowExecutionScope | null> {
-  const input = readWeeklyInput(run.inputJson);
+  if (!isMinkWorkflowTemplate(run.template)) return null;
+  const template = run.template;
+  const input = readWorkflowInput(template, run.inputJson);
   return withService(async (db) => {
     let isPlatformOperator = false;
+    let isStoreSuperadmin = false;
     if (input.requesterEmail) {
       const platformRows = await db
         .select({ id: platformAdmins.id })
@@ -438,6 +536,7 @@ async function revalidateWorkflowAuthority(
         .limit(1);
       const admin = adminRows[0];
       if (!admin || admin.isSuspended === true) return null;
+      isStoreSuperadmin = admin.role === "superadmin";
       if (admin.role !== "superadmin") {
         const roleRows = await db
           .select({ permissions: roles.permissions })
@@ -446,32 +545,42 @@ async function revalidateWorkflowAuthority(
             and(eq(roles.storeId, run.storeId), eq(roles.slug, admin.role)),
           )
           .limit(1);
-        if (!grantsAnalyticsView(roleRows[0]?.permissions)) return null;
+        const permissions = normalizePermissions(roleRows[0]?.permissions);
+        if (!hasWorkflowPermissions(permissions, template)) return null;
       }
     }
 
-    if (!input.restrictedLocationScope || isPlatformOperator) {
-      return {
-        locationIds: input.locationIds,
-        locationLabel: input.locationLabel,
-      };
-    }
-    const bindings = await db
-      .select({ locationId: adminLocations.locationId })
-      .from(adminLocations)
-      .where(
-        and(
-          eq(adminLocations.adminId, run.adminId),
-          eq(adminLocations.storeId, run.storeId),
-        ),
-      );
-    const currentlyAllowed = new Set(
-      bindings.map((binding) => binding.locationId),
+    const activeLocations =
+      input.locationIds.length === 0
+        ? []
+        : await db
+            .select({ id: storeLocations.id })
+            .from(storeLocations)
+            .where(
+              and(
+                eq(storeLocations.storeId, run.storeId),
+                eq(storeLocations.active, true),
+                inArray(storeLocations.id, input.locationIds),
+              ),
+            );
+    const bindings =
+      isPlatformOperator || isStoreSuperadmin
+        ? null
+        : await db
+            .select({ locationId: adminLocations.locationId })
+            .from(adminLocations)
+            .where(
+              and(
+                eq(adminLocations.adminId, run.adminId),
+                eq(adminLocations.storeId, run.storeId),
+              ),
+            );
+    const locationIds = narrowMinkWorkflowLocationIds(
+      input,
+      activeLocations.map((location) => location.id),
+      bindings?.map((binding) => binding.locationId) ?? null,
     );
-    const locationIds = input.locationIds.filter((id) =>
-      currentlyAllowed.has(id),
-    );
-    if (locationIds.length === 0) return null;
+    if (locationIds === null) return null;
     return {
       locationIds,
       locationLabel:
@@ -482,13 +591,18 @@ async function revalidateWorkflowAuthority(
   });
 }
 
-function grantsAnalyticsView(value: unknown): boolean {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const actions = (value as Record<string, unknown>).analytics;
-  return (
-    Array.isArray(actions) &&
-    (actions.includes("view") || actions.includes("manage"))
-  );
+function hasWorkflowPermissions(
+  permissions: MinkActorContext["permissions"],
+  template: MinkWorkflowTemplate,
+  isSuperadmin = false,
+): boolean {
+  if (template === "product_launch_preparation") {
+    return (
+      can(permissions, "products", "view", isSuperadmin) &&
+      can(permissions, "inventory", "view", isSuperadmin)
+    );
+  }
+  return can(permissions, "analytics", "view", isSuperadmin);
 }
 
 /**
@@ -502,6 +616,7 @@ async function deliverPendingWorkflowNotifications(limit: number) {
         id: minkWorkflowRuns.id,
         storeId: minkWorkflowRuns.storeId,
         template: minkWorkflowRuns.template,
+        result: minkWorkflowRuns.resultJson,
       })
       .from(minkWorkflowRuns)
       .where(
@@ -521,6 +636,7 @@ async function deliverPendingWorkflowNotifications(limit: number) {
   );
   let delivered = 0;
   for (const run of pending) {
+    if (!isMinkWorkflowTemplate(run.template)) continue;
     const eventId = await recordEvent({
       type: "mink.workflow_completed",
       storeId: run.storeId,
@@ -528,9 +644,12 @@ async function deliverPendingWorkflowNotifications(limit: number) {
       subject: {
         type: "mink_workflow",
         id: run.id,
-        label: "Weekly trading report",
+        label: workflowLabel(run.template),
       },
-      payload: { template: run.template },
+      payload: {
+        template: run.template,
+        url: workflowNotificationUrl(run.template, run.result),
+      },
       deduplicate: true,
     });
     if (eventId) delivered += 1;
@@ -551,6 +670,7 @@ async function failExpiredExhaustedWorkflows(limit: number): Promise<number> {
         storeId: minkWorkflowRuns.storeId,
         currentStep: minkWorkflowRuns.currentStep,
         attemptCount: minkWorkflowRuns.attemptCount,
+        template: minkWorkflowRuns.template,
       })
       .from(minkWorkflowRuns)
       .where(
@@ -605,7 +725,7 @@ async function failExpiredExhaustedWorkflows(limit: number): Promise<number> {
         storeId: run.storeId,
         eventKey: `failed:exhausted:${run.attemptCount}`,
         eventType: "failed",
-        stepKey: WORKFLOW_STEPS[run.currentStep],
+        stepKey: workflowStepKey(run.template, run.currentStep),
         detail: {
           attempt: run.attemptCount,
           code: "workflow_lease_expired_after_max_attempts",
@@ -722,77 +842,117 @@ async function executeClaimedStep(
   workerId: string,
   executionScope: WorkflowExecutionScope,
 ): Promise<{ completed: boolean }> {
-  const stepKey = WORKFLOW_STEPS[run.currentStep];
-  if (!stepKey || run.template !== "weekly_trading_report") {
+  if (!isMinkWorkflowTemplate(run.template)) {
     throw new Error("unsupported_workflow_step");
   }
+  const stepKey = WORKFLOW_STEPS[run.template][run.currentStep];
+  if (!stepKey) throw new Error("unsupported_workflow_step");
   await markStepStarted(run, workerId, stepKey);
+  if (run.template === "weekly_trading_report") {
+    const input = readWeeklyInput(run.inputJson);
+    if (stepKey === "snapshot") {
+      const snapshot = await collectWeeklyTradingSnapshot(
+        run.storeId,
+        input,
+        executionScope,
+      );
+      await completeIntermediateStep(run, workerId, stepKey, snapshot);
+      return { completed: false };
+    }
+    if (stepKey === "analyse") {
+      const snapshot = await readStepOutput<WeeklyTradingReportSnapshot>(
+        run,
+        "snapshot",
+      );
+      await completeIntermediateStep(
+        run,
+        workerId,
+        stepKey,
+        buildWeeklyTradingReportResult(snapshot),
+      );
+      return { completed: false };
+    }
+    return finalizeFromStep<WeeklyTradingReportResult>(
+      run,
+      workerId,
+      stepKey,
+      "analyse",
+    );
+  }
+
+  if (run.template === "revenue_decline_investigation") {
+    const input = readRevenueInput(run.inputJson);
+    if (stepKey === "snapshot") {
+      const snapshot = await collectRevenueDeclineSnapshot(
+        run.storeId,
+        input,
+        executionScope,
+      );
+      await completeIntermediateStep(run, workerId, stepKey, snapshot);
+      return { completed: false };
+    }
+    if (stepKey === "diagnose") {
+      const snapshot = await readStepOutput<RevenueDeclineSnapshot>(
+        run,
+        "snapshot",
+      );
+      await completeIntermediateStep(
+        run,
+        workerId,
+        stepKey,
+        buildRevenueDeclineInvestigationResult(snapshot),
+      );
+      return { completed: false };
+    }
+    return finalizeFromStep<RevenueDeclineInvestigationResult>(
+      run,
+      workerId,
+      stepKey,
+      "diagnose",
+    );
+  }
+
+  const input = readProductLaunchInput(run.inputJson);
   if (stepKey === "snapshot") {
-    const snapshot = await collectWeeklySnapshot(run, executionScope);
+    const snapshot = await collectProductLaunchSnapshot(
+      run.storeId,
+      input,
+      executionScope,
+      input.defaultLowStockThreshold,
+    );
     await completeIntermediateStep(run, workerId, stepKey, snapshot);
     return { completed: false };
   }
-  if (stepKey === "analyse") {
-    const snapshot = await readStepOutput<WeeklyTradingReportSnapshot>(
+  if (stepKey === "assess") {
+    const snapshot = await readStepOutput<ProductLaunchSnapshot>(
       run,
       "snapshot",
     );
-    const report = buildWeeklyTradingReportResult(snapshot);
-    await completeIntermediateStep(run, workerId, stepKey, report);
+    await completeIntermediateStep(
+      run,
+      workerId,
+      stepKey,
+      buildProductLaunchPreparationResult(snapshot),
+    );
     return { completed: false };
   }
-  const report = await readStepOutput<WeeklyTradingReportResult>(
+  return finalizeFromStep<ProductLaunchPreparationResult>(
     run,
-    "analyse",
+    workerId,
+    stepKey,
+    "assess",
   );
-  await completeFinalStep(run, workerId, stepKey, report);
-  return { completed: true };
 }
 
-async function collectWeeklySnapshot(
+async function finalizeFromStep<T extends MinkWorkflowResult>(
   run: ClaimedWorkflow,
-  executionScope: WorkflowExecutionScope,
-): Promise<WeeklyTradingReportSnapshot> {
-  const input = readWeeklyInput(run.inputJson);
-  const requestedAt = new Date(input.requestedAt);
-  const range = parseAnalyticsRange(
-    { range: "7d", compare: "previous" },
-    input.timeZone,
-    requestedAt,
-  );
-  const location = {
-    locationIds: executionScope.locationIds,
-    selectedId: null,
-    includeUnassigned: input.includeUnassigned,
-  };
-  const [sales, topProducts, channels] = await Promise.all([
-    getSalesAnalytics(run.storeId, location, range, "all"),
-    getTopProducts(run.storeId, location, range, 5),
-    getSalesByChannel(run.storeId, location, range),
-  ]);
-  return {
-    rangeLabel: sales.rangeLabel,
-    comparisonLabel: sales.comparisonLabel,
-    fromInclusive: range.current.from.toISOString(),
-    toExclusive: range.current.to.toISOString(),
-    timeZone: range.timeZone,
-    currency: input.currency,
-    locationLabel: executionScope.locationLabel,
-    netSales: sales.totalSales.value,
-    netSalesTrendPercent: sales.totalSales.trendPct,
-    orders: sales.orders.value,
-    ordersTrendPercent: sales.orders.trendPct,
-    averageOrderValue: sales.averageOrderValue.value,
-    averageOrderValueTrendPercent: sales.averageOrderValue.trendPct,
-    unitsSold: sales.unitsSold.value,
-    unitsSoldTrendPercent: sales.unitsSold.trendPct,
-    topProducts: topProducts.map((product) => ({
-      ...product,
-      dashboardPath: `/dashboard/products/${product.id}`,
-    })),
-    channels,
-    dataAsOf: new Date().toISOString(),
-  };
+  workerId: string,
+  stepKey: string,
+  resultStepKey: string,
+): Promise<{ completed: boolean }> {
+  const result = await readStepOutput<T>(run, resultStepKey);
+  await completeFinalStep(run, workerId, stepKey, result);
+  return { completed: true };
 }
 
 async function markStepStarted(
@@ -882,7 +1042,7 @@ async function completeFinalStep(
   run: ClaimedWorkflow,
   workerId: string,
   stepKey: string,
-  report: WeeklyTradingReportResult,
+  result: MinkWorkflowResult,
 ) {
   await withService(async (db) => {
     await assertActiveLease(db, run, workerId);
@@ -908,7 +1068,7 @@ async function completeFinalStep(
       .set({
         status: "completed",
         currentStep: run.totalSteps,
-        resultJson: report,
+        resultJson: result,
         completedAt: now,
         leaseOwner: null,
         leaseExpiresAt: null,
@@ -1022,7 +1182,7 @@ async function scheduleWorkflowRetry(
       storeId: run.storeId,
       eventKey: `${terminal ? "failed" : "retry"}:${run.attemptCount}`,
       eventType: terminal ? "failed" : "retry_scheduled",
-      stepKey: WORKFLOW_STEPS[run.currentStep],
+      stepKey: workflowStepKey(run.template, run.currentStep),
       detail: { attempt: run.attemptCount, code: safeCode },
     });
   });
@@ -1154,12 +1314,15 @@ function toWorkflowView(
   run: WorkflowRow,
   events?: MinkWorkflowEventView[],
 ): MinkWorkflowView {
-  if (!isMinkWorkflowStatus(run.status)) {
-    throw new Error("Invalid Mink workflow status");
+  if (
+    !isMinkWorkflowStatus(run.status) ||
+    !isMinkWorkflowTemplate(run.template)
+  ) {
+    throw new Error("Invalid Mink workflow record");
   }
   return {
     id: run.id,
-    template: "weekly_trading_report",
+    template: run.template,
     status: run.status as MinkWorkflowStatus,
     currentStep: run.currentStep,
     totalSteps: run.totalSteps,
@@ -1169,7 +1332,7 @@ function toWorkflowView(
     cancelRequested: run.cancelRequestedAt !== null,
     result:
       run.status === "completed"
-        ? (readObject(run.resultJson) as unknown as WeeklyTradingReportResult)
+        ? (readObject(run.resultJson) as unknown as MinkWorkflowResult)
         : null,
     createdAt: run.createdAt,
     updatedAt: run.updatedAt,
@@ -1179,23 +1342,186 @@ function toWorkflowView(
 }
 
 function readWeeklyInput(value: unknown): WeeklyTradingReportInput {
+  return readAuthorityInput(value, "invalid_weekly_report_input");
+}
+
+function readRevenueInput(value: unknown): RevenueDeclineInvestigationInput {
+  const row = readObject(value);
+  const authority = readAuthorityInput(
+    value,
+    "invalid_revenue_investigation_input",
+  );
+  if (!isRevenuePeriod(row.period)) {
+    throw new Error("invalid_revenue_investigation_input");
+  }
+  return { ...authority, period: row.period };
+}
+
+function readProductLaunchInput(value: unknown): ProductLaunchPreparationInput {
+  const row = readObject(value);
+  const authority = readAuthorityInput(value, "invalid_product_launch_input");
+  if (
+    typeof row.productId !== "string" ||
+    !UUID_PATTERN.test(row.productId) ||
+    !(
+      row.variantId === null ||
+      (typeof row.variantId === "string" && UUID_PATTERN.test(row.variantId))
+    ) ||
+    typeof row.requestedSku !== "string" ||
+    row.requestedSku.length < 1 ||
+    row.requestedSku.length > 100 ||
+    !Number.isInteger(row.defaultLowStockThreshold) ||
+    Number(row.defaultLowStockThreshold) < 0 ||
+    Number(row.defaultLowStockThreshold) > 1_000_000
+  ) {
+    throw new Error("invalid_product_launch_input");
+  }
+  return {
+    ...authority,
+    productId: row.productId,
+    variantId: row.variantId as string | null,
+    requestedSku: row.requestedSku,
+    defaultLowStockThreshold: Number(row.defaultLowStockThreshold),
+  };
+}
+
+function readWorkflowInput(
+  template: MinkWorkflowTemplate,
+  value: unknown,
+):
+  | WeeklyTradingReportInput
+  | RevenueDeclineInvestigationInput
+  | ProductLaunchPreparationInput {
+  if (template === "revenue_decline_investigation") {
+    return readRevenueInput(value);
+  }
+  if (template === "product_launch_preparation") {
+    return readProductLaunchInput(value);
+  }
+  return readWeeklyInput(value);
+}
+
+function readAuthorityInput(
+  value: unknown,
+  errorCode: string,
+): WeeklyTradingReportInput {
   const row = readObject(value);
   if (
     typeof row.timeZone !== "string" ||
+    row.timeZone.length < 1 ||
+    row.timeZone.length > 100 ||
     typeof row.currency !== "string" ||
+    !/^[A-Z]{3}$/.test(row.currency) ||
     !Array.isArray(row.locationIds) ||
-    !row.locationIds.every((id) => typeof id === "string") ||
+    row.locationIds.length > MAX_WORKFLOW_LOCATIONS ||
+    !row.locationIds.every(
+      (id) => typeof id === "string" && UUID_PATTERN.test(id),
+    ) ||
+    new Set(row.locationIds).size !== row.locationIds.length ||
     typeof row.restrictedLocationScope !== "boolean" ||
     typeof row.includeUnassigned !== "boolean" ||
     typeof row.locationLabel !== "string" ||
-    !(row.requesterEmail === null || typeof row.requesterEmail === "string") ||
+    row.locationLabel.length < 1 ||
+    row.locationLabel.length > 200 ||
+    !(
+      row.requesterEmail === null ||
+      (typeof row.requesterEmail === "string" &&
+        row.requesterEmail.length <= 320)
+    ) ||
     typeof row.requestedAt !== "string" ||
     Number.isNaN(new Date(row.requestedAt).getTime())
   ) {
-    throw new Error("invalid_weekly_report_input");
+    throw new Error(errorCode);
   }
   return row as unknown as WeeklyTradingReportInput;
 }
+
+function assertQueueAuthority(
+  actor: MinkActorContext,
+  template: MinkWorkflowTemplate,
+) {
+  if (!actor.runId) {
+    throw new MinkToolInputError(
+      "A workflow can be queued only from an active Mink AI run.",
+    );
+  }
+  if (
+    !hasWorkflowPermissions(actor.permissions, template, actor.isSuperadmin)
+  ) {
+    throw new MinkRequestError(
+      "mink_workflow_access_denied",
+      "You do not have permission to start this Mink workflow.",
+      403,
+    );
+  }
+}
+
+function assertActorWorkflowAccess(
+  actor: MinkActorContext,
+  templateValue: unknown,
+  inputValue: unknown,
+) {
+  if (!isMinkWorkflowTemplate(templateValue)) {
+    throw new MinkRequestError(
+      "mink_workflow_not_found",
+      "That Mink workflow is not available.",
+      404,
+    );
+  }
+  readWorkflowInput(templateValue, inputValue);
+  if (
+    !hasWorkflowPermissions(
+      actor.permissions,
+      templateValue,
+      actor.isSuperadmin,
+    )
+  ) {
+    throw new MinkRequestError(
+      "mink_workflow_access_denied",
+      "You no longer have permission to view this workflow.",
+      403,
+    );
+  }
+}
+
+function isRevenuePeriod(value: unknown): value is MinkRevenuePeriod {
+  return value === "7d" || value === "30d" || value === "90d";
+}
+
+function workflowStepKey(
+  templateValue: unknown,
+  position: number,
+): string | undefined {
+  return isMinkWorkflowTemplate(templateValue)
+    ? WORKFLOW_STEPS[templateValue][position]
+    : undefined;
+}
+
+function workflowLabel(template: MinkWorkflowTemplate): string {
+  if (template === "revenue_decline_investigation") {
+    return "Revenue decline investigation";
+  }
+  if (template === "product_launch_preparation") {
+    return "Product launch preparation";
+  }
+  return "Weekly trading report";
+}
+
+function workflowNotificationUrl(
+  template: MinkWorkflowTemplate,
+  resultValue: unknown,
+): string {
+  if (template !== "product_launch_preparation") {
+    return "/dashboard/analytics";
+  }
+  const productId = readObject(resultValue).productId;
+  return typeof productId === "string" && UUID_PATTERN.test(productId)
+    ? `/dashboard/products/${productId}`
+    : "/dashboard/products";
+}
+
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function readObject(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)

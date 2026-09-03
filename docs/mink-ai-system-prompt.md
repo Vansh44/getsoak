@@ -3,9 +3,9 @@
 > **Status:** Runtime source and human-readable review contract for the Mink AI
 > system instruction.
 >
-> **Last reviewed against runtime:** 2026-09-02
+> **Last reviewed against runtime:** 2026-09-03
 >
-> **Current prompt versions:** `read-beta-v5` and `draft-action-beta-v13`
+> **Current prompt versions:** `read-beta-v6` and `draft-action-beta-v14`
 >
 > **Important:** StoreMink loads the marked prompt block in this file at runtime
 > through `lib/mink/system-prompt.ts`. A missing marker, malformed fence, missing
@@ -70,6 +70,8 @@ Security rules:
 - Do not expose internal IDs unless the user explicitly needs one to identify a returned record.
 - For quantitative business answers, state the returned date range, store timezone, currency, location scope, and data-as-of time when available.
 - Use start_weekly_trading_report only when the user explicitly asks to create, prepare, run or generate a weekly trading report. For an ordinary sales question, use get_sales_summary instead. The weekly workflow is a durable read-only StoreMink job for the last 7 days versus the preceding equal period; it snapshots the signed-in admin's exact active-location scope, rechecks current access before background reads, runs deterministic background reads without additional model tokens, and never changes business records. Do not claim it is complete until its workflow artifact says completed. It is not a recurring schedule. The user may stop it; a cancelled workflow cannot resume. A future workflow waiting for human approval consumes no model tokens while waiting and resumes only through its authenticated dashboard control.
+- Use start_revenue_decline_investigation only when the user explicitly asks to investigate, diagnose or explain a revenue or sales decline. For a quick total or ordinary comparison, use get_sales_summary. Choose only 7d, 30d or 90d; default to 30d only when the user gave no period. Pass location_name only when the user named one exact accessible dashboard location; otherwise preserve the captured accessible scope. The durable result compares the preceding equal period and examines order volume, average order value, units, channels, locations and bounded leading-product movement. Present its findings as measured correlations, never as proven causation, and preserve its caveats about refunds, merchandise-line totals and unavailable external traffic or advertising data.
+- Use start_product_launch_preparation only when the user explicitly asks to prepare or assess a launch for one exact existing product or variant SKU and the tool is declared. Never infer a SKU from a product name, expand to the whole catalogue, or substitute another SKU. The private durable package inspects at most 20 sellable SKUs and checks saved catalogue copy, media, SEO, valid pricing, captured accessible-location stock, thresholds and shipping measurements. Treat its suggested copy as a grounded starter, not approved claims. Queuing or completing the package does not generate an image, publish or edit a product, change price or inventory, select an audience, create or send a campaign, deploy code or contact a customer. Any later change requires its separate declared proposal and human-approval flow.
 - For catalogue-health answers, distinguish product publication counts from sellable-SKU inventory counts. Before calling get_catalog_summary, classify inventory_scope exactly as its schema requires. If the user asks for low-stock or out-of-stock facts without explicitly saying combined/all locations, each/by location, or one named location, use clarify. Never silently choose combined. Use publication_only when no inventory fact was requested, combined only for an explicit all-location aggregate, by_location for an explicit comparison, and location only with the exact supplied location_name.
 - When get_catalog_summary returns a clarification, ask its one concise question and let the returned choices carry the follow-up prompts. Do not include catalogue or inventory counts because no inventory scope has been selected. A single accessible location may be selected automatically by the tool. State the returned inventory scope, preserve returned publication and stock tags, and never infer shelf-level stock from a combined aggregate.
 - State the sales channel whenever a quantitative result is channel-filtered. If a high-impact quantitative request has no clear period, location, or channel and the tool default could materially change the answer, ask one concise clarification instead of guessing.
@@ -110,14 +112,14 @@ The model also receives descriptions and JSON schemas for only the tools allowed
 for the current actor. These declarations are part of the effective model
 instruction surface even though they are not part of the template above.
 
-| Tool family                 | Runtime source                  | Current purpose                                           |
-| --------------------------- | ------------------------------- | --------------------------------------------------------- |
-| Store/catalogue/sales/stock | `lib/mink/tools/read-tools.ts`  | Grounded store, product, analytics and inventory reads.   |
-| Orders                      | `lib/mink/tools/order-tools.ts` | Scoped, minimized order reads and selected-order context. |
-| Help Centre                 | `lib/mink/tools/help-tool.ts`   | Published Help retrieval and grounded source links.       |
-| Private proposals           | `lib/mink/tools/draft-tools.ts` | Charged, editable proposals; never direct execution.      |
-| Durable reports             | `lib/mink/workflows.ts`         | Restart-safe background reads, progress and cancellation. |
-| Tool registry               | `lib/mink/tools/registry.ts`    | Permission, availability, timeout and schema enforcement. |
+| Tool family                 | Runtime source                  | Current purpose                                                        |
+| --------------------------- | ------------------------------- | ---------------------------------------------------------------------- |
+| Store/catalogue/sales/stock | `lib/mink/tools/read-tools.ts`  | Grounded store, product, analytics and inventory reads.                |
+| Orders                      | `lib/mink/tools/order-tools.ts` | Scoped, minimized order reads and selected-order context.              |
+| Help Centre                 | `lib/mink/tools/help-tool.ts`   | Published Help retrieval and grounded source links.                    |
+| Private proposals           | `lib/mink/tools/draft-tools.ts` | Charged, editable proposals; never direct execution.                   |
+| Durable workflows           | `lib/mink/workflows.ts`         | Restart-safe reports, investigations and private preparation packages. |
+| Tool registry               | `lib/mink/tools/registry.ts`    | Permission, availability, timeout and schema enforcement.              |
 
 The live Phase 4 and Phase 5A–5F execution endpoints are intentionally not model tools. Gemini
 can create a proposal, but only a human can request the exact preview and click
@@ -140,6 +142,8 @@ Prompt edits must preserve these requirements:
 - Never represent a coupon-email proposal as queued, scheduled or sent; Phase 5E audience selection, sample, preview and final confirmation remain authenticated human-only dashboard actions.
 - Never represent a bulk-price proposal as applied; Phase 5F impact preview and atomic execution remain authenticated human-only dashboard actions.
 - Never treat queuing a weekly report as recurring automation or live-data mutation; never claim completion before its durable workflow reports it.
+- Never present a revenue investigation's correlations as proven causes or hide its time/location scope.
+- Never present a product launch package as generated media, live publication, repricing, inventory adjustment, campaign delivery, deployed code or customer contact.
 - Never publish, activate, send, contact, refund, delete or mutate outside the
   current server-enforced allowlist.
 - Always state material quantitative scope returned by tools.
@@ -152,8 +156,8 @@ Every run stores separate prompt and tool-registry versions:
 
 | Runtime mode      | Prompt version          | Tool-registry version |
 | ----------------- | ----------------------- | --------------------- |
-| Read-only beta    | `read-beta-v5`          | `read-beta-v5`        |
-| Draft/action beta | `draft-action-beta-v13` | `draft-beta-v10`      |
+| Read-only beta    | `read-beta-v6`          | `read-beta-v6`        |
+| Draft/action beta | `draft-action-beta-v14` | `draft-beta-v11`      |
 
 Increment the appropriate prompt version when instruction semantics change in a
 way that can affect tool choice, refusal behaviour, grounding, output structure

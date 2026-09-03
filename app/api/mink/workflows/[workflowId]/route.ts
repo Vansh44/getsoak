@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import { can } from "@/app/dashboard/lib/permissions";
 import { getMinkActorContext } from "@/lib/mink/actor-context";
 import { getMinkConfig } from "@/lib/mink/config";
 import { MinkRequestError } from "@/lib/mink/errors";
@@ -86,13 +85,6 @@ async function handle(
     const actor = await getMinkActorContext(requestId, {
       betaRequireInvite: config.betaRequireInvite,
     });
-    if (!can(actor.permissions, "analytics", "view", actor.isSuperadmin)) {
-      throw new MinkRequestError(
-        "mink_workflow_access_denied",
-        "You no longer have permission to view this report.",
-        403,
-      );
-    }
     const limited = await rateLimit(
       `mink-workflow-${operation}:${actor.storeId}:${actor.adminId}`,
       { max: operation === "read" ? 120 : 10, windowSeconds: 60 },

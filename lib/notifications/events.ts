@@ -704,10 +704,10 @@ export const EVENTS: readonly EventDef[] = [
   },
   {
     key: "mink.workflow_completed",
-    label: "Mink report ready",
-    description: "A requested Mink background report finished safely.",
+    label: "Mink workflow ready",
+    description: "A requested Mink background workflow finished safely.",
     group: "Plan & billing",
-    section: "analytics",
+    section: "dashboard",
     severity: "success",
     audiences: { "store-admins": IN_APP },
     configurable: false,

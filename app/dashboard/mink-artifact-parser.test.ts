@@ -57,6 +57,12 @@ describe("readMinkArtifacts", () => {
     expect(readMinkArtifacts([valid])).toEqual([valid]);
     expect(
       readMinkArtifacts([
+        { ...valid, template: "revenue_decline_investigation" },
+        { ...valid, template: "product_launch_preparation" },
+      ]),
+    ).toHaveLength(2);
+    expect(
+      readMinkArtifacts([
         { ...valid, runId: "not-a-uuid" },
         { ...valid, template: "delete_everything" },
         { ...valid, status: "unknown" },

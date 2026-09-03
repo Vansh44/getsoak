@@ -5075,7 +5075,7 @@ export const minkWorkflowRuns = pgTable(
     }).onDelete("cascade"),
     check(
       "mink_workflow_runs_template_check",
-      sql`template = 'weekly_trading_report'`,
+      sql`template = ANY (ARRAY['weekly_trading_report'::text, 'revenue_decline_investigation'::text, 'product_launch_preparation'::text])`,
     ),
     check(
       "mink_workflow_runs_status_check",

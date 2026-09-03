@@ -1,4 +1,5 @@
 import type { MinkArtifact } from "@/lib/mink/types";
+import { MINK_WORKFLOW_TEMPLATES } from "@/lib/mink/workflow-types";
 
 const MINK_ARTIFACT_TYPES = new Set<MinkArtifact["type"]>([
   "metrics",
@@ -52,7 +53,9 @@ export function readMinkArtifacts(value: unknown): MinkArtifact[] {
           /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
             workflow.runId,
           ) &&
-          workflow.template === "weekly_trading_report" &&
+          MINK_WORKFLOW_TEMPLATES.includes(
+            workflow.template as (typeof MINK_WORKFLOW_TEMPLATES)[number],
+          ) &&
           typeof workflow.title === "string" &&
           workflow.title.length <= 120 &&
           typeof workflow.description === "string" &&
