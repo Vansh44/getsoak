@@ -756,8 +756,15 @@ export function buildSlowInventoryPromotionResult(
   const marginBound = everyMarginKnown
     ? Math.floor(Math.min(...knownMargins) - 5)
     : 0;
+  // ★★ A CEILING OF 0 MEANS "WITHHOLD", NOT "RECOMMEND 0%".
+  // `offers.maxTotalDiscountPercent` declares `min: 0` and 0 is a real setting
+  // — the merchant who switched offer discounting off entirely. Clamping with
+  // Math.min alone turned that into an explicit `0` suggestion carrying a note
+  // that claimed it preserved a five-point margin buffer, so the store that
+  // locked discounting down hardest got the one nonsensical recommendation.
+  const discountingAllowed = snapshot.storeDiscountCeilingPercent > 0;
   const suggestedDiscountPercent =
-    everyMarginKnown && marginBound >= 5
+    everyMarginKnown && marginBound >= 5 && discountingAllowed
       ? Math.min(10, marginBound, snapshot.storeDiscountCeilingPercent)
       : null;
   const hasCandidates = targetSkus.length > 0;
@@ -778,7 +785,9 @@ export function buildSlowInventoryPromotionResult(
       activationRequiresSeparateApproval: true,
       note: hasCandidates
         ? suggestedDiscountPercent == null
-          ? "Choose the discount only after checking missing or insufficient cost/margin data, and set a total budget before creating an offer."
+          ? discountingAllowed
+            ? "Choose the discount only after checking missing or insufficient cost/margin data, and set a total budget before creating an offer."
+            : "This store's maximum offer discount is set to 0%, so no discount was suggested. Raise that limit in offer settings first if you want to run a markdown."
           : `A conservative ${suggestedDiscountPercent}% test preserves at least a 5-point gross-margin buffer for the listed SKUs with known cost data; review actual basket economics before use.`
         : "No promotion terms were prepared because no eligible candidate was found.",
     },

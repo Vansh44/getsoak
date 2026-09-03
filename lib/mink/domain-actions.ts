@@ -32,6 +32,7 @@ import {
   domainActionFields,
   domainActionToolForDraftKind,
   isCreateDomainTool,
+  isMinkDomainResourceType,
   resourceTypeForDomainTool,
   type MinkDomainActionApproval,
   type MinkDomainActionResult,
@@ -821,6 +822,27 @@ async function deleteCreatedResource(
       )
       .returning({ id: coupons.id });
     if (!rows[0]) throw resourceConflict("coupon", "during rollback");
+  } else if (approval.toolName === "create_offer") {
+    const rows = await db
+      .delete(offers)
+      .where(
+        and(
+          eq(offers.id, current.id),
+          eq(offers.storeId, approval.storeId),
+          eq(offers.updatedAt, approval.resourceVersion),
+          // ★ THE SAME THREE FACTS `assertSafeCreateRollback` CHECKED, re-checked
+          // inside the statement that deletes. A human can switch the offer on
+          // or it can price an order between the read and the write, and
+          // `offer_redemptions` and `order_item_offers` point at this row —
+          // deleting it then would orphan the attribution behind every line it
+          // discounted.
+          eq(offers.status, "disabled"),
+          eq(offers.redemptionCount, 0),
+          eq(offers.spentPaise, 0),
+        ),
+      )
+      .returning({ id: offers.id });
+    if (!rows[0]) throw resourceConflict("offer", "during rollback");
   } else if (approval.toolName === "create_customer_group") {
     const rows = await db
       .delete(userGroups)
@@ -1171,20 +1193,21 @@ function resourceValues(
   if (resource.type === "offer") {
     const reward = (resource.rewardConfig ?? {}) as Record<string, unknown>;
     const trigger = (resource.triggerConfig ?? {}) as Record<string, unknown>;
-    const num = (v: unknown) => {
-      const n = Number(v);
-      return Number.isFinite(n) ? String(n) : null;
-    };
+    // ★ THE SAME TEXT FORMAT `normalizeProposedValues` EMITS, deliberately.
+    // `sameValues` compares these field by field as strings, so a stored
+    // "5000" against a proposed "5000.00" would report a change nobody made
+    // — and for `activate_offer`, whose proposal IS the live row with one
+    // field flipped, every activation would read as a terms edit.
     return {
       name: resource.name,
       description: resource.description,
       reward_type: resource.rewardType,
-      reward_value: num(reward.percent ?? reward.amount),
-      min_subtotal: num(trigger.minSubtotal),
+      reward_value: optionalMoney(reward.percent ?? reward.amount),
+      min_subtotal: optionalMoney(trigger.minSubtotal),
       budget:
         resource.budgetPaise === null
           ? null
-          : String(Number(resource.budgetPaise) / 100),
+          : money(Number(resource.budgetPaise) / 100),
       max_redemptions:
         resource.maxRedemptions === null
           ? null
@@ -1308,6 +1331,13 @@ function normalizeProposedValues(
           : "all customers (no group restriction)",
     };
   }
+  if (
+    tool === "create_offer" ||
+    tool === "update_offer" ||
+    tool === "activate_offer"
+  ) {
+    return proposedOfferValues(tool, content, before);
+  }
   const color = content.color.trim().toLowerCase();
   if (!GROUP_COLORS.has(color)) {
     throw invalidDraft("Colour must be blue, green, amber, violet or grey.");
@@ -1316,6 +1346,69 @@ function normalizeProposedValues(
     name: requiredText(content.name, "Group name", 120),
     description: nullableText(content.description, 500),
     color,
+  };
+}
+
+/**
+ * The offer fields Mink may propose.
+ *
+ * ★★ WITHOUT THIS BRANCH EVERY OFFER PROPOSAL CRASHED. `normalizeProposedValues`
+ * ended in the customer-group branch, which reads `content.color` — a key no
+ * offer draft has, because `MINK_DRAFT_CONFIG.offer_create` declares eight
+ * fields and `normalizeMinkDraftContent` returns exactly the configured keys.
+ * So reviewing any offer proposal threw `TypeError: Cannot read properties of
+ * undefined (reading 'trim')` and all three offer tools were dead on arrival.
+ * The same fallthrough family `resourceTypeForDomainTool` was rewritten to name
+ * explicitly; this file dispatches on the tool in several places and every one
+ * of them has to name offers.
+ */
+function proposedOfferValues(
+  tool: MinkDomainActionTool,
+  content: Record<string, string>,
+  before: MinkDomainActionValues,
+): MinkDomainActionValues {
+  // ★ ACTIVATION MOVES EXACTLY ONE FIELD. Its draft carries only `offer_id`, so
+  // the proposed values are the live offer's own values with `status` flipped.
+  // That is also what makes `writeOffer`'s mandatory budget and reward
+  // re-checks read the offer AS IT STANDS TODAY rather than as the proposal
+  // once described it — an offer whose budget was cleared by hand after Mink
+  // wrote it must not go live uncapped.
+  if (tool === "activate_offer") {
+    return { ...before, status: "active" };
+  }
+  const rewardType = content.reward_type.trim().toLowerCase();
+  if (rewardType !== "percent_off" && rewardType !== "amount_off") {
+    throw invalidDraft(
+      "Reward must be percent_off or amount_off. Bundles, gifts, ladders and free delivery are set up by hand.",
+    );
+  }
+  const rewardValue = positiveMoney(content.reward_value, "Discount");
+  if (rewardType === "percent_off" && Number(rewardValue) > 100) {
+    throw invalidDraft("A percentage discount cannot exceed 100%.");
+  }
+  return {
+    name: requiredText(content.name, "Offer name", 120),
+    description: nullableText(content.description, 500),
+    reward_type: rewardType,
+    reward_value: rewardValue,
+    min_subtotal: optionalPositiveMoney(
+      content.min_subtotal,
+      "Minimum order value",
+    ),
+    // ★ REQUIRED, NOT OPTIONAL. An automatic offer applies itself to every
+    // qualifying order from the instant it goes live, so the budget cap is the
+    // difference between a bounded mistake and an unbounded one. `writeOffer`
+    // refuses without it either way; accepting a blank here would only move the
+    // refusal to after the merchant had approved.
+    budget: positiveMoney(content.budget, "Total budget"),
+    max_redemptions: optionalPositiveInteger(
+      content.max_redemptions,
+      "Maximum uses",
+    ),
+    valid_until: optionalTimestamp(content.valid_until, "Ends"),
+    // ★ PINNED DISABLED, never read from the proposal. Turning an offer on is
+    // its own approval (domain-action-types.ts `isActivationTool`).
+    status: "disabled",
   };
 }
 
@@ -1355,6 +1448,19 @@ async function assertNoUniqueConflict(
       .limit(1);
     if (rows[0])
       throw uniqueConflict("A coupon with this code already exists.");
+    return;
+  }
+  if (
+    tool === "create_offer" ||
+    tool === "update_offer" ||
+    tool === "activate_offer"
+  ) {
+    // ★ NOTHING TO COLLIDE WITH. `offers` has no unique constraint on `name`
+    // — only (store_id, code) — and Mink only ever writes
+    // `delivery: 'automatic'`, which the schema requires to carry a NULL code.
+    // This returns rather than falling through to the customer-group check
+    // below, which would refuse an offer for sharing a name with an unrelated
+    // customer group and never check anything about the offer at all.
     return;
   }
   const rows = await db
@@ -1734,16 +1840,34 @@ async function lockOwnedApproval(
   `);
 }
 
+/**
+ * The dashboard section that governs each tool.
+ *
+ * ★★ A TOTAL MAP, NOT A CHAIN ENDING IN A DEFAULT. This was a ternary whose
+ * final arm was `"users"`, so the three offer tools — which nothing else in the
+ * codebase gates on anything but `promotions` — were authorised by the CUSTOMER
+ * list permission instead. That is wrong in both directions at once: an admin
+ * with `users:manage` and no promotions rights could create and switch on a
+ * live automatic offer, while the merchant's actual offers manager was refused.
+ * Written as a record so a tool added later fails to compile rather than
+ * silently inheriting somebody else's section.
+ */
+const DOMAIN_ACTION_SECTION: Record<MinkDomainActionTool, string> = {
+  create_product: "products",
+  create_coupon: "marketing",
+  update_coupon: "marketing",
+  create_offer: "promotions",
+  update_offer: "promotions",
+  activate_offer: "promotions",
+  create_customer_group: "users",
+  update_customer_group: "users",
+};
+
 function assertDomainActionAuthority(
   actor: MinkActorContext,
   tool: MinkDomainActionTool,
 ) {
-  const section =
-    tool === "create_product"
-      ? "products"
-      : tool === "create_coupon" || tool === "update_coupon"
-        ? "marketing"
-        : "users";
+  const section = DOMAIN_ACTION_SECTION[tool];
   if (
     actor.draftingEnabled &&
     can(actor.permissions, section, "manage", actor.isSuperadmin)
@@ -1835,6 +1959,27 @@ function money(value: number) {
   return (Math.round(Number(value) * 100) / 100).toFixed(2);
 }
 
+/** Text form of a stored numeric column, in the same shape `money` emits. */
+function optionalMoney(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? money(number) : null;
+}
+
+function optionalPositiveMoney(value: string, label: string) {
+  return value.trim() ? positiveMoney(value, label) : null;
+}
+
+/** Blank means uncapped; a stored cap must be positive (`offers_limits_check`). */
+function optionalPositiveInteger(value: string, label: string) {
+  if (!value.trim()) return null;
+  const result = nonNegativeInteger(value, label);
+  if (Number(result) <= 0) {
+    throw invalidDraft(`${label} must be greater than zero, or left blank.`);
+  }
+  return result;
+}
+
 function nonNegativeInteger(value: string, label: string) {
   const number = Number(value);
   if (!Number.isInteger(number) || number < 0 || number > 1_000_000_000) {
@@ -1858,9 +2003,7 @@ function resourceStoreId(resource: ResourceRow) {
 }
 
 function isResourceType(value: string): value is MinkDomainResourceType {
-  return (
-    value === "product" || value === "coupon" || value === "customer_group"
-  );
+  return isMinkDomainResourceType(value);
 }
 
 function isActionStatus(value: string): value is MinkProductActionStatus {

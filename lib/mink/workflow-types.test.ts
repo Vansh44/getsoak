@@ -355,6 +355,57 @@ describe("slow inventory promotion result", () => {
     );
   });
 
+  it("withholds a discount when the store's own ceiling is zero", () => {
+    // ★ 0 IS A REAL SETTING. `offers.maxTotalDiscountPercent` declares
+    // `min: 0` and 0 means "stop offers discounting anything". Clamping with
+    // Math.min alone turned that into an explicit 0% suggestion carrying a
+    // note that claimed it preserved a five-point margin buffer — so the
+    // store that locked discounting down hardest got the one nonsensical
+    // recommendation.
+    const result = buildSlowInventoryPromotionResult({
+      storeName: "Echos",
+      period: "30d",
+      periodDays: 30,
+      rangeLabel: "Last 30 days",
+      fromInclusive: "2026-08-03T00:00:00.000Z",
+      toExclusive: "2026-09-02T00:00:00.000Z",
+      timeZone: "Asia/Kolkata",
+      currency: "INR",
+      locationLabel: "Delhi",
+      locationCount: 1,
+      candidateShelves: [
+        {
+          productId: "product-1",
+          variantId: "variant-1",
+          productName: "Basmati Rice (Sample)",
+          variantName: "5 kg",
+          sku: "SKU10010007V028",
+          locationId: "delhi-1",
+          locationName: "Delhi",
+          stock: 20,
+          unitsSold: 2,
+          salesAmount: 900,
+          effectivePrice: 450,
+          // Margin is known and generous, so the ONLY thing withholding the
+          // suggestion is the store's ceiling.
+          unitCost: 300,
+          productDashboardPath: "/dashboard/products/product-1",
+          inventoryDashboardPath: "/dashboard/inventory?location=delhi-1",
+        },
+      ],
+      totalCandidateShelves: 1,
+      truncated: false,
+      storeDiscountCeilingPercent: 0,
+      dataAsOf: "2026-09-02T00:01:00.000Z",
+    });
+
+    expect(result.candidates[0].grossMarginPercent).toBe(33.3);
+    expect(result.promotionProposal.suggestedDiscountPercent).toBeNull();
+    expect(result.promotionProposal.note).toContain("set to 0%");
+    // The old clamp produced a "conservative 0% test" that claimed a buffer.
+    expect(result.promotionProposal.note).not.toContain("0% test");
+  });
+
   it("withholds a discount when cost data cannot prove the margin buffer", () => {
     const result = buildSlowInventoryPromotionResult({
       storeName: "Echos",

@@ -3394,9 +3394,17 @@ the trusted `store_id`, and direct customer PII is minimized/masked.
      subset of a total presented as a total is worse than nothing. The actor's
      own server-derived `locationIds` is the source, so it costs no query, and
      `null`/`[]` both mean unrestricted — the contract `admin_locations` has
-     always had. ★ `readAction` also parses the ACTION AS A STRING before the
-     allowlist: it validated `String(row.action)` and returned the raw value, so
-     `{"action":["cancel"]}` passed the allowlist and then failed
+     always had. ★★ AND THE GUARD BELONGS ON ALL THREE ENTRY POINTS, not just
+     the read: `cancelMinkWorkflow` returns the SAME view, and a completed run
+     falls straight through its early return to `toWorkflowView(run)`, which
+     carries `result_json` — so an admin refused 403 on GET could press Stop and
+     be handed the store-wide figures anyway. The card made that one click, not
+     a theoretical request: the artifact persisted in the thread still says
+     `queued`, so `active` is true and Stop renders on every re-open. Resume
+     carries it too, because approving more work on a scope you cannot see is
+     the same question. ★ `readAction` also parses the ACTION AS A STRING before
+     the allowlist: it validated `String(row.action)` and returned the raw
+     value, so `{"action":["cancel"]}` passed the allowlist and then failed
      `action === "cancel"` (an array is not a string) and fell through to
      RESUME — a body whose only stated intent was to cancel resumed the run.
      The write boundary is same-origin, 1KB streamed-body limited, strict-key
@@ -3405,9 +3413,14 @@ the trusted `store_id`, and direct customer PII is minimized/masked.
      request checked before the next step, and cancelled runs can never resume.
      The first template is read-only and never enters approval, but the runtime
      can persist a token-free `waiting_approval` checkpoint for later Phase 6
-     templates. Completion writes a permission-routed in-dashboard
-     `mink.workflow_completed` notification. A partial unique activity-event
-     key plus reconciliation on later heartbeats makes completion fan-out
+     templates. Completion writes an in-dashboard `mink.workflow_completed`
+     notification to THE ADMIN WHO ASKED, via `EmitEventInput.restrictToAdminIds`
+     (§24). Its event section is `dashboard`, which every admin can view, so the
+     default permission routing told the whole team about one person's request —
+     including the private drafting workflows (slow inventory, delayed pickup)
+     that only the requester can open, linking them to a page they may have no
+     permission for. A partial unique activity-event key plus reconciliation on
+     later heartbeats makes completion fan-out
      retry/concurrency safe even if a worker stops after committing the report.
      Migration
      `20260902_0058_mink_phase_6a_durable_workflows` owns the tables, tenant
@@ -5664,6 +5677,13 @@ the trusted `store_id`, and direct customer PII is minimized/masked.
       entry is in-app only: `plan.changed` + `subscription.payment_failed`
       leave email to `lib/email/billing-emails.ts`. `plan.expiring` keeps its
       email — nothing else warns before a lapse.
+    - **★ `restrictToAdminIds` NARROWS THE TEAM AUDIENCE, AND ONLY EVER
+      NARROWS.** For an event that is genuinely about one admin's own request —
+      a Mink workflow they queued (§20a) — rather than news the whole team
+      needs. Applied in `fanOut` AFTER the section permission filter and the
+      store's routing rule, so it obeys the same floor everything else does:
+      naming somebody who cannot view the event's section delivers to nobody,
+      not to them. Omitting it leaves every other event exactly as it was.
     - **ROUTING HAS A LOCATION AXIS, AND IT IS A SCOPE NOT A MODE.**
       `RoutingRule` was `mode: permission | roles | admins` with no idea where
       anyone worked, so a manager bound to one shop was still emailed about
@@ -8791,6 +8811,41 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       (`pg_get_constraintdef(oid) LIKE '%create_coupon%'`) rather than by
       listing the tables you expect.** That query returned three; enumerating by
       hand returned two.
+      ★★ AND THE APPLICATION HELD FIVE MORE OF THE SAME SHAPE — the migrations
+      were the half that got audited. `domain-actions.ts` dispatches on the tool
+      or the resource type in a dozen places and Offers reached only some of
+      them, so the feature was dead on arrival in production while every test
+      stayed green (there was no `domain-actions.test.ts` at all). In severity
+      order:
+      **`isResourceType` still read `product | coupon | customer_group`**, and
+      `validateDomainApprovalRow` runs it over every approval created, executed
+      or rolled back — so the database accepted `resource_type = 'offer'` (0070)
+      and the app threw "This Mink approval is invalid" on the way in;
+      **`assertDomainActionAuthority`'s section ternary ended in `"users"`**, so
+      the action gate asked for the CUSTOMER LIST permission while
+      `MINK_DRAFT_PERMISSIONS` (drafts.ts) asks for `promotions` — the two
+      halves of one feature disagreeing about who owns it. ⚠ The escalation
+      direction was NOT reachable: a draft is created and previewed by the same
+      admin and `drafts.ts` refuses a `users:manage`-only admin at creation, so
+      what actually happened is that the merchant's real offers manager was
+      refused at review. Fixed anyway, and as a total map: two gates on one
+      feature that disagree are one upstream change away from being an
+      escalation; **`normalizeProposedValues` ended in the customer-group branch**,
+      which reads `content.color`, a key no offer draft has, so every review
+      threw `TypeError: Cannot read properties of undefined`;
+      **`assertNoUniqueConflict` fell into the same branch** and refused an offer
+      for sharing a name with an unrelated customer group; and
+      **`deleteCreatedResource` had no `create_offer` arm**, so rollback threw
+      `invalid approval` even though `assertSafeCreateRollback`'s dedicated
+      offer branch had just cleared it.
+      ★ THE FIXES ARE TOTAL MAPS WHERE A TERNARY WAS. `MINK_DOMAIN_RESOURCE_TYPES`
+      is now one `as const` list that the type AND the guard both derive from,
+      and `DOMAIN_ACTION_SECTION` is a `Record<MinkDomainActionTool, string>` so
+      a tool added later fails to COMPILE rather than inheriting somebody else's
+      section. `resourceValues` and `normalizeProposedValues` also emit one text
+      format for money (`money()`, not `String(Number(x))`) because `sameValues`
+      compares them as strings: "5000" against "5000.00" would report a change
+      nobody made, and would make every activation read as a terms edit.
     - `PosCatalogItem` carries `categoryId` (cache SCHEMA_VERSION v4) so the
       till prices a scoped offer identically.
 

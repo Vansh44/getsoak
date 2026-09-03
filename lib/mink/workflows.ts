@@ -376,6 +376,15 @@ export async function cancelMinkWorkflow(
       );
     }
     assertActorWorkflowAccess(actor, run.template, run.inputJson);
+    // ★★ THE SAME SCOPE GUARD THE READ APPLIES, because this returns the same
+    // view. A completed run falls straight through to `toWorkflowView(run)`
+    // below, and that carries `result_json` — so without this line an admin who
+    // is refused 403 on GET could press Stop and be handed the store-wide
+    // figures anyway. The card makes that a one-click path rather than a
+    // theoretical one: the artifact persisted in the thread still says
+    // "queued", so `active` is true and the Stop button renders on every
+    // re-open.
+    assertActorStillSeesCapturedScope(actor, run.template, run.inputJson);
     if (["completed", "failed", "cancelled"].includes(run.status)) {
       return toWorkflowView(run);
     }
@@ -453,6 +462,9 @@ export async function resumeMinkWorkflow(
       );
     }
     assertActorWorkflowAccess(actor, run.template, run.inputJson);
+    // Approving more work on a scope you can no longer see is the same
+    // question as reading its result, so it gets the same answer.
+    assertActorStillSeesCapturedScope(actor, run.template, run.inputJson);
     if (run.status !== "waiting_approval") {
       throw new MinkRequestError(
         "mink_workflow_not_resumable",
@@ -519,9 +531,37 @@ export async function runMinkWorkflowWorker(
     Math.min(MAX_MINK_WORKFLOW_CLAIMS_PER_RUN, Math.trunc(limit)),
   );
   const workerId = crypto.randomUUID();
-  result.workflowsFailed += await failExpiredExhaustedWorkflows(bounded);
+  // ★★ ONE FAILING PASS MUST NOT COST THE OTHER TWO. This heartbeat does three
+  // independent things — reap dead leases, walk the queue, deliver completion
+  // notices — and they used to share one uncaught path: a throw in the reaper
+  // ran before the loop, so it took the queue AND the notification outbox down
+  // with it, and a workflow could finish with nobody ever told. That is the
+  // same failure `parseClaimedWorkflow` was fixed for, reachable from a
+  // different throw site.
+  //
+  // ★ HELD, NOT SWALLOWED. The first failure is rethrown once every pass has
+  // had its turn, so the cron still answers 503 and a corrupt claimed row stays
+  // exactly as loud as it was — the only thing that changed is that one broken
+  // pass no longer jumps over the other two.
+  let passError: unknown = null;
+  try {
+    result.workflowsFailed += await failExpiredExhaustedWorkflows(bounded);
+  } catch (error) {
+    logError("mink workflow worker: lease reaper failed", error, { workerId });
+    passError ??= error;
+  }
   for (let index = 0; index < bounded; index += 1) {
-    const run = await claimWorkflow(workerId);
+    let run: ClaimedWorkflow | null;
+    try {
+      run = await claimWorkflow(workerId);
+    } catch (error) {
+      // Deliberately outside the per-run try below: with no claimed run there
+      // is nothing to retry or cancel, so stop walking the queue and let the
+      // completion pass still run before this surfaces.
+      logError("mink workflow worker: claim failed", error, { workerId });
+      passError ??= error;
+      break;
+    }
     if (!run) break;
     result.claims += 1;
     try {
@@ -561,11 +601,19 @@ export async function runMinkWorkflowWorker(
       else result.workflowsFailed += 1;
     }
   }
-  result.notificationsDelivered =
-    await deliverPendingWorkflowNotifications(bounded);
+  try {
+    result.notificationsDelivered =
+      await deliverPendingWorkflowNotifications(bounded);
+  } catch (error) {
+    logError("mink workflow worker: completion delivery failed", error, {
+      workerId,
+    });
+    passError ??= error;
+  }
   if (result.claims > 0) {
     logInfo("mink workflow worker: completed", { workerId, ...result });
   }
+  if (passError) throw passError;
   return result;
 }
 
@@ -688,7 +736,11 @@ function assertActorStillSeesCapturedScope(
   const bindings = actor.locationIds;
   // Unrestricted: null by contract, and an empty array means the same thing —
   // "no rows = unrestricted" is what `admin_locations` has always meant.
-  if (bindings === null || bindings.length === 0) return;
+  // A missing value is read the same way rather than thrown on: the type says
+  // `string[] | null` and `getMinkActorContext` always fills it, so `undefined`
+  // means a caller built an actor by hand — and a TypeError there is worse than
+  // either honest answer.
+  if (!bindings || bindings.length === 0) return;
   if (!isMinkWorkflowTemplate(templateValue)) return;
   const input = readWorkflowInput(templateValue, inputValue);
 
@@ -743,6 +795,7 @@ async function deliverPendingWorkflowNotifications(limit: number) {
       .select({
         id: minkWorkflowRuns.id,
         storeId: minkWorkflowRuns.storeId,
+        adminId: minkWorkflowRuns.adminId,
         template: minkWorkflowRuns.template,
         result: minkWorkflowRuns.resultJson,
       })
@@ -778,6 +831,16 @@ async function deliverPendingWorkflowNotifications(limit: number) {
         template: run.template,
         url: workflowNotificationUrl(run.template, run.result),
       },
+      // ★★ TO THE ADMIN WHO ASKED, AND NOBODY ELSE. The event's section is
+      // `dashboard`, which every admin can view, so the default permission
+      // routing told the whole team about one person's request — including the
+      // private drafting workflows (slow inventory, delayed pickup) that only
+      // the requester can open, and linking them to a page they may have no
+      // permission for. `restrictToAdminIds` narrows the already
+      // permission-filtered set, so it can only ever remove people: if the
+      // requester has since lost even Home access, nobody is notified and the
+      // activity_events row still stands as the record.
+      restrictToAdminIds: [run.adminId],
       deduplicate: true,
     });
     if (eventId) delivered += 1;
