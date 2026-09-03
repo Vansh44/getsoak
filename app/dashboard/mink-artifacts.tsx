@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import type { MinkArtifact } from "@/lib/mink/types";
 import { MinkProposalCard } from "./mink-proposal-card";
+import { MinkWorkflowCard } from "./mink-workflow-card";
 
 export function MinkArtifacts({
   artifacts,
@@ -64,6 +65,14 @@ export function MinkArtifacts({
             <MinkProposalCard
               key={`${artifact.type}-${artifact.draftId}`}
               proposal={artifact}
+            />
+          );
+        }
+        if (artifact.type === "workflow") {
+          return (
+            <MinkWorkflowCard
+              key={`${artifact.type}-${artifact.runId}`}
+              artifact={artifact}
             />
           );
         }

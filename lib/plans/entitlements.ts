@@ -139,22 +139,119 @@ export async function assertCanActivateCoupon(
   storeId: string,
   excludeCouponId?: string,
 ) {
-  await lockLimit(db, storeId, "active-coupons");
+  await assertCanActivateDiscount(db, storeId, excludeCouponId, "coupons");
+}
+
+/**
+ * How many discounts this store is running, counting the MERGED pool.
+ *
+ * ★★ ONE POOL, BECAUSE A COUPON IS AN OFFER NOW (docs/offers-plan.md §2).
+ * `assertCanActivateOffer` counted `offers` and `assertCanActivateCoupon`
+ * counted `coupons`, under DIFFERENT advisory locks — so a Free store ran three
+ * of each, six concurrent discounts on a plan that allows three, and two
+ * simultaneous writes could not even see one another. `assertCanActivateOffer`'s
+ * own docblock said it counted the merged pool; it never did.
+ *
+ * ★ A UNION ON `id` IS EXACT, and that is not a coincidence: migration 0059
+ * inserts each offer with `SELECT c.id`, so a migrated coupon and its offer
+ * SHARE a primary key. The union therefore counts it once, while a coupon that
+ * never migrated (a stored code not in normal form) or one written since (Mink
+ * Phase 4C still creates `coupons`) has an id in only one table and counts
+ * once too. Summing the two counts would double every migrated coupon.
+ *
+ * ★ AND THE EXCLUSION WORKS ACROSS BOTH for the same reason — editing a
+ * migrated coupon excludes its row from both halves with one id.
+ */
+async function countActiveDiscounts(
+  db: Db,
+  storeId: string,
+  excludeId?: string,
+): Promise<number> {
+  // ★ THE DEPLOY WINDOW. DDL is a separate release gate, so this code reaches
+  // production before 20260902_0059 does — and a query naming a table that does
+  // not exist yet would abort the whole transaction, taking coupon creation
+  // down with it. `to_regclass` answers without throwing; before the migration
+  // the pool is simply the coupons, which is exactly what it was.
+  const probe = await db.execute(
+    sql`select to_regclass('public.offers') is not null as ready`,
+  );
+  const offersReady =
+    (probe.rows[0] as { ready: boolean | null } | undefined)?.ready === true;
+
+  if (!offersReady) {
+    const condition = excludeId
+      ? and(
+          eq(coupons.storeId, storeId),
+          eq(coupons.status, "active"),
+          ne(coupons.id, excludeId),
+        )
+      : and(eq(coupons.storeId, storeId), eq(coupons.status, "active"));
+    const [row] = await db
+      .select({ n: count() })
+      .from(coupons)
+      .where(condition);
+    return row?.n ?? 0;
+  }
+
+  const merged = await db.execute(sql`
+    select count(*)::int as n
+      from (
+        select id from public.offers
+         where store_id = ${storeId}::uuid and status = 'active'
+        union
+        select id from public.coupons
+         where store_id = ${storeId}::uuid and status = 'active'
+      ) t
+     where ${excludeId ?? null}::uuid is null or t.id <> ${excludeId ?? null}::uuid
+  `);
+  return Number((merged.rows[0] as { n: number | null } | undefined)?.n ?? 0);
+}
+
+/**
+ * The shared gate. `noun` only chooses the wording — a merchant reaching the
+ * cap from the coupon screen should be told about coupons — while the pool, the
+ * lock and the limit are the same for both surfaces.
+ */
+async function assertCanActivateDiscount(
+  db: Db,
+  storeId: string,
+  excludeId: string | undefined,
+  noun: "offers" | "coupons",
+) {
+  // ★ ONE LOCK FOR ONE POOL. Two keys meant a coupon write and an offer write
+  // could pass simultaneously and both land, which is the race the lock exists
+  // to close.
+  await lockLimit(db, storeId, "active-discounts");
   const { plan, limits } = await planContextWithDb(db, storeId);
-  if (limits.maxActiveCoupons === null) return;
-  const condition = excludeCouponId
-    ? and(
-        eq(coupons.storeId, storeId),
-        eq(coupons.status, "active"),
-        ne(coupons.id, excludeCouponId),
-      )
-    : and(eq(coupons.storeId, storeId), eq(coupons.status, "active"));
-  const [row] = await db.select({ n: count() }).from(coupons).where(condition);
-  if ((row?.n ?? 0) >= limits.maxActiveCoupons) {
+  // `maxActiveOffers` governs both; `maxActiveCoupons` stays in the catalog
+  // until nothing reads it, and the two are equal on every plan.
+  const cap = limits.maxActiveOffers;
+  if (cap === null) return;
+  const active = await countActiveDiscounts(db, storeId, excludeId);
+  if (active >= cap) {
     throw new PlanEntitlementError(
-      `${plan === "free" ? "Free" : "Basic"} includes up to ${limits.maxActiveCoupons} active coupons. Disable one or upgrade; existing coupons remain safe.`,
+      `${plan === "free" ? "Free" : "Basic"} includes up to ${cap} active ${noun}. Disable one or upgrade; existing ${noun} remain safe.`,
     );
   }
+}
+
+/**
+ * Run inside the same transaction as an offer activation.
+ *
+ * ★ COUNTS THE MERGED POOL. Coupons became offers (docs/offers-plan.md §2), so
+ * counting `coupons` and `offers` separately would hand a free store three of
+ * each — which is the bypass the single cap exists to close.
+ *
+ * Soft downgrade follows the platform contract: an over-cap offer is never
+ * deleted, only prevented from being newly activated, and the same stored
+ * offer becomes available again on re-upgrade.
+ */
+export async function assertCanActivateOffer(
+  db: Db,
+  storeId: string,
+  excludeOfferId?: string,
+) {
+  await assertCanActivateDiscount(db, storeId, excludeOfferId, "offers");
 }
 
 /** Run inside the same transaction as a Mink/customer-group INSERT so a plan

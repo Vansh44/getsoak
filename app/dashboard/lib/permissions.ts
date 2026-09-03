@@ -312,18 +312,23 @@ export const SECTIONS: DashboardSection[] = [
     icon: "marketing",
     group: "Marketing",
     actions: ["view", "manage"],
-    children: [
-      {
-        label: "Coupons",
-        href: "/dashboard/marketing/coupons",
-        icon: "coupons",
-      },
-    ],
+    // ★ NO `Coupons` CHILD ANY MORE. It pointed at a path that now redirects
+    // to /dashboard/offers, which the `promotions` section below already
+    // renders nested here — two sidebar entries for one page. Removing the
+    // CHILD is safe where removing a SECTION would not be: a child carries no
+    // permission key, so no saved role loses a grant (that is exactly why the
+    // `promotions` key had to stay).
   },
   {
+    // ★ THE KEY STAYS `promotions` THOUGH THE SECTION IS NOW "Offers". Roles
+    // store the KEY, so renaming it to `offers` silently revokes the grant on
+    // every saved role — the precedent is `navigation`, which kept its key
+    // when it folded into the builder. Change the label and the href; leave
+    // the key alone. (The old `/dashboard/promotions` href had no route behind
+    // it at all, so every merchant granted this section saw a link that 404'd.)
     key: "promotions",
-    label: "Promotions",
-    href: "/dashboard/promotions",
+    label: "Offers",
+    href: "/dashboard/offers",
     icon: "promotions",
     group: "Marketing",
     actions: ["view", "manage"],

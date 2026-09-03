@@ -20,6 +20,9 @@ export const MINK_DRAFT_KINDS = [
   "bulk_inventory_adjustment",
   "order_status_transition",
   "bulk_price_update",
+  "offer_create",
+  "offer_update",
+  "offer_activate",
 ] as const;
 
 export type MinkDraftKind = (typeof MINK_DRAFT_KINDS)[number];
@@ -230,6 +233,24 @@ export const MINK_DRAFT_CONFIG: Record<
       },
     ],
   },
+  offer_create: offerActionConfig("New disabled offer"),
+  offer_update: offerActionConfig("Offer changes"),
+  offer_activate: {
+    label: "Turn an offer on",
+    // ★ NO CREDITS. Activation writes one boolean; charging for it a second
+    // time would bill the merchant twice for one piece of work, and the
+    // proposal it activates has already been paid for.
+    expectedCredits: 0,
+    fields: [
+      {
+        key: "offer_id",
+        label: "Offer",
+        required: true,
+        multiline: false,
+        maxLength: 64,
+      },
+    ],
+  },
   coupon_create: couponActionConfig("New disabled coupon"),
   coupon_update: couponActionConfig("Disabled coupon update"),
   customer_group_create: customerGroupActionConfig("New customer group"),
@@ -308,6 +329,89 @@ export const MINK_DRAFT_CONFIG: Record<
     ],
   },
 };
+
+/**
+ * The fields Mink may set on an offer.
+ *
+ * ★★ A BUDGET CAP IS MANDATORY (plan §14c). A coupon needs a customer to type
+ * it; an automatic offer applies itself to every qualifying order from the
+ * instant it goes live, and under best-offer-wins it applies whenever it is the
+ * most generous rule present. The cap is the difference between a mistake that
+ * costs a bounded amount and one that costs whatever the weekend's traffic was.
+ * `required: true` here, and re-checked server-side at preview and execution —
+ * the form is not the boundary.
+ *
+ * ★ THE REWARD SHAPE IS DELIBERATELY NARROW: a percentage or a rupee amount off
+ * the order, with an optional minimum. Every richer reward — bundles, gifts,
+ * ladders, free delivery — changes stock, liability or delivery cost in ways a
+ * single approval screen cannot show honestly, so they stay a human's job. The
+ * tool declaration says so, rather than letting the model attempt one and be
+ * refused.
+ */
+function offerActionConfig(label: string) {
+  return {
+    label,
+    expectedCredits: 1,
+    fields: [
+      {
+        key: "name",
+        label: "Offer name",
+        required: true,
+        multiline: false,
+        maxLength: 120,
+      },
+      {
+        key: "description",
+        label: "Description",
+        required: false,
+        multiline: true,
+        maxLength: 500,
+      },
+      {
+        key: "reward_type",
+        label: "Reward",
+        required: true,
+        multiline: false,
+        maxLength: 20,
+      },
+      {
+        key: "reward_value",
+        label: "Discount",
+        required: true,
+        multiline: false,
+        maxLength: 16,
+      },
+      {
+        key: "min_subtotal",
+        label: "Minimum order value",
+        required: false,
+        multiline: false,
+        maxLength: 16,
+      },
+      {
+        key: "budget",
+        label: "Total budget",
+        required: true,
+        multiline: false,
+        maxLength: 16,
+      },
+      {
+        key: "max_redemptions",
+        label: "Maximum uses",
+        required: false,
+        multiline: false,
+        maxLength: 16,
+      },
+      {
+        key: "valid_until",
+        label: "Ends",
+        required: false,
+        multiline: false,
+        maxLength: 40,
+      },
+    ],
+  };
+}
 
 function couponActionConfig(label: string) {
   return {

@@ -885,3 +885,118 @@ describe("★ the drawer is capped, not just the goods", () => {
     expect(r.refunded).toBe(52.5);
   });
 });
+
+// ★★ AN OFFER'S SHARE BELONGS TO THE LINE THAT GOT IT.
+//
+// `orders.discount` is the sum of three things: the line markdowns (already
+// inside each line's `total`), each line's `offer_discount`, and the genuine
+// order-level remainder. Both refund paths subtracted only the markdowns, so an
+// offer's share stayed in the figure handed to `refundBreakdown` — which spreads
+// it PROPORTIONALLY. For a reward that belonged to one line that is simply the
+// wrong allocation, and it moves real money in both directions.
+//
+// Migration 0059's own header says so: storing a scoped reward only in
+// `orders.discount` "over-refunds returns (a Buy-1-Get-1 free line comes back at
+// full price)". The column existed; nothing read it.
+describe("★★ a scoped offer is refunded from its own line", () => {
+  /**
+   * "20% off Milk": ₹200 of Milk discounted by ₹40, ₹50 of Salt untouched.
+   * `orders.discount` is 40 and all of it sits on line A.
+   */
+  function seedOfferSale() {
+    const order = {
+      id: "o1",
+      receipt_no: "POS-000007",
+      order_ref: "ORD1",
+      created_at: "2026-07-30T10:00:00Z",
+      total: 222.5,
+      discount: 40,
+      store_credit_used: 0,
+      payment_method: "cash",
+      payment_status: "paid",
+      location_id: "loc-1",
+      sales_channel: "pos",
+      status: "completed",
+      delivered_at: null,
+      collected_at: null,
+    };
+    const items = [
+      {
+        id: "li-a",
+        product_id: "p1",
+        variant_id: null,
+        name: "Milk",
+        variant_name: null,
+        quantity: 2,
+        price: 100,
+        total: 200,
+        line_discount: 0,
+        offer_discount: 40,
+        tax_amount: 8,
+        product_returnable: true,
+        product_window: null,
+      },
+      {
+        id: "li-b",
+        product_id: "p2",
+        variant_id: null,
+        name: "Salt",
+        variant_name: null,
+        quantity: 1,
+        price: 50,
+        total: 50,
+        line_discount: 0,
+        offer_discount: 0,
+        tax_amount: 2.5,
+        product_returnable: true,
+        product_window: null,
+      },
+    ];
+    dbHolder.current = makeDbMock({
+      selectQueue: [[order], items, [], [], [order], items, [], []],
+    });
+  }
+
+  /** What the return actually sent to the one refund mechanism, in rupees. */
+  const refunded = () =>
+    vi
+      .mocked(issueRefund)
+      .mock.calls.reduce((sum, [input]) => sum + (input.amount ?? 0), 0);
+
+  it("★ the preview keeps the offer on its line and out of the remainder", () => {
+    seedOfferSale();
+    return getReturnableSale("o1").then(({ sale }) => {
+      // 40 − 0 markdowns − 40 offer = nothing genuinely order-level left.
+      expect(sale?.orderDiscount).toBe(0);
+      expect(sale?.lines.map((l) => l.offerDiscount)).toEqual([40, 0]);
+    });
+  });
+
+  it("★★ returning the discounted line refunds what was PAID for it", async () => {
+    // ₹200 of Milk less its own ₹40 = ₹160 of goods, plus its ₹8 tax.
+    // Spreading the ₹40 instead gives the line only ₹32 of it — ₹168 — so the
+    // customer walks away with ₹8 the store never charged.
+    seedOfferSale();
+    const r = await processReturn(
+      "o1",
+      [{ orderItemId: "li-a", quantity: 2 }],
+      "cash",
+    );
+    expect(r.error).toBeUndefined();
+    expect(refunded()).toBe(168);
+  });
+
+  it("★★ and the UNDISCOUNTED line comes back whole", async () => {
+    // The mirror image, and the one a customer complains about: ₹50 of Salt
+    // carried none of the offer, so it refunds ₹50 + ₹2.50 tax. Spreading the
+    // ₹40 charges it ₹8 of a discount it never received.
+    seedOfferSale();
+    const r = await processReturn(
+      "o1",
+      [{ orderItemId: "li-b", quantity: 1 }],
+      "cash",
+    );
+    expect(r.error).toBeUndefined();
+    expect(refunded()).toBe(52.5);
+  });
+});

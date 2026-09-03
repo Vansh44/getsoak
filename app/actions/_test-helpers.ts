@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { vi } from "vitest";
+import { getTableName } from "drizzle-orm";
 
 // ---------------------------------------------------------------------------
 // Mock Supabase query chains. Each call returns `this`, so you can chain
@@ -139,6 +140,31 @@ export function makeDbMock(
     // reports a failed read. Needed once reads run concurrently: which batch
     // failed decides which message the user sees.
     selectQueue?: (any[] | Error)[];
+    /**
+     * Select results keyed by TABLE instead of by call order.
+     *
+     * ★★ WHY THIS EXISTS. `selectQueue` is positional — the Nth select gets
+     * the Nth entry — which makes a read you cannot count to untestable. The
+     * gift-product read in `placeOrder` (docs/offers-plan.md Phase G) is one:
+     * it happens after the offers resolve, behind a conditional, among reads
+     * whose number varies with the cart, so no fixed position reaches it. All
+     * eight were tried; none did. The consequence was a real bug shipping
+     * unpinned — see the regression test in `checkout-actions.test.ts`.
+     *
+     * ★ A QUEUE PER TABLE, not one value per table, because the same table is
+     * legitimately read twice with different expected rows: `placeOrder` reads
+     * `products` for the cart AND again for the gift. So the Nth read of a
+     * table gets that table's Nth entry.
+     *
+     * ★ INDEPENDENT OF `selectQueue`. A table-matched read consumes NO
+     * positional entry, so the two can be mixed: name the reads you care
+     * about, and let everything else fall through to the queue (or to `[]`).
+     *
+     * ★ Exhausted queue → `[]`, exactly as the positional queue does. Reusing
+     * the last entry would be more convenient and would hide an unexpected
+     * extra read, which is the thing a mock most needs to surface.
+     */
+    selectByTable?: Record<string, (any[] | Error)[]>;
     executeQueue?: any[][];
     // Tables whose insert().values(...) / update().set(...).where(...) should
     // REJECT when awaited — for rollback-path tests. Compare by table identity.
@@ -159,6 +185,10 @@ export function makeDbMock(
   // Each db.select() consumes the next entry (an action doing a slug lookup
   // then an image prefetch gets queue[0] then queue[1]); empty queue → [].
   const selectQueue = [...(opts.selectQueue ?? [])];
+  // Per-table queues, drained independently of the positional one.
+  const selectByTable = new Map<string, (any[] | Error)[]>(
+    Object.entries(opts.selectByTable ?? {}).map(([t, rows]) => [t, [...rows]]),
+  );
   // Each db.execute() (raw-SQL RPC calls) consumes the next `.rows` entry.
   const executeQueue = [...(opts.executeQueue ?? [])];
   const calls: DbMock["calls"] = {
@@ -200,10 +230,38 @@ export function makeDbMock(
     then: (resolve: any) => Promise.resolve(result).then(resolve),
   });
 
-  // A fully-chainable select step; awaiting it resolves to `rows`.
-  const selectStep = (rows: any[] | Error): any => {
+  const nextPositional = (): any[] | Error =>
+    selectQueue.length ? selectQueue.shift()! : [];
+
+  /**
+   * A fully-chainable select step.
+   *
+   * ★ ROWS ARE CHOSEN AT `.from(table)`, NOT AT `db.select()`, so a table can
+   * decide what a read returns. Safe for the positional queue too: Drizzle
+   * always chains `.from()` onto `.select()` in the same expression, so the
+   * two are synchronous neighbours and the order entries are consumed in is
+   * unchanged — verified against every deferred-`from` caller in the tree.
+   */
+  const selectStep = (): any => {
+    // Undecided until `.from(table)` names the table.
+    let rows: any[] | Error | undefined;
     const s: any = {
-      from: vi.fn(() => s),
+      from: vi.fn((table: any) => {
+        if (rows !== undefined) return s;
+        let name: string | null = null;
+        try {
+          name = getTableName(table);
+        } catch {
+          // A subquery or alias has no plain name — fall through to the queue.
+        }
+        const queued = name ? selectByTable.get(name) : undefined;
+        rows = queued
+          ? queued.length
+            ? queued.shift()!
+            : []
+          : nextPositional();
+        return s;
+      }),
       where: vi.fn((c: any) => {
         calls.where.push(c);
         return s;
@@ -233,10 +291,14 @@ export function makeDbMock(
         calls.forUpdate.push(mode);
         return s;
       }),
-      then: (resolve: any, reject: any) =>
-        rows instanceof Error
+      then: (resolve: any, reject: any) => {
+        // `.from()` is always called in practice; this only guards a bare
+        // `await db.select(...)`, which keeps the old positional behaviour.
+        if (rows === undefined) rows = nextPositional();
+        return rows instanceof Error
           ? Promise.reject(rows).then(resolve, reject)
-          : Promise.resolve(rows).then(resolve),
+          : Promise.resolve(rows).then(resolve);
+      },
     };
     return s;
   };
@@ -244,7 +306,7 @@ export function makeDbMock(
   const db: any = {
     select: vi.fn((projection?: any) => {
       calls.select.push(projection);
-      return selectStep(selectQueue.length ? selectQueue.shift()! : []);
+      return selectStep();
     }),
     execute: vi.fn(async (query: any) => {
       calls.execute.push(query);

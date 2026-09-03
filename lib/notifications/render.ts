@@ -72,6 +72,11 @@ function customerOrderUrl(e: RenderableEvent): string {
   return id ? `/orders/${id}` : "/orders";
 }
 
+function safeDashboardUrl(value: unknown): string {
+  const path = str(value);
+  return path && /^\/dashboard(?:[/?#]|$)/.test(path) ? path : "/dashboard";
+}
+
 /**
  * Render one event for one audience. Returns null when this audience has no
  * copy for the event — the router treats that as "don't deliver", so an event
@@ -379,6 +384,13 @@ export function renderNotification(
         url: "/dashboard/ai",
       };
     }
+
+    case "mink.workflow_completed":
+      return {
+        title: "Mink workflow ready",
+        body: subject ?? "Your requested Mink workflow is complete.",
+        url: safeDashboardUrl(p.url),
+      };
 
     // The merchant's own welcome. Deliberately separate from
     // platform.store_created below, which is the operators' copy of the same

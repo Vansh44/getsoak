@@ -9,6 +9,10 @@ import type {
   MinkDraftKind,
   MinkDraftStatus,
 } from "./draft-types";
+import type {
+  MinkWorkflowStatus,
+  MinkWorkflowTemplate,
+} from "./workflow-types";
 
 export type MinkPlan = "free" | "basic" | "pro";
 
@@ -132,6 +136,16 @@ export type MinkArtifact =
       expectedCredits: number;
       chargedCredits: number;
       creditSource: MinkDraftCreditSource;
+    }
+  | {
+      type: "workflow";
+      runId: string;
+      template: MinkWorkflowTemplate;
+      title: string;
+      description: string;
+      status: MinkWorkflowStatus;
+      currentStep: number;
+      totalSteps: number;
     };
 
 export type MinkFeedbackRating = "helpful" | "unhelpful";

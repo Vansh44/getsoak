@@ -15,11 +15,14 @@ import {
   products,
   productVariants,
   userGroupMembers,
+  offers,
+  stores,
   userGroups,
 } from "@/drizzle/schema";
 import { withService, type Db } from "@/lib/db/client";
 import { isUniqueViolation } from "@/lib/db/errors";
 import {
+  assertCanActivateOffer,
   assertCanCreateCustomerGroup,
   assertCanCreateProduct,
   PlanEntitlementError,
@@ -48,6 +51,7 @@ import {
   type MinkProductActionStatus,
 } from "./product-action-types";
 import type { MinkActorContext } from "./types";
+import { resolveRawNumberSetting } from "@/lib/settings/registry";
 
 const APPROVAL_TTL_MS = 10 * 60 * 1_000;
 const TOOL_VERSION = 1;
@@ -471,6 +475,13 @@ async function writeResource(
       detail: "Approved disabled, hidden coupon created.",
     };
   }
+  if (
+    approval.toolName === "create_offer" ||
+    approval.toolName === "update_offer" ||
+    approval.toolName === "activate_offer"
+  ) {
+    return writeOffer(db, actor, approval, after, current);
+  }
   if (approval.toolName === "create_customer_group") {
     await assertCanCreateCustomerGroup(db, actor.storeId);
     const [row] = await db
@@ -553,6 +564,226 @@ async function writeResource(
     detail:
       "Approved customer-group metadata updated; membership was unchanged.",
   };
+}
+
+/**
+ * Create, update or activate an offer under an exact human approval.
+ *
+ * ★★ THREE TIGHTENINGS AN OFFER NEEDS THAT A COUPON DOES NOT (plan §14c), all
+ * re-checked HERE rather than only at proposal time — the proposal is a
+ * suggestion, this is the boundary.
+ */
+async function writeOffer(
+  db: Db,
+  actor: MinkActorContext,
+  approval: DomainApprovalRow,
+  after: MinkDomainActionValues,
+  current: ResourceRow | null,
+): Promise<MutationResult> {
+  const budget = Number(after.budget);
+  const rewardValue = Number(after.reward_value);
+  const rewardType = after.reward_type;
+
+  // ★★ 1. A BUDGET CAP IS MANDATORY. A coupon needs a customer to type it; an
+  // automatic offer applies itself to every qualifying order from the instant
+  // it goes live, and under best-offer-wins it applies whenever it is the most
+  // generous rule present. The cap is the difference between a mistake that
+  // costs a bounded amount and one that costs whatever the weekend's traffic
+  // was. Refused here as well as in the proposal, because a saved proposal can
+  // be replayed and the proposal form is not a security boundary.
+  if (!Number.isFinite(budget) || budget <= 0) {
+    throw new MinkRequestError(
+      "mink_offer_budget_required",
+      "Mink can only create an offer with a total budget, so a mistake costs a bounded amount.",
+      422,
+    );
+  }
+
+  // ★★ 3. CAPPED IN DEPTH, not just in total. A budget bounds the damage over
+  // time; a depth cap stops a single 80%-off order going out at all. Measured
+  // against the store's OWN per-order ceiling, read here rather than trusted
+  // from the approval — a merchant who tightened the ceiling after the
+  // proposal was written must not have a stale limit applied.
+  if (rewardType === "percent_off") {
+    const ceiling = await readOfferDepthCeiling(db, actor.storeId);
+    if (
+      !Number.isFinite(rewardValue) ||
+      rewardValue <= 0 ||
+      rewardValue > ceiling
+    ) {
+      throw new MinkRequestError(
+        "mink_offer_too_deep",
+        `Mink can propose a discount of at most ${ceiling}% — this store's own limit for a single order.`,
+        422,
+      );
+    }
+  } else if (rewardType === "amount_off") {
+    if (!Number.isFinite(rewardValue) || rewardValue <= 0) {
+      throw new MinkRequestError(
+        "mink_offer_invalid_reward",
+        "An offer needs a discount above zero.",
+        422,
+      );
+    }
+  } else {
+    // ★ THE REWARD SHAPE IS NARROW BY DESIGN. Bundles, gifts, ladders and free
+    // delivery change stock, liability or delivery cost in ways a single
+    // approval screen cannot show honestly, so they stay a human's job.
+    throw new MinkRequestError(
+      "mink_offer_reward_unsupported",
+      "Mink can propose a percentage or a rupee amount off the order. Bundles, gifts, ladders and free delivery are set up by hand.",
+      422,
+    );
+  }
+
+  const minSubtotal = after.min_subtotal ? Number(after.min_subtotal) : null;
+  const maxRedemptions = after.max_redemptions
+    ? Math.trunc(Number(after.max_redemptions))
+    : null;
+
+  const shared = {
+    name: required(after.name),
+    description: nullable(after.description),
+    rewardType: rewardType as string,
+    rewardConfig:
+      rewardType === "percent_off"
+        ? { percent: rewardValue }
+        : { amount: rewardValue },
+    triggerType: minSubtotal && minSubtotal > 0 ? "min_subtotal" : "always",
+    triggerConfig: minSubtotal && minSubtotal > 0 ? { minSubtotal } : {},
+    budgetPaise: Math.round(budget * 100),
+    maxRedemptions:
+      maxRedemptions && maxRedemptions > 0 ? maxRedemptions : null,
+    validUntil: after.valid_until,
+    updatedBy: actor.adminId,
+    updatedAt: new Date().toISOString(),
+  };
+
+  if (approval.toolName === "create_offer") {
+    // ★★ 2. CREATED DISABLED, ALWAYS — activation is its own approval. A
+    // disabled offer costs exactly nothing, so the review can take as long as
+    // it needs. Written literally rather than from `after.status`, so even a
+    // tampered approval payload cannot produce a live offer.
+    const [row] = await db
+      .insert(offers)
+      .values({
+        ...shared,
+        storeId: actor.storeId,
+        status: "disabled",
+        delivery: "automatic",
+        // Website only. A register offer Mink proposed would start discounting
+        // in-person sales the merchant is standing in front of.
+        channels: ["storefront"],
+        createdBy: actor.adminId,
+      })
+      .returning({
+        id: offers.id,
+        name: offers.name,
+        version: offers.updatedAt,
+      });
+    if (!row) throw new Error("Offer insert returned no row");
+    return {
+      id: row.id,
+      version: row.version,
+      label: row.name,
+      detail: "Approved offer created, switched off and awaiting activation.",
+    };
+  }
+
+  if (!current || current.type !== "offer") {
+    throw resourceNotFound("offer");
+  }
+
+  if (approval.toolName === "activate_offer") {
+    // ★ The plan cap is re-checked at the moment of activation, not at
+    // proposal time: a store that has since dropped to a plan with fewer
+    // active offers must not have Mink push it over.
+    await assertCanActivateOffer(db, actor.storeId, current.id);
+    const [row] = await db
+      .update(offers)
+      .set({
+        status: "active",
+        updatedBy: actor.adminId,
+        updatedAt: new Date().toISOString(),
+      })
+      .where(
+        and(
+          eq(offers.id, current.id),
+          eq(offers.storeId, actor.storeId),
+          // ★ Only from disabled. Re-activating an already-live offer is a
+          // no-op that would still write an audit row saying somebody turned
+          // it on.
+          eq(offers.status, "disabled"),
+        ),
+      )
+      .returning({
+        id: offers.id,
+        name: offers.name,
+        version: offers.updatedAt,
+      });
+    if (!row) throw resourceConflict("offer", "during activation");
+    return {
+      id: row.id,
+      version: row.version,
+      label: row.name,
+      detail: "Approved offer switched on.",
+    };
+  }
+
+  const [row] = await db
+    .update(offers)
+    .set({ ...shared, status: "disabled" })
+    .where(
+      and(
+        eq(offers.id, current.id),
+        eq(offers.storeId, actor.storeId),
+        // ★ Terms change only while the offer is OFF, the coupon rule (4C)
+        // carrying more weight here: editing a live automatic offer changes
+        // what every cart in flight is being quoted.
+        eq(offers.status, "disabled"),
+      ),
+    )
+    .returning({
+      id: offers.id,
+      name: offers.name,
+      version: offers.updatedAt,
+    });
+  if (!row) throw resourceConflict("offer", "during update");
+  return {
+    id: row.id,
+    version: row.version,
+    label: row.name,
+    detail: "Approved offer terms updated while switched off.",
+  };
+}
+
+/**
+ * The store's own per-order discount ceiling.
+ *
+ * ★ FAILS TO THE REGISTRY DEFAULT, never to 100. An unreadable settings row
+ * must not become permission for an 80%-off offer.
+ */
+async function readOfferDepthCeiling(db: Db, storeId: string): Promise<number> {
+  try {
+    const rows = await db
+      .select({ settings: stores.settings })
+      .from(stores)
+      .where(eq(stores.id, storeId))
+      .limit(1);
+    const features = ((rows[0]?.settings as Record<string, unknown> | null)
+      ?.features ?? {}) as Record<string, unknown>;
+    // ★ Through the registry, which owns the default, the floor and the
+    // ceiling. Gating on `value > 0` here read a deliberate 0 — "stop offers
+    // discounting anything" — as unset and handed back 50%.
+    return resolveRawNumberSetting(
+      "offers.maxTotalDiscountPercent",
+      features["offers.maxTotalDiscountPercent"],
+    );
+  } catch {
+    // An unreadable store falls back to the registry default, not to no
+    // ceiling at all.
+    return resolveRawNumberSetting("offers.maxTotalDiscountPercent", undefined);
+  }
 }
 
 async function deleteCreatedResource(
@@ -892,6 +1123,31 @@ async function readResource(
       ...rows[0],
     };
   }
+  if (type === "offer") {
+    const rows = await db
+      .select({
+        id: offers.id,
+        storeId: offers.storeId,
+        name: offers.name,
+        description: offers.description,
+        status: offers.status,
+        rewardType: offers.rewardType,
+        rewardConfig: offers.rewardConfig,
+        triggerConfig: offers.triggerConfig,
+        budgetPaise: offers.budgetPaise,
+        spentPaise: offers.spentPaise,
+        maxRedemptions: offers.maxRedemptions,
+        redemptionCount: offers.redemptionCount,
+        validUntil: offers.validUntil,
+        version: offers.updatedAt,
+      })
+      .from(offers)
+      .where(and(eq(offers.id, id), eq(offers.storeId, storeId)))
+      .limit(1);
+    if (!rows[0]) throw resourceNotFound(type);
+    return { type, label: rows[0].name, ...rows[0] };
+  }
+
   const rows = await db
     .select({
       id: userGroups.id,
@@ -912,6 +1168,31 @@ function resourceValues(
   tool: MinkDomainActionTool,
   resource: ResourceRow,
 ): MinkDomainActionValues {
+  if (resource.type === "offer") {
+    const reward = (resource.rewardConfig ?? {}) as Record<string, unknown>;
+    const trigger = (resource.triggerConfig ?? {}) as Record<string, unknown>;
+    const num = (v: unknown) => {
+      const n = Number(v);
+      return Number.isFinite(n) ? String(n) : null;
+    };
+    return {
+      name: resource.name,
+      description: resource.description,
+      reward_type: resource.rewardType,
+      reward_value: num(reward.percent ?? reward.amount),
+      min_subtotal: num(trigger.minSubtotal),
+      budget:
+        resource.budgetPaise === null
+          ? null
+          : String(Number(resource.budgetPaise) / 100),
+      max_redemptions:
+        resource.maxRedemptions === null
+          ? null
+          : String(resource.maxRedemptions),
+      valid_until: canonicalOptionalMinkTimestamp(resource.validUntil),
+      status: resource.status,
+    };
+  }
   if (resource.type === "product" && tool === "create_product") {
     return {
       name: resource.name,
@@ -1140,6 +1421,22 @@ async function assertSafeCreateRollback(
     }
     return;
   }
+  if (tool === "create_offer" && resource.type === "offer") {
+    // ★★ ONLY AN OFFER THAT HAS NEVER GIVEN ANYTHING AWAY. `create_offer`
+    // leaves it disabled, so an untouched one is safe to delete — but a human
+    // may have activated it in between, and `offer_redemptions` rows point at
+    // it. Deleting an offer that has priced even one order would orphan the
+    // attribution behind every order line it discounted, so the invoice and
+    // the refund arithmetic would no longer be able to say what the customer
+    // was given.
+    if (resource.status !== "disabled") {
+      throw rollbackUnsafe("The offer has been switched on.");
+    }
+    if (resource.redemptionCount > 0 || (resource.spentPaise ?? 0) > 0) {
+      throw rollbackUnsafe("The offer has already been used on an order.");
+    }
+    return;
+  }
   if (tool === "create_customer_group" && resource.type === "customer_group") {
     const [[members], [links]] = await Promise.all([
       db
@@ -1165,6 +1462,37 @@ function assertResourceEligible(
   tool: MinkDomainActionTool,
   resource: ResourceRow,
 ) {
+  if (tool === "update_offer" && resource.type === "offer") {
+    // Terms change only while the offer is off — editing a live automatic
+    // offer changes what every cart in flight is being quoted.
+    if (resource.status !== "disabled") {
+      throw new MinkRequestError(
+        "mink_action_offer_not_disabled",
+        "Mink can change an offer's terms only while it is switched off. Switch it off first, or make the change by hand.",
+        409,
+      );
+    }
+  }
+  if (tool === "activate_offer" && resource.type === "offer") {
+    if (resource.status === "active") {
+      throw new MinkRequestError(
+        "mink_action_offer_already_active",
+        "That offer is already switched on.",
+        409,
+      );
+    }
+    // ★ A BUDGET IS RE-REQUIRED AT ACTIVATION, not only at creation. An offer
+    // whose budget was cleared by hand after Mink created it would otherwise
+    // go live uncapped — which is the single thing this whole gate exists to
+    // prevent.
+    if (resource.budgetPaise === null || resource.budgetPaise <= 0) {
+      throw new MinkRequestError(
+        "mink_offer_budget_required",
+        "Mink can only switch on an offer that has a total budget. Add one, or switch it on by hand.",
+        422,
+      );
+    }
+  }
   if (tool === "update_coupon" && resource.type === "coupon") {
     if (resource.status !== "disabled" || resource.showOnStorefront) {
       throw new MinkRequestError(
@@ -1263,6 +1591,9 @@ function resourcePath(type: MinkDomainResourceType, id: string | null) {
     return id
       ? `/dashboard/marketing/coupons/${id}/edit`
       : "/dashboard/marketing/coupons";
+  }
+  if (type === "offer") {
+    return id ? `/dashboard/offers/${id}/edit` : "/dashboard/offers";
   }
   return id
     ? `/dashboard/users/user_groups/${id}/edit`
@@ -1686,7 +2017,32 @@ type GroupResource = {
   version: string;
 };
 
-type ResourceRow = ProductResource | CouponResource | GroupResource;
+type OfferResource = {
+  type: "offer";
+  id: string;
+  storeId: string;
+  label: string;
+  name: string;
+  description: string | null;
+  status: string;
+  rewardType: string;
+  rewardConfig: unknown;
+  triggerConfig: unknown;
+  budgetPaise: number | null;
+  /** ★ Read so an activation preview can show what has already been spent, and
+   *  so a rollback can refuse an offer that has started giving money away. */
+  spentPaise: number | null;
+  maxRedemptions: number | null;
+  redemptionCount: number;
+  validUntil: string | null;
+  version: string;
+};
+
+type ResourceRow =
+  | ProductResource
+  | CouponResource
+  | GroupResource
+  | OfferResource;
 type MutationResult = {
   id: string;
   version: string | null;

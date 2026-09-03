@@ -86,6 +86,17 @@ export interface ReturnableLineView {
   returned: number;
   remaining: number;
   unitPrice: number;
+  /**
+   * What this line was actually BILLED, and its tax — the inputs
+   * `refundBreakdown` needs, so the shopper's estimate is computed by the same
+   * function the server settles with rather than approximated from
+   * `unitPrice × qty`.
+   */
+  lineTotal: number;
+  taxAmount: number;
+  /** This line's own share of an offer. Subtracted from the line, never
+   *  spread — see `lib/pos/returns.ts`. */
+  offerDiscount: number;
   /** FALSE = final sale, this line can never come back. */
   returnable: boolean;
   /** Which variant this line was, so the picker can grey it out. */
@@ -108,6 +119,17 @@ export interface SwapOption {
 export interface ReturnableOrderView {
   orderId: string;
   orderRef: string | null;
+  /**
+   * The ORDER-level remainder, recovered exactly as `priceReturn` recovers it:
+   * `orders.discount − Σ line_discount − Σ offer_discount`.
+   *
+   * ★★ WITHOUT IT THE SHOPPER'S ESTIMATE IGNORED EVERY DISCOUNT. The form
+   * summed `unitPrice × qty`, so a customer who had used a coupon — or won an
+   * offer — was quoted the FULL list value of what they were sending back and
+   * paid the discounted value. It also over-valued an exchange, so a swap the
+   * server would refuse could be offered as allowed.
+   */
+  orderDiscount: number;
   eligibility: ReturnEligibility;
   /** Customer-facing sentence when `eligibility.eligible` is false. */
   blockedCopy: string | null;
@@ -190,6 +212,7 @@ export async function getReturnableOrder(
           price: orderItems.price,
           total: orderItems.total,
           line_discount: orderItems.lineDiscount,
+          offer_discount: orderItems.offerDiscount,
           tax_amount: orderItems.taxAmount,
           product_id: orderItems.productId,
           variant_id: orderItems.variantId,
@@ -234,10 +257,21 @@ export async function getReturnableOrder(
     };
     const eligibility = returnEligibility(orderInfo, null, policy);
 
+    // ★ RECOVERED EXACTLY AS `priceReturn` RECOVERS IT, so the estimate the
+    // shopper is shown and the amount the server settles are computed from the
+    // same three parts of `orders.discount`.
+    const viewOrderDiscount = Math.max(
+      0,
+      (Number(order.discount) || 0) -
+        items.reduce((sum, i) => sum + (Number(i.line_discount) || 0), 0) -
+        items.reduce((sum, i) => sum + (Number(i.offer_discount) || 0), 0),
+    );
+
     return {
       view: {
         orderId: order.id,
         orderRef: order.order_ref,
+        orderDiscount: viewOrderDiscount,
         eligibility,
         blockedCopy: eligibility.reason
           ? RETURN_BLOCKED_COPY[eligibility.reason]
@@ -266,6 +300,9 @@ export async function getReturnableOrder(
               alreadyReturned: returned,
             }),
             unitPrice: Number(i.price) || 0,
+            lineTotal: Number(i.total) || 0,
+            taxAmount: Number(i.tax_amount) || 0,
+            offerDiscount: Number(i.offer_discount) || 0,
             returnable: lineEligible.eligible,
             variantId: i.variant_id,
             productId: i.product_id,
@@ -1030,6 +1067,11 @@ async function priceReturn(
       quantity: orderItems.quantity,
       total: orderItems.total,
       line_discount: orderItems.lineDiscount,
+      // ★ THIS LINE'S OWN SHARE OF AN OFFER. `orders.discount` is the sum of
+      // the line markdowns, the offer shares and the order-level remainder, so
+      // reading it without this subtracts an offer's share from the wrong
+      // lines — see the recovery formula in `lib/pos/returns.ts`.
+      offer_discount: orderItems.offerDiscount,
       tax_amount: orderItems.taxAmount,
     })
     .from(orderItems)
@@ -1046,16 +1088,28 @@ async function priceReturn(
     db,
   );
 
-  // The ORDER-level discount only: line markdowns are already inside each
-  // line's total, so `orders.discount` minus them is what must be
-  // re-allocated (lib/pos/returns.ts).
+  // ★★ THE ORDER-LEVEL REMAINDER ONLY, AND AN OFFER'S SHARE IS NOT PART OF IT.
+  // `orders.discount` is the sum of THREE things: the line markdowns (already
+  // inside each line's `total`), each line's `offer_discount`, and whatever is
+  // genuinely order-level. Subtracting only the markdowns leaves the offer
+  // shares in, and `refundBreakdown` then re-allocates them PROPORTIONALLY —
+  // which is exactly wrong for a reward that belonged to one line. On '20% off
+  // shirts' over a ₹1,000 shirt and a ₹1,000 book, returning the shirt alone
+  // refunded ₹900 instead of ₹800 and returning the book alone refunded ₹900
+  // instead of ₹1,000; a buy-1-get-1's free unit came back at full price.
   const lineDiscountTotal = rows.reduce(
     (sum, r) => sum + (Number(r.line_discount) || 0),
     0,
   );
+  const offerDiscountTotal = rows.reduce(
+    (sum, r) => sum + (Number(r.offer_discount) || 0),
+    0,
+  );
   const orderDiscount = Math.max(
     0,
-    (Number(orderRow[0]?.discount) || 0) - lineDiscountTotal,
+    (Number(orderRow[0]?.discount) || 0) -
+      lineDiscountTotal -
+      offerDiscountTotal,
   );
 
   const breakdown = refundBreakdown({
@@ -1064,6 +1118,8 @@ async function priceReturn(
       quantity: Number(r.quantity) || 0,
       lineTotal: Number(r.total) || 0,
       taxAmount: Number(r.tax_amount) || 0,
+      // Subtracted from THIS line, never spread across the others.
+      offerDiscount: Number(r.offer_discount) || 0,
       alreadyReturned: returned.get(r.id) ?? 0,
     })),
     orderDiscount,

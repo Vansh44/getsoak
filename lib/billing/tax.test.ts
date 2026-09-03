@@ -104,3 +104,110 @@ describe("computeTax", () => {
     expect(r.byRate).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Per-line discounts (offers, `docs/offers-plan.md` §8).
+// ---------------------------------------------------------------------------
+
+describe("computeTax — per-line discount", () => {
+  it("★ taxes a scoped discount against the RIGHT line", () => {
+    // The §8 example: a ₹1,000 shirt at 18% beside a ₹1,000 book at 5%, with
+    // ₹200 off the shirt only. Spreading it ₹100/₹100 understates the shirt's
+    // 18% base and overstates the book's 5% one — a misstated GST invoice with
+    // nothing reporting an error.
+    const scoped = computeTax({
+      lines: [
+        { amount: 1000, rate: 18, discount: 200 },
+        { amount: 1000, rate: 5 },
+      ],
+    });
+    expect(scoped.lines[0].discountedAmount).toBe(800);
+    expect(scoped.lines[1].discountedAmount).toBe(1000);
+    expect(scoped.lines[0].tax).toBe(144); // 18% of 800
+    expect(scoped.lines[1].tax).toBe(50); // 5% of 1000
+    expect(scoped.totalTax).toBe(194);
+
+    // What the order-level path would have produced — kept here so the
+    // difference is visible rather than argued.
+    const spread = computeTax({
+      lines: [
+        { amount: 1000, rate: 18 },
+        { amount: 1000, rate: 5 },
+      ],
+      discount: 200,
+    });
+    expect(spread.totalTax).toBe(207); // 18% of 900 + 5% of 900
+    expect(spread.totalTax).not.toBe(scoped.totalTax);
+  });
+
+  it("★ is byte-identical to the old behaviour when no line carries a discount", () => {
+    const withField = computeTax({
+      lines: [
+        { amount: 500, rate: 12, discount: 0 },
+        { amount: 300, rate: 5, discount: 0 },
+      ],
+      discount: 80,
+    });
+    const without = computeTax({
+      lines: [
+        { amount: 500, rate: 12 },
+        { amount: 300, rate: 5 },
+      ],
+      discount: 80,
+    });
+    expect(withField).toEqual(without);
+  });
+
+  it("composes with an order-level discount, allocating over what is left", () => {
+    // ₹100 off line A, then ₹90 off the order across the remaining ₹900+₹0.
+    const r = computeTax({
+      lines: [
+        { amount: 600, rate: 10, discount: 100 },
+        { amount: 400, rate: 10 },
+      ],
+      discount: 90,
+    });
+    // Remaining base is 500 + 400 = 900; the order discount splits 50/40.
+    expect(r.lines[0].discountedAmount).toBe(450);
+    expect(r.lines[1].discountedAmount).toBe(360);
+  });
+
+  it("clamps a line discount to that line's own value", () => {
+    const r = computeTax({
+      lines: [{ amount: 100, rate: 10, discount: 9999 }],
+    });
+    expect(r.lines[0].discountedAmount).toBe(0);
+    expect(r.lines[0].lineDiscount).toBe(100);
+    expect(r.totalTax).toBe(0);
+  });
+
+  it("caps the order discount at what remains after line discounts", () => {
+    const r = computeTax({
+      lines: [{ amount: 100, rate: 0, discount: 100 }],
+      discount: 500,
+    });
+    expect(r.lines[0].discountedAmount).toBe(0);
+  });
+
+  it("carves inclusive tax out of the post-discount amount", () => {
+    const r = computeTax({
+      lines: [{ amount: 1180, rate: 18, discount: 180 }],
+      pricesIncludeTax: true,
+    });
+    expect(r.lines[0].discountedAmount).toBe(1000);
+    // 1000 × 18 / 118
+    expect(r.lines[0].tax).toBe(152.54);
+    expect(r.lines[0].taxableValue).toBe(847.46);
+  });
+
+  it("ignores a non-finite or negative line discount", () => {
+    const r = computeTax({
+      lines: [
+        { amount: 100, rate: 0, discount: Number.NaN },
+        { amount: 100, rate: 0, discount: -50 },
+      ],
+    });
+    expect(r.lines[0].lineDiscount).toBe(0);
+    expect(r.lines[1].lineDiscount).toBe(0);
+  });
+});

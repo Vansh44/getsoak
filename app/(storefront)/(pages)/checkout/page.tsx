@@ -28,6 +28,8 @@ import {
   paymentOptionsFor,
 } from "@/lib/fulfilment/payment-policy";
 import { useCartTax } from "@/app/(storefront)/components/cart/useCartTax";
+import { useCartOffers } from "@/app/(storefront)/components/cart/useCartOffers";
+import { OfferNudge } from "@/app/(storefront)/components/cart/offer-nudge";
 import {
   placeOrder,
   getCartStock,
@@ -304,6 +306,22 @@ export default function CheckoutPage() {
     cart.couponValid ? cart.couponDiscount : 0,
   );
 
+  // Automatic offers, for the near-miss nudge. Display only — `placeOrder`
+  // re-resolves and re-prices authoritatively, and the nudge's whole value is
+  // that its gap comes from the engine rather than from arithmetic here.
+  // ★ THE LIVE SELECTIONS GO IN, so a "₹50 off when you pay online" offer
+  // appears the moment the shopper picks that method rather than surprising
+  // them at the last step. `resolvedPayMethod` is the value that will actually
+  // be SUBMITTED, and `fulfilment` the one that decides `pickupLocationId` —
+  // so the preview is priced against exactly what `placeOrder` will record.
+  // ★ A PLAIN OBJECT, NOT A `useMemo`. The hook depends on the two PRIMITIVES
+  // inside it, not on this object's identity, so memoising buys nothing — and
+  // the React Compiler refuses a hand-written memo it cannot preserve here.
+  const offerInfo = useCartOffers(cart.items, cart.hydrated, taxInfo?.lines, {
+    paymentMethod: resolvedPayMethod,
+    fulfilmentType: fulfilment,
+  });
+
   const selectedShippingOption =
     shippingOptions.find((option) => option.id === selectedShippingRateId) ??
     shippingOptions[0] ??
@@ -356,6 +374,11 @@ export default function CheckoutPage() {
       items,
       postalCode: selected.postal_code,
       paymentMethod: resolvedPayMethod === "razorpay" ? "razorpay" : "cod",
+      // Carried so a `fulfilment_type` condition on a free-delivery offer is
+      // judged the same way here as it will be at `placeOrder`. The waiver
+      // itself is derived SERVER-side; only the shopper's own selections
+      // travel from the browser.
+      fulfilmentType: fulfilment,
     })
       .then((result) => {
         if (!active) return;
@@ -1458,6 +1481,8 @@ export default function CheckoutPage() {
                   </div>
                 )}
               </div>
+
+              <OfferNudge nearMiss={offerInfo?.nearMiss} />
 
               <div className={styles.totalRow}>
                 <span className={styles.totalLabel}>Total</span>

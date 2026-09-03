@@ -478,6 +478,26 @@ the arbitrary URL is not clickable. Restored conversation history renders the
 same structured catalogue artifact. The answer has copy/helpful/report controls
 and no grey assistant speech bubble.
 
+**PS-3.13 ★★ — Mink reviews delayed pickups without becoming a second reminder job**
+As an Echos admin with Mink drafting and Orders Manage, create controlled
+Awaiting/Ready pickup fixtures at Shop and Delhi, including an Awaiting order
+past its promised-ready time, a Ready order inside 48 hours with no reminder
+marker, and one whose marker is already recorded. Ask the exact Phase 6E
+prompts from `docs/mink-ai-test-prompts.md` for both locations and separately
+for Shop and Delhi warehouse.
+**Expect:** exact location aliases never widen; only live Awaiting/Ready,
+non-cancelled, non-refunded and not-yet-expired pickups appear. The card is
+bounded to 25 rows, keeps each location explicit, links by visible order
+reference, and exposes no customer name, email, phone, address, note or
+collection code. Awaiting delay copy keeps the revised ready time as a
+staff-confirmed placeholder. A pending or recorded automatic reminder
+withholds duplicate collection copy. The workflow does not send/queue/save a
+message, change the reminder marker, status or deadline, release a hold, or
+move stock. Removing Orders Manage, drafting or location authority cancels or
+narrows the next step; a restart/retry still produces one run and one
+completion notification. The existing pickup expiry and one-time reminder
+sweeps behave exactly as before.
+
 ---
 
 ## 4. Inventory — the dashboard
@@ -3666,12 +3686,301 @@ transfer stock, contact the customer or undo a completed status action.
 allowed status proposal. Corrections use the established Orders/Logistics
 workflow; Phase 5C has no automatic reverse transition.
 
+## 11l. Offers at the till _(roadmap Step 22, Phase A)_
+
+The register now applies automatic offers, so the screen and the charge have a
+new way to disagree. Run these after migration
+`20260902_0059_offers_phase_a`; until it is applied every offer read fails open
+and the till behaves exactly as it did before, which is itself PS-OF.1.
+
+**PS-OF.1 ★ — Before the migration, nothing changes**
+Open a register on a build that has the offer code but not the migration.
+**Expect:** the register opens normally, prices exactly as before, and takes a
+sale. No error toast, no blocked tender. The server log carries one
+`offers unavailable — migration not applied` WARNING, not an error. ⚠ This is
+the case that matters most on deploy day: DDL is a separate release gate, so
+this state is guaranteed to exist in production for a while.
+
+**PS-OF.2 ★★ — The quote equals the charge**
+Create an active automatic offer (say 10% off any order, POS channel included).
+Ring up a cart at the till. **Expect:** the cart panel lists the offer BY NAME
+with its amount, the total reflects it, and completing the sale charges exactly
+the quoted total — check the receipt and `orders.total`. This is the
+`posTotals` incident's shape: any divergence here means the screen and the
+server are no longer running the same engine.
+
+**PS-OF.3 — The line carries its own share**
+After PS-OF.2, read the sale's `order_items`. **Expect:** `offer_discount` on
+each line sums to the order's offer discount, `total` is GROSS of it (unchanged
+from before), and `order_item_offers` holds one row per discounted line with
+the offer's NAME snapshotted.
+
+**PS-OF.4 ★ — A returned discounted line refunds what was paid**
+Take a return of one line from the PS-OF.2 sale. **Expect:** the refund is the
+line's price MINUS its offer share, not its full price. Set an offer that
+discounts one line to zero and return only that line: the refund is ₹0.
+
+**PS-OF.5 — Pausing an offer stops quoting it**
+Pause the offer in the dashboard, then re-open the register (the offer list
+arrives with `RegisterConfig`, so it refreshes when the register opens, not on
+the catalogue's background sync). **Expect:** new carts price at full price. ⚠ A
+register left open on the old config keeps quoting until reopened; the server
+refuses nothing here because the offer is merely inactive, so the sale would
+complete at the SERVER's price. Reopen the register after changing an offer.
+
+**PS-OF.6 ★ — A budget that runs out stops the offer mid-shift**
+Set a budget of ₹100 on a 10% offer. Ring sales until it is spent. **Expect:**
+the first sale that would exceed the budget is refused with "…has just reached
+its limit", nothing is written, and re-ringing without the offer succeeds. The
+dashboard's Given away column shows the spend against the budget.
+
+**PS-OF.7 ★ — A per-customer cap re-prices when the customer is identified**
+Set an offer to one use per customer and redeem it once for a customer. Ring a
+new cart WITHOUT attaching anyone: the offer is quoted (nobody is attached, so
+the cap cannot be known). Now enter that customer's mobile at Charge.
+**Expect:** the quote re-prices to full price the moment they are resolved —
+`resolvePosCustomerByPhone` returns their exhausted offer ids. Completing
+charges the re-priced total.
+
+**PS-OF.8 — A sale price and an offer do not both apply by default**
+With `offers.onSalePrice` at its default (`best`), ring a variant that has a
+`special_price` under a percentage offer. **Expect:** the customer pays
+whichever is lower, never both. Switch the setting to `stack` and re-ring: the
+offer now applies on top, and to `skip`: the line is left alone entirely.
+
+**PS-OF.8b ★★ — And the website agrees, basket for basket**
+Repeat PS-OF.8 online with the same variant, the same offer and the same
+setting. **Expect:** the same final price in both channels for each of the
+three modes. ⚠ Run this one deliberately rather than assuming it: when Phase A
+shipped, `placeOrder` selected only `product_variants.selling_price`, so there
+was no sale price online for an offer to interact with and `skip` silently
+skipped nothing — the setting read as store-wide and was POS-only. Fixed
+separately (CODEBASE §12, §39); this case is what proves it stays fixed.
+
+**PS-OF.9 — A location-scoped offer applies only there**
+On a multi-location store, scope an offer to one location. **Expect:** it
+quotes and charges at that location's register and nowhere else. Placing a
+website order never picks it up, whichever shop fulfils it.
+
+**PS-OF.10 — A failed sale gives the offer back**
+Force a completion failure (a stock shortfall on a second line is easiest)
+against a sale carrying an offer. **Expect:** `offers.spent_paise` and
+`redemption_count` return to their previous values. A budget must not be spent
+by a sale that never happened.
+
+**PS-OF.11 — No money-audit noise**
+Complete an offer sale and open `/dashboard/pos/money`. **Expect:** NO row for
+the offer. That is deliberate (CODEBASE §39): the cashier chose nothing, and
+`order_item_offers` + `offer_redemptions` carry more than a log line would. A
+manual discount on the same sale DOES appear.
+
+**PS-OF.12 — A spend ladder gives ONE level, not the sum**
+Create an offer with reward **Spend more, save more**, percentage levels
+₹1,000→5%, ₹2,500→10%, ₹5,000→15%. Ring a ₹3,000 basket. **Expect:** ₹300 off
+(10%), _not_ ₹450 (5+10). Ring ₹6,000: ₹900 (15%). Ring ₹800: no discount, and
+the offer shows as `trigger_unmet` in the skip list, not as an error.
+
+**PS-OF.13 — Reaching a level cannot un-reach it**
+On the same ladder, ring a basket of exactly ₹2,500. **Expect:** 10% (₹250), so
+the charge is ₹2,250. It must NOT fall back to 5% on the ground that the
+discounted total is below ₹2,500 — the level is judged on the undiscounted
+subtotal, or the answer would depend on evaluation order.
+
+**PS-OF.14 — A quantity ladder counts across the lines it covers**
+Create **Buy more, save more** scoped to two products, levels 6→10% and
+12→15%. Ring six of the first product and six of the second. **Expect:** 15% off
+all twelve units. Then ring six of just one: 10% off all six — every unit, not
+only those above the number.
+
+**PS-OF.15 — A quantity ladder ignores what it does not cover**
+On the same offer, ring five covered units plus five uncovered ones.
+**Expect:** no discount. Ten items are in the basket but only five are in
+scope, and the level counts scope, not basket size.
+
+**PS-OF.16 ★ — A ladder does not displace something better**
+Add a second offer, 25% off the same product, alongside the 6→10% ladder. Ring
+six units. **Expect:** 25% applies and the ladder does not. Best-offer-wins
+holds across reward SHAPES, so a ladder does not win merely by being a ladder.
+
+**PS-OF.17 ★★ — The upgrade nudge says what you already have**
+On the storefront with a ₹1,000→10%, ₹1,200→15% ladder, fill a cart to ₹1,050.
+**Expect:** 10% is already applied AND the strip reads "Add ₹150 more to get 15%
+off **instead of 10%**". At ₹1,300 (top level) the strip disappears. At ₹900 it
+reads "Add ₹100 more to get 10% off" with NO "instead of" — the cart earns
+nothing yet, and claiming otherwise is the misleading version of the same
+sentence.
+
+**PS-OF.18 — The quantity nudge counts items, not rupees**
+With a 6→10%, 12→15% quantity ladder, put ten covered units in the cart.
+**Expect:** "Add 2 more to get 15% off on each instead of 10%". With four units:
+"Add 2 more to get 10% off on each" and no "instead of". With none of the
+covered products in the cart: no strip at all.
+
+**PS-OF.19 ★ — A case price does not appear on a product card**
+With a 6→10% quantity ladder active, open a covered product's page.
+**Expect:** NO offer badge. Correct, not a gap: "10% off when you buy 6" is not
+a claim about buying one, and the discount appears in the cart once the
+quantity is reached.
+
+**PS-OF.20 ★★ — Buy X get Y actually discounts (the Phase D regression)**
+Create "buy 1 get 1 free" scoped to a product, ring two units. **Expect:** one
+free. Then create a fixed-price offer and ring one covered item. **Expect:** the
+set price. Both were **silently inert** before Phase D — configured, listed as
+active, correct summary sentence, no error, and no discount — because the engine
+loader copied only `percent` and `amount` out of `reward_config`. Re-run this
+after any change to reward configuration.
+
+**PS-OF.21 ★★ — A payment-method condition cannot be saved for the register**
+Create an offer, add the **Payment method** condition, and set the channel to
+POS (or leave the channel blank, which means every channel). **Expect:** save is
+refused, naming the website. Not a bug: the till shows the total before payment
+is taken, so a tender-dependent discount would make the screen and the sale
+disagree. Same for **Delivery or pickup** — a register sale is neither. Then set
+the channel to the website only: it saves.
+
+**PS-OF.22 — Widening the channel later is refused too**
+Save a website-only offer with a payment-method condition, then edit it to
+include POS. **Expect:** refused. Widening the channel is the way a saved
+condition would otherwise become unenforceable.
+
+**PS-OF.23 — First order only, and a guest never qualifies**
+Create "20% off, first order only", website. Sign in as a customer with no
+orders and fill a cart. **Expect:** 20% applied, in the cart AND at checkout —
+not appearing only at the last step. Place the order, then start another:
+**expect** no discount. As a GUEST (not signed in): **expect** no discount,
+because there is no history to check.
+
+**PS-OF.24 ★ — A failed first payment does not burn the offer**
+As a new customer, start a prepaid order and abandon the payment window so the
+reaper cancels it. Then order again. **Expect:** the first-order discount still
+applies. Deliberate: they received nothing, and losing the offer to our own
+timeout is not defensible. But a customer who orders, _cancels deliberately_ and
+re-orders **does** lose it — that is the farm this closes.
+
+**PS-OF.25 ★★ — Happy hour runs on the STORE's clock**
+Create "20% off, Mondays 16:00–19:00", website. Set the store timezone to
+Asia/Kolkata. At 17:30 IST on a Monday: **expect** 20%. At 19:00 exactly:
+**expect** none (the end is half-open). On Tuesday at 17:30: none. Then, with a
+browser or device clock set to another timezone, repeat at 17:30 IST:
+**expect** 20% still — the window is a fact about the shop, not the shopper.
+
+**PS-OF.26 ★★ — A window past midnight is one evening**
+Create "10% off, Friday 22:00–02:00". At 23:00 Friday: **expect** 10%. At 01:00
+**Saturday**: **expect** 10% — Friday's window runs into Saturday morning. At
+01:00 **Friday**: **expect** none, because those hours belong to Thursday's
+window, which is not selected.
+
+**PS-OF.27 — Conditions are ANDed, and the preview says so**
+Create "₹50 off, orders over ₹500, paid online, first order only". As a
+returning customer paying online with a ₹600 cart: **expect** no discount, and
+the offer's skip reason is the first-order rule, not the threshold. The editor's
+summary sentence must read the conditions back — check it says "first orders
+only" and "paid by card or UPI".
+
+**PS-OF.28 ★ — A blocked offer is never nudged**
+With "₹50 off prepaid orders over ₹500" and a ₹400 cart, choose **cash on
+delivery**. **Expect:** NO "add ₹100 more" strip. The shopper cannot have that
+offer on these terms, and inviting them to spend more for it is worse than
+silence. Switch to paying online: the strip appears.
+
+**PS-OF.29 ★★ — A group offer now previews (the Phase E regression)**
+Put a customer in a group, create an automatic offer restricted to that group,
+and fill their cart. **Expect:** the discount shows in the CART, not only after
+placing the order. Before Phase E the bundle filtered the offer in and the cart
+hook filtered it back out, so the total dropped at the last step and the offer
+looked broken until the shopper committed.
+
+**PS-OF.30 — First order at the till, before and after attaching a customer**
+With "10% off, first order only" on all channels, ring a cart at the register
+BEFORE entering a phone number. **Expect:** no discount in the quoted total.
+Enter a new customer's number: **expect** the total to drop by 10% at that
+point, and the charge to match it exactly. The quote and the sale must never
+disagree.
+
+**PS-OF.31 ★★ — Free delivery applies ALONGSIDE a discount**
+Create "20% off everything" and "free delivery over ₹500", both website. Fill a
+₹600 cart. **Expect:** 20% off AND free delivery. They are different pockets of
+the bill; a shopper must not lose delivery because a discount scored higher.
+
+**PS-OF.32 ★★ — An offer only ever LOWERS the delivery charge**
+Set your delivery settings to free above ₹999, then run "free delivery over
+₹500". A ₹600 cart: free. A ₹1,200 cart: free. **Expect:** never a charge that
+appears when the basket grows. Then check the offer's budget after each: the
+₹600 order consumed the delivery amount, the ₹1,200 order consumed **nothing**,
+because the standing policy was already shipping it free.
+
+**PS-OF.33 — Free delivery cannot be saved for the register**
+Try to save a free-delivery offer with the POS channel, or with no channel set
+at all. **Expect:** refused, naming the website. A register sale has nothing to
+deliver.
+
+**PS-OF.34 ★★ — A free gift is real stock**
+Create "free tumbler over ₹2,000" and place a qualifying order. **Expect:** the
+tumbler appears on the order, the invoice, the receipt and the confirmation
+email at ₹0, AND its stock drops by one. Check inventory: the unit is recorded as
+having left the shelf, exactly as if it had been sold.
+
+**PS-OF.35 ★★ — The offer withdraws itself when the gift runs out**
+Reduce the gift's stock to zero, then place a qualifying order. **Expect:** no
+gift promised anywhere — not on the cart, not in the confirmation. It must never
+be offered and then fail. Restock it: the offer resumes with no action.
+
+**PS-OF.36 ★★ — The till TELLS the cashier to hand the gift over**
+Ring a qualifying sale at the register. **Expect:** a "Hand over [gift]" row in
+the cart panel, and no change to any total. That row is the whole point: the
+gift is free, so nothing else on screen moves, and without it the shop gives
+away the stock on paper and nothing in the bag.
+
+**PS-OF.37 — One gift per order**
+Run two gift offers that both qualify. **Expect:** one gift, and the other
+offer recorded as skipped. Each is real stock going out of the door.
+
+**PS-OF.38 ★★ — A bundle takes the DEAREST items and never marks up**
+Create "any 3 for ₹999" over a category, and put ₹500, ₹400, ₹300 and ₹200 items
+in the cart. **Expect:** ₹201 off (the three dearest, ₹1,200, priced at ₹999) and
+the ₹200 item untouched. Then try four ₹100 items: **expect no discount at all**
+— ₹300 of goods must never be charged at ₹999.
+
+**PS-OF.39 — Cashback does not change what is paid**
+Create "₹100 store credit on orders over ₹2,000" and place a ₹2,500 order.
+**Expect:** the customer pays ₹2,500 exactly — the total, tax and invoice are
+untouched — and ₹100 appears in their store credit afterwards. Check the credit
+history: it is listed as cashback, distinct from a refund and from credit granted
+by hand.
+
+**PS-OF.40 ★★ — Mink creates an offer switched OFF**
+With the Mink offer gates on, ask Mink to draft an offer and approve it.
+**Expect:** the offer exists and is **paused**. Switching it on is a second,
+separate approval with its own preview. One approval must never do both.
+
+**PS-OF.41 ★★ — Mink cannot propose an offer without a budget**
+Ask Mink for an offer with no spending cap. **Expect:** refused. Then create one
+with a budget, clear the budget by hand, and ask Mink to switch it on:
+**expect refused again**. The cap is checked at activation as well as creation,
+because an offer that lost its budget in between would otherwise go live
+uncapped.
+
+**PS-OF.42 — Mink cannot exceed your own discount limit**
+Set the store's maximum discount per order to 20%, then ask Mink for 50% off.
+**Expect:** refused, naming your limit. Lower the limit to 10% after a proposal
+is written but before approving it: **expect the approval to be refused too** —
+the limit is read at the moment of approval, not when the proposal was made.
+
+**PS-OF.43 — Mink's reward shapes are deliberately limited**
+Ask Mink for a bundle, a free gift, a spending ladder or free delivery.
+**Expect:** it says those are set up by hand. They change stock, money owed or
+delivery cost in ways one approval screen cannot show honestly.
+
+---
+
 ## 12. Known gaps
 
 Real and deliberate, so nobody files them as bugs:
 
 | Gap                                                                     | Status                                                                                                                                                                                                                                                                                                                                                                                                         |
 | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **An open register keeps quoting a changed offer until reopened**       | By design: offers arrive with `RegisterConfig` (like tax rates) so the till prices without the network. Reopen the register after editing an offer. PS-OF.5                                                                                                                                                                                                                                                    |
+| ~~**`offers.onSalePrice` is inert on the website**~~                    | **FIXED** (PS-OF.8b). `placeOrder` selected only `product_variants.selling_price`, so no sale price reached the engine online and "Skip sale items" skipped nothing. Both counters now charge the sale price and pass the regular one as the engine's baseline, so the setting is the store-wide choice it always claimed to be                                                                                |
 | **Cancel doesn't offer a refund**                                       | Refunds themselves are BUILT (dashboard order drawer, gateway + manual — CODEBASE §26). What's left is wiring the prompt into cancel and pickup expiry; by decision it must prompt, never auto-pay                                                                                                                                                                                                             |
 | ~~**Checkout queried customers while the cashier typed**~~              | **FIXED** (PS-C.25–C.29, C.44–C.47). Charge now accepts one 10-digit mobile locally; only OK performs an exact lookup, creates a phone-only customer when absent, and advances directly to payment                                                                                                                                                                                                             |
 | ~~**A stale checkout could still create a Walk-in sale**~~              | **FIXED** (PS-C.48). Customer capture is enforced by `placePosSale` before all pricing, stock and money work; historical anonymous receipts remain readable but no new register sale can omit its customer                                                                                                                                                                                                     |

@@ -105,11 +105,36 @@ function adjustedCarrierRate(
   return money(Math.max(0, carrierRate));
 }
 
+/**
+ * Does this order ship free?
+ *
+ * ★★ CHEAPEST WINS, AND THAT IS THE WHOLE RULE (plan §14). Two authorities now
+ * speak to one number: `store_shipping_settings` is the store's STANDING
+ * policy, and a `free_shipping` offer may only ever REDUCE the charge. So the
+ * two are ORed and nothing else is needed.
+ *
+ * ★ IT IS WHAT MAKES "FREE ABOVE ₹500" WORK AT ALL. A store whose standing
+ * policy is free-above-₹999 and whose offer is free-above-₹500 has temporarily
+ * lowered its threshold to ₹500 — exactly the intent, with no special case.
+ * The alternative (offer overrides setting) would make the offer RAISE the
+ * charge on a ₹1,200 cart the standing policy already ships free. Any rule
+ * other than cheapest-wins produces a cart where ADDING ITEMS INCREASES
+ * DELIVERY COST, which no shopper will read as anything but a bug.
+ *
+ * ⚠ For a Shiprocket store the rate is quoted LIVE from the carrier, so a
+ * waiver zeroes the CUSTOMER's charge while the merchant still pays the
+ * courier. The margin hit is real and invisible on the order; the Help guide
+ * says so in as many words.
+ */
 export function freeShippingApplies(
   settings: ShippingSettings,
   merchandiseSubtotal: number,
+  /** An offer waives delivery. Defaults false, so every existing caller is
+   *  unchanged. */
+  offerWaivesShipping = false,
 ): boolean {
   return (
+    offerWaivesShipping ||
     settings.mode === "free" ||
     (settings.freeAbove !== null && merchandiseSubtotal >= settings.freeAbove)
   );
@@ -118,8 +143,13 @@ export function freeShippingApplies(
 export function manualShippingOption(
   settings: ShippingSettings,
   merchandiseSubtotal: number,
+  offerWaivesShipping = false,
 ): CheckoutShippingOption {
-  const free = freeShippingApplies(settings, merchandiseSubtotal);
+  // ★ BOTH ANSWERS, because the budget question needs them apart: would this
+  // have shipped free WITHOUT the offer, and does it ship free now?
+  const standingFree = freeShippingApplies(settings, merchandiseSubtotal);
+  const free = standingFree || offerWaivesShipping;
+  const listAmount = settings.mode === "flat" ? money(settings.flatRate) : 0;
   const minDays = settings.manualMinDays;
   const maxDays = Math.max(minDays, settings.manualMaxDays);
   return {
@@ -127,6 +157,9 @@ export function manualShippingOption(
     label: free ? "Free shipping" : "Standard shipping",
     description: deliveryDescription(minDays, maxDays),
     amount: free ? 0 : money(settings.flatRate),
+    // Zero when the standing policy already made it free — the offer waived
+    // nothing and must be charged nothing.
+    offerWaivedAmount: !standingFree && offerWaivesShipping ? listAmount : 0,
     carrierCost: null,
     courierId: null,
     courierName: null,
@@ -142,13 +175,15 @@ export function shiprocketShippingOptions(
   raw: unknown,
   settings: ShippingSettings,
   merchandiseSubtotal: number,
+  offerWaivesShipping = false,
 ): CheckoutShippingOption[] {
   const root = record(raw);
   const data = record(root?.data);
   const companies = Array.isArray(data?.available_courier_companies)
     ? data.available_courier_companies
     : [];
-  const thresholdFree = freeShippingApplies(settings, merchandiseSubtotal);
+  const standingFree = freeShippingApplies(settings, merchandiseSubtotal);
+  const thresholdFree = standingFree || offerWaivesShipping;
 
   const options = companies.flatMap((value): CheckoutShippingOption[] => {
     const courier = record(value);
@@ -175,6 +210,13 @@ export function shiprocketShippingOptions(
         label: courierName.trim(),
         description: deliveryDescription(minDays, maxDays),
         amount: thresholdFree ? 0 : adjustedCarrierRate(carrierRate, settings),
+        // What the offer waived is the price the shopper would otherwise have
+        // been charged — the ADJUSTED rate, not the raw carrier cost, since
+        // any merchant markup was part of that price too.
+        offerWaivedAmount:
+          !standingFree && offerWaivesShipping
+            ? adjustedCarrierRate(carrierRate, settings)
+            : 0,
         carrierCost: money(carrierRate),
         courierId: String(courierId),
         courierName: courierName.trim(),

@@ -111,6 +111,11 @@ export interface EmitEventInput {
    * own field and is snapshotted onto the queue row at enqueue.
    */
   email?: EmailOrderSummary;
+  /**
+   * Use the database's event-specific uniqueness key for a reconciled outbox
+   * event. Ordinary audit events remain append-only and should omit this.
+   */
+  deduplicate?: boolean;
 }
 
 // Payload guards. The column is jsonb and store admins can read every event of
@@ -200,21 +205,23 @@ export async function recordEvent(
   try {
     let queuedInstantEmail = false;
     const eventId = await withService(async (db) => {
-      const [event] = await db
-        .insert(activityEvents)
-        .values({
-          storeId: input.storeId ?? null,
-          type: def.key,
-          actorType: input.actor?.type ?? "system",
-          actorId: input.actor?.id ?? null,
-          actorLabel: trim(input.actor?.label),
-          subjectType: trim(input.subject?.type, 64),
-          subjectId: trim(input.subject?.id, 128),
-          subjectLabel: trim(input.subject?.label),
-          payload: sanitizePayload(input.payload),
-          ip: trim(input.ip, 64),
-        })
-        .returning({ id: activityEvents.id });
+      const insert = db.insert(activityEvents).values({
+        storeId: input.storeId ?? null,
+        type: def.key,
+        actorType: input.actor?.type ?? "system",
+        actorId: input.actor?.id ?? null,
+        actorLabel: trim(input.actor?.label),
+        subjectType: trim(input.subject?.type, 64),
+        subjectId: trim(input.subject?.id, 128),
+        subjectLabel: trim(input.subject?.label),
+        payload: sanitizePayload(input.payload),
+        ip: trim(input.ip, 64),
+      });
+      const [event] = input.deduplicate
+        ? await insert
+            .onConflictDoNothing()
+            .returning({ id: activityEvents.id })
+        : await insert.returning({ id: activityEvents.id });
 
       if (!event) return null;
       queuedInstantEmail = await fanOut(db, event.id, input, def.key);

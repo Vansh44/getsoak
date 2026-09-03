@@ -5,6 +5,11 @@ const mocks = vi.hoisted(() => ({
   readCatalog: vi.fn(),
   readByLocation: vi.fn(),
   resolveLocation: vi.fn(),
+  enqueueWorkflow: vi.fn(),
+  enqueueRevenueWorkflow: vi.fn(),
+  enqueueLaunchWorkflow: vi.fn(),
+  enqueueSlowInventoryWorkflow: vi.fn(),
+  enqueueDelayedPickupWorkflow: vi.fn(),
 }));
 vi.mock("../catalog-health-read", () => ({
   readMinkCatalogHealth: mocks.readCatalog,
@@ -12,6 +17,13 @@ vi.mock("../catalog-health-read", () => ({
 }));
 vi.mock("./location-scope", () => ({
   resolveMinkLocation: mocks.resolveLocation,
+}));
+vi.mock("../workflows", () => ({
+  enqueueWeeklyTradingReport: mocks.enqueueWorkflow,
+  enqueueRevenueDeclineInvestigation: mocks.enqueueRevenueWorkflow,
+  enqueueProductLaunchPreparation: mocks.enqueueLaunchWorkflow,
+  enqueueSlowInventoryPromotion: mocks.enqueueSlowInventoryWorkflow,
+  enqueueDelayedPickupReview: mocks.enqueueDelayedPickupWorkflow,
 }));
 
 import { minkReadToolRegistry } from "./read-tools";
@@ -55,6 +67,41 @@ beforeEach(() => {
     items: [],
     truncated: false,
   });
+  mocks.enqueueWorkflow.mockResolvedValue({
+    id: "11111111-1111-4111-8111-111111111111",
+    template: "weekly_trading_report",
+    status: "queued",
+    currentStep: 0,
+    totalSteps: 3,
+  });
+  mocks.enqueueRevenueWorkflow.mockResolvedValue({
+    id: "22222222-2222-4222-8222-222222222222",
+    template: "revenue_decline_investigation",
+    status: "queued",
+    currentStep: 0,
+    totalSteps: 3,
+  });
+  mocks.enqueueLaunchWorkflow.mockResolvedValue({
+    id: "33333333-3333-4333-8333-333333333333",
+    template: "product_launch_preparation",
+    status: "queued",
+    currentStep: 0,
+    totalSteps: 3,
+  });
+  mocks.enqueueSlowInventoryWorkflow.mockResolvedValue({
+    id: "44444444-4444-4444-8444-444444444444",
+    template: "slow_inventory_promotion",
+    status: "queued",
+    currentStep: 0,
+    totalSteps: 3,
+  });
+  mocks.enqueueDelayedPickupWorkflow.mockResolvedValue({
+    id: "55555555-5555-4555-8555-555555555555",
+    template: "delayed_pickup_review",
+    status: "queued",
+    currentStep: 0,
+    totalSteps: 3,
+  });
 });
 
 describe("Mink read-tool declarations", () => {
@@ -67,6 +114,9 @@ describe("Mink read-tool declarations", () => {
       "search_products",
       "get_sales_summary",
       "list_low_stock",
+      "start_weekly_trading_report",
+      "start_revenue_decline_investigation",
+      "start_product_launch_preparation",
       "list_orders",
       "search_help_centre",
     ]);
@@ -121,6 +171,8 @@ describe("Mink read-tool declarations", () => {
     expect(declared({ dashboard: ["view"], analytics: ["view"] })).toEqual([
       "get_store_profile",
       "get_sales_summary",
+      "start_weekly_trading_report",
+      "start_revenue_decline_investigation",
       "search_help_centre",
     ]);
     expect(declared({ dashboard: ["view"], inventory: ["view"] })).toEqual([
@@ -128,11 +180,174 @@ describe("Mink read-tool declarations", () => {
       "list_low_stock",
       "search_help_centre",
     ]);
+    expect(
+      declared({
+        dashboard: ["view"],
+        products: ["view"],
+        inventory: ["view"],
+      }),
+    ).toEqual([
+      "get_store_profile",
+      "get_catalog_summary",
+      "search_products",
+      "list_low_stock",
+      "start_product_launch_preparation",
+      "search_help_centre",
+    ]);
     expect(declared({ dashboard: ["view"], orders: ["view"] })).toEqual([
       "get_store_profile",
       "list_orders",
       "search_help_centre",
     ]);
+    expect(
+      minkReadToolRegistry
+        .declarationsFor({
+          ...ACTOR,
+          isSuperadmin: false,
+          draftingEnabled: true,
+          permissions: { orders: ["view", "manage"] },
+        })
+        .map((tool) => tool.name),
+    ).toEqual([
+      "start_delayed_pickup_review",
+      "list_orders",
+      "get_order_for_status_transition",
+      "propose_order_status_transition",
+    ]);
+    expect(
+      minkReadToolRegistry
+        .declarationsFor({
+          ...ACTOR,
+          isSuperadmin: false,
+          draftingEnabled: true,
+          permissions: {
+            dashboard: ["view"],
+            analytics: ["view"],
+            products: ["view"],
+            inventory: ["view"],
+            promotions: ["manage"],
+          },
+        })
+        .map((tool) => tool.name),
+    ).toContain("start_slow_inventory_promotion");
+    expect(
+      minkReadToolRegistry
+        .declarationsFor({
+          ...ACTOR,
+          isSuperadmin: false,
+          draftingEnabled: false,
+          permissions: {
+            analytics: ["view"],
+            products: ["view"],
+            inventory: ["view"],
+            promotions: ["manage"],
+          },
+        })
+        .map((tool) => tool.name),
+    ).not.toContain("start_slow_inventory_promotion");
+  });
+
+  it("queues bounded Phase 6B and 6C workflows through permission-gated tools", async () => {
+    const actor = { ...ACTOR, draftingEnabled: true, runId: "run-1" };
+    const revenue = await minkReadToolRegistry.execute(actor, {
+      id: "call-revenue",
+      name: "start_revenue_decline_investigation",
+      args: { period: "30d", location_name: "Shop" },
+    });
+    expect(mocks.enqueueRevenueWorkflow).toHaveBeenCalledWith(actor, {
+      period: "30d",
+      locationName: "Shop",
+    });
+    expect(revenue.artifact).toMatchObject({
+      type: "workflow",
+      template: "revenue_decline_investigation",
+      runId: "22222222-2222-4222-8222-222222222222",
+    });
+
+    const launch = await minkReadToolRegistry.execute(actor, {
+      id: "call-launch",
+      name: "start_product_launch_preparation",
+      args: { product_sku: "SKU10010007V028" },
+    });
+    expect(mocks.enqueueLaunchWorkflow).toHaveBeenCalledWith(actor, {
+      productSku: "SKU10010007V028",
+    });
+    expect(launch.artifact).toMatchObject({
+      type: "workflow",
+      template: "product_launch_preparation",
+      runId: "33333333-3333-4333-8333-333333333333",
+    });
+  });
+
+  it("queues the Phase 6D shelf analysis with a bounded period and exact location", async () => {
+    const actor = { ...ACTOR, draftingEnabled: true, runId: "run-1" };
+    const result = await minkReadToolRegistry.execute(actor, {
+      id: "call-slow-inventory",
+      name: "start_slow_inventory_promotion",
+      args: { period: "90d", location_name: "Delhi warehouse" },
+    });
+
+    expect(mocks.enqueueSlowInventoryWorkflow).toHaveBeenCalledWith(actor, {
+      period: "90d",
+      locationName: "Delhi warehouse",
+    });
+    expect(result.artifact).toMatchObject({
+      type: "workflow",
+      template: "slow_inventory_promotion",
+      runId: "44444444-4444-4444-8444-444444444444",
+    });
+  });
+
+  it("queues the Phase 6E pickup review for one exact location without a recipient", async () => {
+    const actor = { ...ACTOR, draftingEnabled: true, runId: "run-1" };
+    const result = await minkReadToolRegistry.execute(actor, {
+      id: "call-delayed-pickups",
+      name: "start_delayed_pickup_review",
+      args: { location_name: "Delhi warehouse" },
+    });
+
+    expect(mocks.enqueueDelayedPickupWorkflow).toHaveBeenCalledWith(actor, {
+      locationName: "Delhi warehouse",
+    });
+    expect(result.artifact).toMatchObject({
+      type: "workflow",
+      template: "delayed_pickup_review",
+      runId: "55555555-5555-4555-8555-555555555555",
+    });
+    const declaration = minkReadToolRegistry
+      .declarationsFor(actor)
+      .find((tool) => tool.name === "start_delayed_pickup_review");
+    expect(declaration?.parametersJsonSchema.properties).toEqual({
+      location_name: expect.objectContaining({
+        type: "string",
+        maxLength: 100,
+      }),
+    });
+  });
+
+  it("queues the durable report only through its Analytics-gated tool", async () => {
+    const actor = { ...ACTOR, runId: "run-1" };
+    const result = await minkReadToolRegistry.execute(actor, {
+      id: "call-workflow",
+      name: "start_weekly_trading_report",
+      args: {},
+    });
+
+    expect(mocks.enqueueWorkflow).toHaveBeenCalledWith(actor);
+    expect(result.response.output).toMatchObject({
+      workflow: { status: "queued", totalSteps: 3 },
+    });
+    expect(result.artifact).toEqual({
+      type: "workflow",
+      runId: "11111111-1111-4111-8111-111111111111",
+      template: "weekly_trading_report",
+      title: "Weekly trading report",
+      description:
+        "A durable 7-day sales report compared with the previous period.",
+      status: "queued",
+      currentStep: 0,
+      totalSteps: 3,
+    });
   });
 
   it("returns bounded scope choices instead of silently aggregating a vague multi-location stock request", async () => {
@@ -478,6 +693,8 @@ describe("Mink read-tool declarations", () => {
       "search_products",
       "get_sales_summary",
       "list_low_stock",
+      "start_weekly_trading_report",
+      "start_delayed_pickup_review",
       "list_orders",
     ]) {
       await expect(

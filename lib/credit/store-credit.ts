@@ -22,7 +22,18 @@ import {
 import { logError } from "@/lib/observability/logger";
 import { toPaise, toRupees } from "@/lib/payments/refunds";
 
-export type CreditKind = "refund" | "grant" | "spend" | "reinstate" | "expire";
+export type CreditKind =
+  | "refund"
+  | "grant"
+  | "spend"
+  | "reinstate"
+  | "expire"
+  // ★ ITS OWN KIND, not `grant`. §29 keeps `reinstate` apart from `grant`
+  // because a report that cannot tell a returned spend from a goodwill gesture
+  // overstates what the store gave away — cashback earned by a promotion is a
+  // third thing again, and a merchant reviewing what their offers cost must be
+  // able to see it apart from what they handed out by hand.
+  | "cashback";
 
 export interface CreditLedgerRow {
   id: string;

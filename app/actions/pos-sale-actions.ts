@@ -39,6 +39,7 @@ import { TENDER_LABEL } from "@/lib/pos/receipt";
 import {
   getCreditBalance,
   getCreditBalances,
+  issueCredit,
   spendCredit,
 } from "@/lib/credit/store-credit";
 import { withService } from "@/lib/db/client";
@@ -88,6 +89,21 @@ import {
 } from "@/lib/pos/session";
 import { posStaff, posStaffLocations } from "@/drizzle/schema";
 import { posTotals } from "@/lib/pos/totals";
+import { loadFirstOrderState } from "@/lib/offers/resolve";
+import {
+  bonusOffersToReserve,
+  loadExhaustedOfferIds,
+  loadOffersForRegister,
+  recordOfferRedemptions,
+  releaseOfferUses,
+  reserveOfferUses,
+  resolveOffersForCart,
+  type ReservedOffer,
+} from "@/lib/offers/cart";
+import type { Offer, OnSalePriceMode } from "@/lib/offers/types";
+import type { AppliedOffer } from "@/lib/offers/apply";
+import { toPaise } from "@/lib/money/allocate";
+import { variantEffectiveSelling } from "@/lib/pricing";
 import { isPosDateRangeKey, posDateRange } from "@/lib/pos/date-range";
 import {
   accountTenderTotal,
@@ -204,6 +220,29 @@ export interface RegisterConfig {
   gatewayKeyId: string | null;
   /** Header for the payment modal, so the customer sees who they are paying. */
   storeName: string;
+  /**
+   * The store's live offers and the policy to price them under.
+   *
+   * ★ SHIPPED TO THE CLIENT FOR THE SAME REASON `taxRates` IS: the sell screen
+   * must quote what `placePosSale` will charge, and the register's design goal
+   * is to price without waiting on the network. The screen runs the same pure
+   * engine (`lib/offers/apply.ts`); the server re-resolves authoritatively.
+   *
+   * ★ HERE AND NOT IN THE CACHED CATALOGUE, which persists in IndexedDB — an
+   * ended offer or a spent budget would otherwise keep being quoted to
+   * customers until the next background sync.
+   *
+   * ⚠ No customer is attached when a register opens, so per-customer caps are
+   * not resolved in this list. `resolvePosCustomerByPhone` returns the ids that
+   * customer has used up so the screen can re-price at Charge, and
+   * `reserve_offer_use` refuses atomically at completion either way.
+   */
+  offers: Offer[];
+  offerPolicy: {
+    onSalePrice: OnSalePriceMode;
+    maxTotalDiscountPercent: number;
+    autoApply: boolean;
+  };
 }
 
 export async function getRegisterConfig(): Promise<
@@ -212,40 +251,53 @@ export async function getRegisterConfig(): Promise<
   const op = await resolvePosOperator();
   if (!op) return { error: "Not signed in." };
 
-  const [billingRows, locRows, settings, classRows, gatewayKeyId, brand] =
-    await Promise.all([
-      withService((db) =>
-        db
-          .select({
-            tax_enabled: storeBillingSettings.taxEnabled,
-            prices_include_tax: storeBillingSettings.pricesIncludeTax,
-            gst_enabled: storeBillingSettings.gstEnabled,
-            default_tax_class_id: storeBillingSettings.defaultTaxClassId,
-          })
-          .from(storeBillingSettings)
-          .where(eq(storeBillingSettings.storeId, op.storeId))
-          .limit(1),
-      ).catch(() => []),
-      withService((db) =>
-        db
-          .select({ name: storeLocations.name })
-          .from(storeLocations)
-          .where(eq(storeLocations.id, op.locationId))
-          .limit(1),
-      ).catch(() => []),
-      getStoreSettings(),
-      withService((db) =>
-        db
-          .select({ id: taxClasses.id, rate: taxClasses.rate })
-          .from(taxClasses)
-          .where(eq(taxClasses.storeId, op.storeId)),
-      ).catch(() => []),
-      // Losing this costs the online tender, never the till: a register that
-      // cannot open because the gateway lookup blipped is far worse than one
-      // that quietly offers cash, card and UPI for a minute.
-      counterGatewayKeyId(op.storeId).catch(() => null),
-      getStoreBrandById(op.storeId).catch(() => null),
-    ]);
+  const [
+    billingRows,
+    locRows,
+    settings,
+    classRows,
+    gatewayKeyId,
+    brand,
+    offerBundle,
+  ] = await Promise.all([
+    withService((db) =>
+      db
+        .select({
+          tax_enabled: storeBillingSettings.taxEnabled,
+          prices_include_tax: storeBillingSettings.pricesIncludeTax,
+          gst_enabled: storeBillingSettings.gstEnabled,
+          default_tax_class_id: storeBillingSettings.defaultTaxClassId,
+        })
+        .from(storeBillingSettings)
+        .where(eq(storeBillingSettings.storeId, op.storeId))
+        .limit(1),
+    ).catch(() => []),
+    withService((db) =>
+      db
+        .select({ name: storeLocations.name })
+        .from(storeLocations)
+        .where(eq(storeLocations.id, op.locationId))
+        .limit(1),
+    ).catch(() => []),
+    getStoreSettings(),
+    withService((db) =>
+      db
+        .select({ id: taxClasses.id, rate: taxClasses.rate })
+        .from(taxClasses)
+        .where(eq(taxClasses.storeId, op.storeId)),
+    ).catch(() => []),
+    // Losing this costs the online tender, never the till: a register that
+    // cannot open because the gateway lookup blipped is far worse than one
+    // that quietly offers cash, card and UPI for a minute.
+    counterGatewayKeyId(op.storeId).catch(() => null),
+    getStoreBrandById(op.storeId).catch(() => null),
+    // Fails open to no offers on its own — a register that cannot open is a
+    // shop that cannot trade, while a register with no offers is a shop
+    // selling at full price. Joins this concurrent batch rather than adding a
+    // serial read, because statements inside one `withService` share a client
+    // and run one after another (Step 20).
+    loadOffersForRegister(op.storeId),
+  ]);
 
   const taxRates: Record<string, number> = {};
   for (const c of classRows) {
@@ -274,6 +326,8 @@ export async function getRegisterConfig(): Promise<
     onlinePayments: !!gatewayKeyId,
     gatewayKeyId,
     storeName: brand?.name ?? "Store",
+    offers: offerBundle.offers,
+    offerPolicy: offerBundle.policy,
   };
 }
 
@@ -402,6 +456,18 @@ export interface PosCatalogItem {
    *  RegisterConfig.taxRates. Carried so the sell screen can quote the
    *  tax-inclusive total without a round trip (see lib/pos/totals.ts). */
   taxClassId: string | null;
+  /**
+   * The product's category, for offer scoping.
+   *
+   * ★ CARRIED EVEN THOUGH PHASE A SHIPS NO UI FOR A CATEGORY-SCOPED OFFER.
+   * The engine and `placePosSale` both honour `offer_products` already, so a
+   * client that cannot see the category would quote a DIFFERENT total from the
+   * one charged the moment such an offer exists — by any route, including a
+   * direct insert. The catalogue cache key carries a SCHEMA_VERSION precisely
+   * so adding a field the register depends on forces a re-sync rather than
+   * serving a stale shape.
+   */
+  categoryId: string | null;
 }
 
 // The sellable-catalog projection, shared by the interactive lookup and the
@@ -432,6 +498,7 @@ const CATALOG_COLS = {
   // cashier ring up) stock sitting in the other shop.
   loc_stock: inventoryLevels.onHand,
   p_tax_class: products.taxClassId,
+  p_category: products.categoryId,
 };
 
 /** Mirrors CATALOG_COLS. Written out rather than inferred so a schema change
@@ -459,6 +526,7 @@ interface CatalogRow {
   v_stock: number | null;
   loc_stock: number | null;
   p_tax_class: string | null;
+  p_category: string | null;
 }
 
 function mapCatalogRow(r: CatalogRow): PosCatalogItem {
@@ -480,6 +548,7 @@ function mapCatalogRow(r: CatalogRow): PosCatalogItem {
     trackInventory: isVariant ? !!r.v_track : !!r.p_track,
     allowBackorder: isVariant ? !!r.v_backorder : !!r.p_backorder,
     taxClassId: r.p_tax_class ?? null,
+    categoryId: r.p_category ?? null,
   };
 }
 
@@ -730,9 +799,36 @@ export interface PosCustomer {
  * claimable mobile-only customer is created immediately; a concurrent insert
  * safely falls through to the existing row via the store/mobile unique key.
  */
-export async function resolvePosCustomerByPhone(
-  mobile: string,
-): Promise<{ customer?: PosCustomer; created?: boolean; error?: string }> {
+export async function resolvePosCustomerByPhone(mobile: string): Promise<{
+  customer?: PosCustomer;
+  created?: boolean;
+  /**
+   * Offers this customer has already used up.
+   *
+   * ★ RIDES ALONG WITH THE LOOKUP RATHER THAN TAKING ITS OWN ROUND TRIP, the
+   * same reasoning as `storeCredit` above. A register opens with nobody
+   * attached, so a per-customer offer cap cannot be resolved then — and
+   * without this the till would keep quoting an offer the server refuses at
+   * completion, in front of the customer.
+   */
+  exhaustedOfferIds?: string[];
+  /**
+   * Whether this is the customer's first order here.
+   *
+   * ★ THE SAME REASON `exhaustedOfferIds` RIDES ALONG. A register opens with
+   * nobody attached, so a first-order offer cannot be resolved then — and
+   * without this the till would quote a total WITHOUT the new-customer
+   * discount while `placePosSale` charges WITH it, so the screen and the sale
+   * would disagree. `lib/pos/totals.ts` exists precisely to stop that
+   * (CODEBASE §22), and the fix is to give the quote the same fact the charge
+   * has, not to let the two diverge and hope the difference is favourable.
+   *
+   * `undefined` on a failed read, which the engine treats as not-first — the
+   * fail-closed direction.
+   */
+  isFirstOrder?: boolean;
+  error?: string;
+}> {
   const op = await resolvePosOperator();
   if (!op) return { error: "Not signed in." };
   if (!posCan(op.role, "sell")) return { error: "Not allowed." };
@@ -809,6 +905,10 @@ export async function resolvePosCustomerByPhone(
           email: null,
           storeCredit: 0,
         },
+        // A customer created seconds ago has redeemed nothing and ordered
+        // nothing, so neither of these needs a read at all.
+        exhaustedOfferIds: [],
+        isFirstOrder: true,
       };
     }
     const row = result.row;
@@ -823,6 +923,23 @@ export async function resolvePosCustomerByPhone(
         email: row.email,
         storeCredit: Number(row.store_credit) || 0,
       },
+      // Fails silently to an empty list on its own: the atomic reservation
+      // still refuses at completion, and this must never block attaching a
+      // customer to a sale.
+      // Both fail silently on their own: the atomic reservation still refuses
+      // at completion, and neither must ever block attaching a customer.
+      ...(await (async () => {
+        const [exhaustedOfferIds, firstOrder] = await Promise.all([
+          loadExhaustedOfferIds(op.storeId, row.id),
+          withService((db) =>
+            loadFirstOrderState(db, op.storeId, row.id),
+          ).catch(() => false),
+        ]);
+        return {
+          exhaustedOfferIds,
+          isFirstOrder: firstOrder === true,
+        };
+      })()),
     };
   } catch (err) {
     return { error: dbErrorMessage(err, "Couldn't resolve that customer.") };
@@ -1095,6 +1212,10 @@ interface PricedLine {
   line_discount: number;
   tax_rate: number;
   tax_class_name: string | null;
+  category_id: string | null;
+  /** The non-sale price, when `unit_price` is a variant's special price.
+   *  Equal to `unit_price` otherwise. Feeds `offers.onSalePrice` (plan §14). */
+  listed_price: number;
 }
 
 export async function placePosSale(
@@ -1271,6 +1392,10 @@ export async function placePosSale(
               cost_price: products.costPrice,
               tax_class_id: products.taxClassId,
               hsn_code: products.hsnCode,
+              // Offer scoping (docs/offers-plan.md). In this select rather
+              // than a second read: the catalogue batch is already positioned
+              // to return it, and a sale must not pay another round trip.
+              category_id: products.categoryId,
             })
             .from(products)
             .where(
@@ -1534,15 +1659,154 @@ export async function placePosSale(
       line_discount: lineDisc,
       tax_rate: billing.taxEnabled ? (cls?.rate ?? 0) : 0,
       tax_class_name: cls?.name ?? null,
+      category_id: p.category_id ?? null,
+      listed_price: listed,
     });
   }
+
+  // Offers, resolved AUTHORITATIVELY here. The sell screen quotes with the same
+  // pure engine over the offer list in `RegisterConfig`, but the client is not
+  // trusted: a stale config, a spent budget or a customer's own usage can all
+  // have moved since the register opened.
+  //
+  // ★ THE REGISTER'S OWN LOCATION, never a client-supplied one. Every till
+  // session is bound to one location by `resolvePosOperator`, and that is the
+  // value a location-scoped offer is measured against.
+  let offerResult = await resolveOffersForCart({
+    storeId: op.storeId,
+    channel: "pos",
+    locationId: op.locationId,
+    customerId: customerId ?? null,
+    lines: priced.map((l, idx) => ({
+      id: String(idx),
+      productId: l.product_id,
+      variantId: l.variant_id,
+      categoryId: l.category_id ?? null,
+      quantity: l.quantity,
+      unitPrice: l.unit_price,
+      // ★ The price this line is on sale FROM, so `offers.onSalePrice` can
+      // tell a discounted line from a full-price one. `placeOrder` passes the
+      // same pair online now that it charges `special_price` too, so the two
+      // counters price a basket identically.
+      regularUnitPrice: l.listed_price,
+      lineDiscount: l.line_discount,
+    })),
+  });
+  // ★★ A GIFT BECOMES A REAL ₹0 LINE AT THE TILL TOO, appended before totals,
+  // stock and the insert so each handles it with no special case (plan §12).
+  // The register's own location reserves it, exactly as it reserves a paid
+  // line — a gift is stock leaving the shelf, and nothing else told inventory
+  // those units went out of the door.
+  //
+  // ★ APPENDED BEFORE `offerDiscounts` is built, so the index alignment those
+  // arrays rely on still holds; the gift's own offer discount is zero, which
+  // is true — it was added, not discounted.
+  // The gift's worth, for its offer's budget cap only.
+  let giftValuePaise = 0;
+  let giftLineIndex = -1;
+  if (offerResult?.gift) {
+    const wanted = offerResult.gift;
+    let giftUnitPrice = 0;
+    const giftLine = await (async () => {
+      const rows = await withService((db) =>
+        db
+          .select({
+            id: products.id,
+            name: products.name,
+            // What the customer would OTHERWISE have paid — what the gift
+            // costs the offer's budget. The LINE stays ₹0.
+            sellingPrice: products.sellingPrice,
+            taxClassId: products.taxClassId,
+            categoryId: products.categoryId,
+            hsnCode: products.hsnCode,
+          })
+          .from(products)
+          .where(
+            and(
+              eq(products.id, wanted.productId),
+              eq(products.storeId, op.storeId),
+            ),
+          )
+          .limit(1),
+      );
+      const row = rows[0];
+      if (!row) return null;
+
+      let variantName: string | null = null;
+      if (wanted.variantId) {
+        const vRows = await withService((db) =>
+          db
+            .select({
+              name: productVariants.name,
+              selling_price: productVariants.sellingPrice,
+              special_price: productVariants.specialPrice,
+            })
+            .from(productVariants)
+            .where(
+              and(
+                eq(productVariants.id, wanted.variantId as string),
+                eq(productVariants.productId, wanted.productId),
+              ),
+            )
+            .limit(1),
+        );
+        if (!vRows[0]) return null;
+        variantName = vRows[0].name;
+        giftUnitPrice = variantEffectiveSelling(vRows[0]);
+      }
+
+      if (!wanted.variantId) giftUnitPrice = row.sellingPrice;
+      const giftCls = row.taxClassId
+        ? classById.get(row.taxClassId)
+        : billing.defaultTaxClassId
+          ? classById.get(billing.defaultTaxClassId)
+          : null;
+
+      return {
+        product_id: row.id,
+        variant_id: wanted.variantId,
+        name: row.name,
+        variant_name: variantName,
+        hsn_code: row.hsnCode ?? null,
+        unit_price: 0,
+        // Null, not zero: a gift's cost is a marketing expense, and recording
+        // it against a ₹0 sale would report a loss on the line (§20).
+        unit_cost: null,
+        quantity: wanted.quantity,
+        amount: 0,
+        line_discount: 0,
+        // ★ The gift's OWN tax class is recorded even though tax on a zero
+        // taxable value is zero — see the note in `checkout-actions.ts`. ⚠ The
+        // GST treatment of a free good is NOT professionally reviewed.
+        tax_rate: billing.taxEnabled ? (giftCls?.rate ?? 0) : 0,
+        tax_class_name: giftCls?.name ?? null,
+        category_id: row.categoryId ?? null,
+        listed_price: 0,
+      };
+    })();
+
+    if (giftLine) {
+      giftLineIndex = priced.length;
+      priced.push(giftLine);
+      giftValuePaise = toPaise(giftUnitPrice * giftLine.quantity);
+    } else {
+      // Gone between resolution and here. A sale must never fail over a free
+      // extra, so the gift is dropped and the sale completes.
+      offerResult = { ...offerResult, gift: null };
+    }
+  }
+
+  const offerDiscounts = priced.map((_, idx) =>
+    offerResult ? (offerResult.lines[idx]?.offerDiscount ?? 0) : 0,
+  );
 
   // Totals come from the SHARED pure helper the sell screen also uses, so the
   // amount quoted to the customer and the amount charged cannot diverge.
   const totals = posTotals({
-    lines: priced.map((l) => ({
+    lines: priced.map((l, idx) => ({
       gross: l.unit_price * l.quantity,
       lineDiscount: l.line_discount,
+      offerDiscount: offerDiscounts[idx],
       rate: l.tax_rate,
       label: l.tax_class_name ?? undefined,
     })),
@@ -1662,8 +1926,78 @@ export async function placePosSale(
     console.error("next_pos_receipt_no:", errMsg(err));
   }
 
+  // 8b. Claim every applied offer's caps atomically, BEFORE anything is
+  //     written — the same position as the shelf check and the gateway
+  //     verification, so a refusal still costs nothing to unwind.
+  //
+  // ★ A CAP REFUSAL STOPS THE SALE; A BLIP DOES NOT. The cashier is standing
+  // in front of a customer, so being told "that offer just ran out" is a real
+  // answer they can act on, while an unreachable database must never stop the
+  // till taking money (invariant 6).
+  let reservedOffers: ReservedOffer[] = [];
+  // Exactly what was claimed, carried to the ledger so the two agree.
+  const redeemedOffers: AppliedOffer[] = [];
+  if (offerResult && offerResult.applied.length > 0) {
+    const claim = await reserveOfferUses(
+      op.storeId,
+      offerResult.applied,
+      customerId ?? null,
+    );
+    reservedOffers = claim.reserved;
+    if (!claim.ok) {
+      await releaseOfferUses(op.storeId, reservedOffers);
+      return { error: claim.error ?? "That offer is no longer available." };
+    }
+    redeemedOffers.push(...offerResult.applied);
+  }
+
+  // ★★ A GIFT OR CASHBACK CAP DROPS THE EXTRA, NEVER THE SALE. These caps are
+  // meant to be reached, so refusing at the till would stop the shop selling
+  // with a customer standing at the counter — the same reason the gift block
+  // above drops a vanished gift instead of failing. The gift is already a ₹0
+  // line, so removing it changes no total the cashier has quoted.
+  const bonuses = offerResult
+    ? bonusOffersToReserve(offerResult, giftValuePaise)
+    : [];
+  for (const bonus of bonuses) {
+    const claim = await reserveOfferUses(
+      op.storeId,
+      [bonus],
+      customerId ?? null,
+    );
+    reservedOffers = [...reservedOffers, ...claim.reserved];
+    if (claim.ok) {
+      redeemedOffers.push(bonus);
+      continue;
+    }
+    if (bonus.level === "gift") {
+      // ★ THE EXACT INDEX RECORDED WHEN THE LINE WAS APPENDED, never a
+      // search. Matching on "this product at ₹0" would also match a genuinely
+      // free paid line, and removing the wrong element would silently shift
+      // `offerDiscounts` out of step with its lines.
+      if (giftLineIndex >= 0) {
+        priced.splice(giftLineIndex, 1);
+        offerDiscounts.splice(giftLineIndex, 1);
+      }
+      offerResult = offerResult ? { ...offerResult, gift: null } : offerResult;
+    } else {
+      offerResult = offerResult
+        ? { ...offerResult, credit: null }
+        : offerResult;
+    }
+  }
+  const releaseOffers = async () => {
+    if (reservedOffers.length === 0) return;
+    await releaseOfferUses(op.storeId, reservedOffers);
+    reservedOffers = [];
+  };
+
   // 9. Write: order → stock → items → payments, unwinding in reverse on failure.
   const orderId = crypto.randomUUID();
+  // ★ ITEM IDS UP FRONT, not read back from RETURNING. `order_item_offers`
+  // must know which persisted row each engine line became, and a multi-row
+  // INSERT returning rows in VALUES order is not something SQL guarantees.
+  const orderItemIds = priced.map(() => crypto.randomUUID());
   let orderRef = "";
   try {
     const rows = await withService((db) =>
@@ -1759,6 +2093,7 @@ export async function placePosSale(
       ok = false;
     }
     if (!ok) {
+      await releaseOffers();
       await releaseStock();
       await deleteOrder();
       const label = l.variant_name ? `${l.name} (${l.variant_name})` : l.name;
@@ -1786,6 +2121,7 @@ export async function placePosSale(
       note: `In-store sale ${orderRef}`,
     });
     if (!spent) {
+      await releaseOffers();
       await releaseStock();
       await deleteOrder();
       return {
@@ -1802,6 +2138,7 @@ export async function placePosSale(
           const lineTax = totals.taxLines[i]?.tax ?? 0;
           const g = splitGst(gstEnabled ? lineTax : 0, intra);
           return {
+            id: orderItemIds[i],
             orderId,
             productId: l.product_id,
             variantId: l.variant_id,
@@ -1812,6 +2149,11 @@ export async function placePosSale(
             quantity: l.quantity,
             total: l.amount,
             lineDiscount: l.line_discount,
+            // §8: the offer's share of THIS line. `total` stays gross of it,
+            // exactly as it is of the order discount, so `refundBreakdown`
+            // subtracts it directly rather than re-allocating it — which is
+            // what stops a returned free line refunding full price.
+            offerDiscount: offerDiscounts[i],
             taxRate: l.tax_rate,
             taxAmount: lineTax,
             taxClassName: l.tax_class_name,
@@ -1825,6 +2167,7 @@ export async function placePosSale(
     );
   } catch (err) {
     console.error("placePosSale (items):", errMsg(err));
+    await releaseOffers();
     await releaseStock();
     await deleteOrder();
     return { error: "Couldn't save the sale's items. Please try again." };
@@ -1854,6 +2197,7 @@ export async function placePosSale(
     // payment rows at all — invisible to shift reconciliation, and claiming
     // money that belongs to another order. Unwind instead.
     if (hasGatewayTender && isUniqueViolation(err)) {
+      await releaseOffers();
       await releaseStock();
       await deleteOrder();
       return {
@@ -1979,6 +2323,47 @@ export async function placePosSale(
       total: totals.total,
     },
   });
+
+  // Which offer discounted which line, and who redeemed what. AFTER the sale is
+  // fully committed and best-effort: losing it is a reporting gap, while
+  // failing here would have taken the customer's money and then told the
+  // cashier the sale did not go through.
+  if (
+    offerResult &&
+    (offerResult.allocations.length > 0 || redeemedOffers.length > 0)
+  ) {
+    await recordOfferRedemptions({
+      storeId: op.storeId,
+      orderId,
+      customerId: customerId ?? null,
+      result: offerResult,
+      redeemed: redeemedOffers,
+      orderItemIdByLine: new Map(
+        priced.map((_, idx) => [String(idx), orderItemIds[idx]]),
+      ),
+    });
+  }
+
+  // ★★ CASHBACK, AFTER THE SALE COMMITS. Same rule as online: a liability, not
+  // a discount, so it changes nothing the customer paid and must never fail a
+  // sale whose money is already in the drawer.
+  //
+  // ★ IT NEEDS A CUSTOMER, and at this counter there always is one — Charge
+  // requires an attached customer before any pricing or payment write. A
+  // balance has to belong to somebody; issuing it to nobody would be a
+  // liability the shop could never honour.
+  if (offerResult?.credit && offerResult.credit.amount > 0 && customerId) {
+    await issueCredit({
+      storeId: op.storeId,
+      customerId,
+      amount: offerResult.credit.amount,
+      kind: "cashback",
+      ref: orderId,
+      note: offerResult.credit.offerName,
+    }).catch((err: unknown) =>
+      logError("pos.cashback_failed", err, { storeId: op.storeId, orderId }),
+    );
+  }
 
   reportStockChanges(
     op.storeId,

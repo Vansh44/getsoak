@@ -2022,6 +2022,1099 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260902_0058_mink_phase_6a_durable_workflows",
+      "description": "Add restart-safe leased Mink workflow runs, idempotent steps/events and the read-only weekly trading report template",
+      "file": "sql/20260902_0058_mink_phase_6a_durable_workflows.sql",
+      "checksum": "da8e3059c71ba96c6631018912c251a92b561d6d2ef2f92aa0e790d3e142e989",
+      "transaction": true,
+      "requires": ["20260902_0057_mobile_pos_notification_help"],
+      "verify": {},
+      "applyVerify": {
+        "tables": [
+          "mink_workflow_runs",
+          "mink_workflow_steps",
+          "mink_workflow_events"
+        ],
+        "constraints": [
+          "mink_workflow_runs_owner_idempotency_key",
+          "mink_workflow_runs_lease_check",
+          "mink_workflow_runs_completion_check",
+          "mink_workflow_steps_run_store_fkey",
+          "mink_workflow_steps_completion_check",
+          "mink_workflow_events_run_store_fkey",
+          "mink_workflow_events_run_key"
+        ],
+        "rlsTables": [
+          "mink_workflow_runs",
+          "mink_workflow_steps",
+          "mink_workflow_events"
+        ],
+        "queries": [
+          {
+            "name": "workflow operational tables are unavailable to app_user",
+            "sql": "select count(*)::text from information_schema.role_table_grants where grantee = 'app_user' and table_schema = 'public' and table_name in ('mink_workflow_runs', 'mink_workflow_steps', 'mink_workflow_events')",
+            "equals": "0"
+          },
+          {
+            "name": "workflow completion notifications have a reconciliation key",
+            "sql": "select count(*)::text from pg_indexes where schemaname = 'public' and indexname = 'activity_events_mink_workflow_completion_key'",
+            "equals": "1"
+          },
+          {
+            "name": "the Mink guide documents restart-safe weekly reports",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%<h2>Create a durable weekly trading report</h2>%' and body like '%exact active locations accessible to you%' and body like '%re-checks Analytics access%' and body like '%reconciled and idempotent%' and body like '%anchored to the original request time%' and body like '%consume no additional Gemini tokens%' and body like '%Cancelled workflows cannot resume%' and body like '%Cloud Run restarts%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "tables": [
+          "mink_workflow_runs",
+          "mink_workflow_steps",
+          "mink_workflow_events"
+        ],
+        "constraints": [
+          "mink_workflow_runs_owner_idempotency_key",
+          "mink_workflow_runs_lease_check",
+          "mink_workflow_steps_run_store_fkey",
+          "mink_workflow_events_run_store_fkey"
+        ],
+        "rlsTables": [
+          "mink_workflow_runs",
+          "mink_workflow_steps",
+          "mink_workflow_events"
+        ],
+        "queries": [
+          {
+            "name": "workflow completion reconciliation key already exists",
+            "sql": "select count(*)::text from pg_indexes where schemaname = 'public' and indexname = 'activity_events_mink_workflow_completion_key'",
+            "equals": "1"
+          },
+          {
+            "name": "the Mink guide already documents restart-safe weekly reports",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%<h2>Create a durable weekly trading report</h2>%' and body like '%consume no additional Gemini tokens%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260902_0059_offers_phase_a",
+      "description": "Add the offers spine: offer rules, scoping, redemptions, per-line allocation and atomic caps; migrate coupons into offers",
+      "file": "sql/20260902_0059_offers_phase_a.sql",
+      "checksum": "801a9fa2d5d8537d41969ddbe7ee735be472f27b45c29f31eaac448afeda9b10",
+      "transaction": true,
+      "requires": ["20260902_0058_mink_phase_6a_durable_workflows"],
+      "verify": {},
+      "applyVerify": {
+        "tables": [
+          "offers",
+          "offer_products",
+          "offer_locations",
+          "offer_user_groups",
+          "offer_redemptions",
+          "order_item_offers"
+        ],
+        "columns": [
+          "order_items.offer_discount",
+          "offers.budget_paise",
+          "offers.max_per_customer"
+        ],
+        "constraints": [
+          "offers_store_code_key",
+          "offers_code_present_check",
+          "offers_reward_type_check",
+          "offers_trigger_type_check",
+          "offers_limits_check",
+          "offers_channels_check",
+          "offer_products_one_target_check",
+          "offer_products_offer_store_fkey",
+          "offer_redemptions_offer_store_fkey",
+          "order_items_offer_discount_check",
+          "order_item_offers_item_key"
+        ],
+        "functions": [
+          "reserve_offer_use(uuid,uuid,text,bigint)",
+          "release_offer_use(uuid,uuid,bigint)"
+        ],
+        "rlsTables": [
+          "offers",
+          "offer_products",
+          "offer_locations",
+          "offer_user_groups",
+          "offer_redemptions",
+          "order_item_offers"
+        ],
+        "queries": [
+          {
+            "name": "offer redemptions and per-line offer records are never anon-readable",
+            "sql": "select count(*)::text from information_schema.role_table_grants where grantee = 'anon' and table_schema = 'public' and table_name in ('offer_redemptions', 'order_item_offers')",
+            "equals": "0"
+          },
+          {
+            "name": "anon cannot read an offer's budget, spend or redemption counts",
+            "sql": "select count(*)::text from information_schema.column_privileges where grantee = 'anon' and table_schema = 'public' and table_name = 'offers' and column_name in ('budget_paise', 'spent_paise', 'redemption_count', 'max_redemptions', 'max_per_customer')",
+            "equals": "0"
+          },
+          {
+            "name": "anon can still read the columns the storefront renders",
+            "sql": "select count(*)::text from information_schema.column_privileges where grantee = 'anon' and table_schema = 'public' and table_name = 'offers' and column_name in ('reward_type', 'reward_config', 'trigger_type', 'trigger_config')",
+            "equals": "4"
+          },
+          {
+            "name": "the offers guide is published under a category",
+            "sql": "select count(*)::text from public.help_articles where slug = 'create-and-manage-offers' and status = 'published' and category_id is not null and body like '%Best offer wins%' and body like '%A total budget%' and body like '%Stack on sale prices%' and body like '%never happens for an offer that needs a code%' and body like '%any code you have advertised keeps working%'",
+            "equals": "1"
+          },
+          {
+            "name": "every redeemable coupon became an offer",
+            "sql": "select count(*)::text from public.coupons c where c.code = regexp_replace(upper(c.code), '\\s', '', 'g') and char_length(c.code) between 1 and 200 and not exists (select 1 from public.offers o where o.id = c.id)",
+            "equals": "0"
+          },
+          {
+            "name": "an unlimited coupon did not migrate as a cap of zero",
+            "sql": "select count(*)::text from public.offers o join public.coupons c on c.id = o.id where c.max_uses = 0 and o.max_redemptions is not null",
+            "equals": "0"
+          },
+          {
+            "name": "migrated coupons are storefront-only, not switched on at every till",
+            "sql": "select count(*)::text from public.offers o join public.coupons c on c.id = o.id where o.channels <> array['storefront']::text[]",
+            "equals": "0"
+          },
+          {
+            "name": "discount codes are never readable through the API",
+            "sql": "select count(*)::text from information_schema.column_privileges where grantee in ('anon', 'authenticated') and table_schema = 'public' and table_name = 'offers' and column_name = 'code'",
+            "equals": "0"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "tables": [
+          "offers",
+          "offer_products",
+          "offer_locations",
+          "offer_user_groups",
+          "offer_redemptions",
+          "order_item_offers"
+        ],
+        "columns": [
+          "order_items.offer_discount",
+          "offers.budget_paise",
+          "offers.max_per_customer"
+        ],
+        "constraints": [
+          "offers_store_code_key",
+          "offers_code_present_check",
+          "offers_reward_type_check",
+          "offers_trigger_type_check",
+          "offers_limits_check",
+          "offers_channels_check",
+          "offer_products_one_target_check",
+          "offer_products_offer_store_fkey",
+          "offer_redemptions_offer_store_fkey",
+          "order_items_offer_discount_check",
+          "order_item_offers_item_key"
+        ],
+        "functions": [
+          "reserve_offer_use(uuid,uuid,text,bigint)",
+          "release_offer_use(uuid,uuid,bigint)"
+        ],
+        "rlsTables": [
+          "offers",
+          "offer_products",
+          "offer_locations",
+          "offer_user_groups",
+          "offer_redemptions",
+          "order_item_offers"
+        ],
+        "queries": [
+          {
+            "name": "offer redemptions and per-line offer records are never anon-readable",
+            "sql": "select count(*)::text from information_schema.role_table_grants where grantee = 'anon' and table_schema = 'public' and table_name in ('offer_redemptions', 'order_item_offers')",
+            "equals": "0"
+          },
+          {
+            "name": "anon cannot read an offer's budget, spend or redemption counts",
+            "sql": "select count(*)::text from information_schema.column_privileges where grantee = 'anon' and table_schema = 'public' and table_name = 'offers' and column_name in ('budget_paise', 'spent_paise', 'redemption_count', 'max_redemptions', 'max_per_customer')",
+            "equals": "0"
+          },
+          {
+            "name": "anon can still read the columns the storefront renders",
+            "sql": "select count(*)::text from information_schema.column_privileges where grantee = 'anon' and table_schema = 'public' and table_name = 'offers' and column_name in ('reward_type', 'reward_config', 'trigger_type', 'trigger_config')",
+            "equals": "4"
+          },
+          {
+            "name": "the offers guide is published under a category",
+            "sql": "select count(*)::text from public.help_articles where slug = 'create-and-manage-offers' and status = 'published' and category_id is not null and body like '%Best offer wins%' and body like '%A total budget%' and body like '%Stack on sale prices%' and body like '%never happens for an offer that needs a code%' and body like '%any code you have advertised keeps working%'",
+            "equals": "1"
+          },
+          {
+            "name": "discount codes are never readable through the API",
+            "sql": "select count(*)::text from information_schema.column_privileges where grantee in ('anon', 'authenticated') and table_schema = 'public' and table_name = 'offers' and column_name = 'code'",
+            "equals": "0"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260902_0060_variant_sale_price_help",
+      "description": "State that a variant sale price is what the customer pays online and in store, how it affects tax and delivery charges, and that the offers sale-price choice applies in both channels",
+      "file": "sql/20260902_0060_variant_sale_price_help.sql",
+      "checksum": "d60f6e8c7cec281f9f9aa799ba3f45a12ef185ee88038668b1b6d29b95aaf8ef",
+      "transaction": true,
+      "requires": ["20260902_0059_offers_phase_a"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "the product and offers guides state what a variant sale price does",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and ((slug = 'set-product-pricing-tax-and-shipping-details' and body like '%<h2>What a variant sale price does</h2>%' and body like '%both on your website and at the register%' and body like '%counts towards free delivery at the price the customer actually pays%') or (slug = 'add-product-images-and-variants' and body like '%<h2>Sale prices on variants</h2>%' and body like '%Clear it to return the variant to its selling price%') or (slug = 'create-and-manage-offers' and body like '%priced the same way in either place%'))",
+            "equals": "3"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "the product and offers guides already state what a variant sale price does",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and ((slug = 'set-product-pricing-tax-and-shipping-details' and body like '%<h2>What a variant sale price does</h2>%' and body like '%both on your website and at the register%' and body like '%counts towards free delivery at the price the customer actually pays%') or (slug = 'add-product-images-and-variants' and body like '%<h2>Sale prices on variants</h2>%' and body like '%Clear it to return the variant to its selling price%') or (slug = 'create-and-manage-offers' and body like '%priced the same way in either place%'))",
+            "equals": "3"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260902_0061_offers_phase_b",
+      "description": "Allow product/category-scoped offer rewards and cart-contents conditions; index the storefront badge lookup",
+      "file": "sql/20260902_0061_offers_phase_b.sql",
+      "checksum": "7c72d72443e0522a7cd5a13e8cdfd655342fa15911f25d23b7dcc8214b8d0715",
+      "transaction": true,
+      "requires": ["20260902_0060_variant_sale_price_help"],
+      "verify": {},
+      "applyVerify": {
+        "constraints": [
+          "offers_reward_type_check",
+          "offers_trigger_type_check"
+        ],
+        "functions": ["offers_contents_trigger_needs_scope()"],
+        "queries": [
+          {
+            "name": "the offers guide explains product scoping and the two shapes",
+            "sql": "select count(*)::text from public.help_articles where slug = 'create-and-manage-offers' and status = 'published' and body like '%<h2>Offers on particular products</h2>%' and body like '%never raises a price to meet the offer%' and body like '%discounts the <strong>whole</strong> basket once it qualifies%'",
+            "equals": "1"
+          },
+          {
+            "name": "line-scoped rewards and contents conditions are allowed",
+            "sql": "select count(*)::text from pg_constraint where conname = 'offers_reward_type_check' and pg_get_constraintdef(oid) like '%fixed_price%'",
+            "equals": "1"
+          },
+          {
+            "name": "a contents condition cannot be saved without a scope",
+            "sql": "select count(*)::text from pg_trigger where tgname = 'offers_contents_trigger_needs_scope' and tgdeferrable and tginitdeferred",
+            "equals": "1"
+          },
+          {
+            "name": "the storefront badge path can find offers by product",
+            "sql": "select count(*)::text from pg_indexes where schemaname = 'public' and indexname in ('offer_products_product_lookup_idx', 'offer_products_variant_lookup_idx', 'offer_products_category_lookup_idx')",
+            "equals": "3"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "constraints": [
+          "offers_reward_type_check",
+          "offers_trigger_type_check"
+        ],
+        "functions": ["offers_contents_trigger_needs_scope()"],
+        "queries": [
+          {
+            "name": "the offers guide explains product scoping and the two shapes",
+            "sql": "select count(*)::text from public.help_articles where slug = 'create-and-manage-offers' and status = 'published' and body like '%<h2>Offers on particular products</h2>%' and body like '%never raises a price to meet the offer%' and body like '%discounts the <strong>whole</strong> basket once it qualifies%'",
+            "equals": "1"
+          },
+          {
+            "name": "line-scoped rewards and contents conditions are allowed",
+            "sql": "select count(*)::text from pg_constraint where conname = 'offers_reward_type_check' and pg_get_constraintdef(oid) like '%fixed_price%'",
+            "equals": "1"
+          },
+          {
+            "name": "a contents condition cannot be saved without a scope",
+            "sql": "select count(*)::text from pg_trigger where tgname = 'offers_contents_trigger_needs_scope' and tgdeferrable and tginitdeferred",
+            "equals": "1"
+          },
+          {
+            "name": "the storefront badge path can find offers by product",
+            "sql": "select count(*)::text from pg_indexes where schemaname = 'public' and indexname in ('offer_products_product_lookup_idx', 'offer_products_variant_lookup_idx', 'offer_products_category_lookup_idx')",
+            "equals": "3"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260902_0062_offers_phase_c",
+      "description": "Allow buy-X-get-Y offer rewards, enforce their config shape, and require every item-level reward to name its items",
+      "file": "sql/20260902_0062_offers_phase_c.sql",
+      "checksum": "d603e7bade1f6d58a26b441e55b7d5280000b301fa789ad877e2d35d0de8945d",
+      "transaction": true,
+      "requires": ["20260902_0061_offers_phase_b"],
+      "verify": {},
+      "applyVerify": {
+        "constraints": ["offers_reward_type_check", "offers_bxgy_shape_check"],
+        "functions": ["offers_contents_trigger_needs_scope()"],
+        "queries": [
+          {
+            "name": "buy X get Y is an allowed reward",
+            "sql": "select count(*)::text from pg_constraint where conname = 'offers_reward_type_check' and pg_get_constraintdef(oid) like '%buy_x_get_y%'",
+            "equals": "1"
+          },
+          {
+            "name": "a buy X get Y config cannot omit its quantities",
+            "sql": "select count(*)::text from pg_constraint where conname = 'offers_bxgy_shape_check' and pg_get_constraintdef(oid) ilike '%coalesce%'",
+            "equals": "1"
+          },
+          {
+            "name": "every item-level reward is required to name its items",
+            "sql": "select count(*)::text from pg_proc where proname = 'offers_contents_trigger_needs_scope' and prosrc like '%buy_x_get_y%'",
+            "equals": "1"
+          },
+          {
+            "name": "the offers guide explains sets, cheapest-free and the per-order limit",
+            "sql": "select count(*)::text from public.help_articles where slug = 'create-and-manage-offers' and status = 'published' and body like '%<h2>Buy one get one, and similar</h2>%' and body like '%A set is the buy count plus the get count%' and body like '%cheapest qualifying items are the discounted ones%' and body like '%counted across the basket, not per line%' and body like '%gives ten away%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "constraints": ["offers_reward_type_check", "offers_bxgy_shape_check"],
+        "functions": ["offers_contents_trigger_needs_scope()"],
+        "queries": [
+          {
+            "name": "buy X get Y is an allowed reward",
+            "sql": "select count(*)::text from pg_constraint where conname = 'offers_reward_type_check' and pg_get_constraintdef(oid) like '%buy_x_get_y%'",
+            "equals": "1"
+          },
+          {
+            "name": "a buy X get Y config cannot omit its quantities",
+            "sql": "select count(*)::text from pg_constraint where conname = 'offers_bxgy_shape_check' and pg_get_constraintdef(oid) ilike '%coalesce%'",
+            "equals": "1"
+          },
+          {
+            "name": "every item-level reward is required to name its items",
+            "sql": "select count(*)::text from pg_proc where proname = 'offers_contents_trigger_needs_scope' and prosrc like '%buy_x_get_y%'",
+            "equals": "1"
+          },
+          {
+            "name": "the offers guide explains sets, cheapest-free and the per-order limit",
+            "sql": "select count(*)::text from public.help_articles where slug = 'create-and-manage-offers' and status = 'published' and body like '%<h2>Buy one get one, and similar</h2>%' and body like '%A set is the buy count plus the get count%' and body like '%cheapest qualifying items are the discounted ones%' and body like '%counted across the basket, not per line%' and body like '%gives ten away%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260903_0063_offers_phase_d",
+      "description": "Allow spend-ladder and quantity-ladder offer rewards, enforce their level shapes, and require a quantity ladder to name its items",
+      "file": "sql/20260903_0063_offers_phase_d.sql",
+      "checksum": "afb0f7c07b1c2d4a8b4296e453ffbd56be49d7b5e39730aa47651ab54b8ba479",
+      "transaction": true,
+      "requires": ["20260902_0062_offers_phase_c"],
+      "verify": {},
+      "applyVerify": {
+        "constraints": ["offers_reward_type_check"],
+        "functions": [
+          "offers_contents_trigger_needs_scope()",
+          "offers_ladder_shape_valid()"
+        ],
+        "queries": [
+          {
+            "name": "the two ladder rewards are allowed",
+            "sql": "select count(*)::text from pg_constraint where conname = 'offers_reward_type_check' and pg_get_constraintdef(oid) like '%tiered%' and pg_get_constraintdef(oid) like '%volume_break%'",
+            "equals": "1"
+          },
+          {
+            "name": "a ladder cannot omit its levels entirely",
+            "sql": "select count(*)::text from pg_proc where proname = 'offers_ladder_shape_valid' and prosrc like '%lists no levels%' and prosrc like '%jsonb_typeof%'",
+            "equals": "1"
+          },
+          {
+            "name": "the ladder shape rule is enforced by a trigger on the offers table",
+            "sql": "select count(*)::text from pg_trigger where tgname = 'offers_ladder_shape_valid' and tgrelid = 'public.offers'::regclass and NOT tgisinternal",
+            "equals": "1"
+          },
+          {
+            "name": "a quantity ladder must name its items, and a spend ladder must not be forced to",
+            "sql": "select count(*)::text from pg_proc where proname = 'offers_contents_trigger_needs_scope' and prosrc like '%volume_break%' and prosrc not like '%''tiered''%'",
+            "equals": "1"
+          },
+          {
+            "name": "the offers guide explains highest-level-wins and shared quantity counting",
+            "sql": "select count(*)::text from public.help_articles where slug = 'create-and-manage-offers' and status = 'published' and body like '%<h2>Spend more, save more</h2>%' and body like '%<h2>Buy more, save more</h2>%' and body like '%never two levels added together%' and body like '%counted <strong>together</strong> across those choices%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "constraints": ["offers_reward_type_check"],
+        "functions": [
+          "offers_contents_trigger_needs_scope()",
+          "offers_ladder_shape_valid()"
+        ],
+        "queries": [
+          {
+            "name": "the two ladder rewards are allowed",
+            "sql": "select count(*)::text from pg_constraint where conname = 'offers_reward_type_check' and pg_get_constraintdef(oid) like '%tiered%' and pg_get_constraintdef(oid) like '%volume_break%'",
+            "equals": "1"
+          },
+          {
+            "name": "a ladder cannot omit its levels entirely",
+            "sql": "select count(*)::text from pg_proc where proname = 'offers_ladder_shape_valid' and prosrc like '%lists no levels%' and prosrc like '%jsonb_typeof%'",
+            "equals": "1"
+          },
+          {
+            "name": "the ladder shape rule is enforced by a trigger on the offers table",
+            "sql": "select count(*)::text from pg_trigger where tgname = 'offers_ladder_shape_valid' and tgrelid = 'public.offers'::regclass and NOT tgisinternal",
+            "equals": "1"
+          },
+          {
+            "name": "a quantity ladder must name its items, and a spend ladder must not be forced to",
+            "sql": "select count(*)::text from pg_proc where proname = 'offers_contents_trigger_needs_scope' and prosrc like '%volume_break%' and prosrc not like '%''tiered''%'",
+            "equals": "1"
+          },
+          {
+            "name": "the offers guide explains highest-level-wins and shared quantity counting",
+            "sql": "select count(*)::text from public.help_articles where slug = 'create-and-manage-offers' and status = 'published' and body like '%<h2>Spend more, save more</h2>%' and body like '%<h2>Buy more, save more</h2>%' and body like '%never two levels added together%' and body like '%counted <strong>together</strong> across those choices%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260903_0064_offers_ladder_null_guard",
+      "description": "Refuse an offer level that carries no discount (jsonb_typeof returns NULL for an absent key, which plpgsql reads as false)",
+      "file": "sql/20260903_0064_offers_ladder_null_guard.sql",
+      "checksum": "cef214b936f71b16aec2c660a17bfdc9312ba49008e961f6fe0e2cd2553825f4",
+      "transaction": true,
+      "requires": ["20260903_0063_offers_phase_d"],
+      "verify": {},
+      "applyVerify": {
+        "constraints": [],
+        "functions": ["offers_ladder_shape_valid()"],
+        "queries": [
+          {
+            "name": "an absent discount on a level is refused, not read as NULL",
+            "sql": "select count(*)::text from pg_proc where proname = 'offers_ladder_shape_valid' and prosrc like '%coalesce(jsonb_typeof(v_rung -> ''value''), '''')%'",
+            "equals": "1"
+          },
+          {
+            "name": "the ladder trigger is still attached to the offers table",
+            "sql": "select count(*)::text from pg_trigger where tgname = 'offers_ladder_shape_valid' and tgrelid = 'public.offers'::regclass and NOT tgisinternal",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "constraints": [],
+        "functions": ["offers_ladder_shape_valid()"],
+        "queries": [
+          {
+            "name": "an absent discount on a level is refused, not read as NULL",
+            "sql": "select count(*)::text from pg_proc where proname = 'offers_ladder_shape_valid' and prosrc like '%coalesce(jsonb_typeof(v_rung -> ''value''), '''')%'",
+            "equals": "1"
+          },
+          {
+            "name": "the ladder trigger is still attached to the offers table",
+            "sql": "select count(*)::text from pg_trigger where tgname = 'offers_ladder_shape_valid' and tgrelid = 'public.offers'::regclass and NOT tgisinternal",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260903_0065_offers_phase_e",
+      "description": "Add the offers conditions list (payment method, fulfilment type, first order, time window) with shape and website-only enforcement",
+      "file": "sql/20260903_0065_offers_phase_e.sql",
+      "checksum": "c509accace955f5c5db6e2202c117116cc25fdd3f4c82580ed1de15b6276d652",
+      "transaction": true,
+      "requires": ["20260903_0064_offers_ladder_null_guard"],
+      "verify": {},
+      "applyVerify": {
+        "constraints": ["offers_conditions_shape_check"],
+        "functions": ["offers_conditions_valid()"],
+        "queries": [
+          {
+            "name": "offers carry a conditions list, defaulting to none",
+            "sql": "select count(*)::text from information_schema.columns where table_schema='public' and table_name='offers' and column_name='conditions' and data_type='jsonb' and is_nullable='NO'",
+            "equals": "1"
+          },
+          {
+            "name": "a non-array conditions value is refused, not read as NULL",
+            "sql": "select count(*)::text from pg_constraint where conname='offers_conditions_shape_check' and pg_get_constraintdef(oid) ilike '%jsonb_typeof%'",
+            "equals": "1"
+          },
+          {
+            "name": "website-only conditions are refused for a register offer",
+            "sql": "select count(*)::text from pg_proc where proname='offers_conditions_valid' and prosrc like '%only works on the website%' and prosrc like '%v_reaches_pos%'",
+            "equals": "1"
+          },
+          {
+            "name": "widening an offer's channels re-checks its conditions",
+            "sql": "select count(*)::text from pg_trigger t join pg_proc p on p.oid=t.tgfoid where t.tgname='offers_conditions_valid' and t.tgrelid='public.offers'::regclass and NOT t.tgisinternal and p.proname='offers_conditions_valid'",
+            "equals": "1"
+          },
+          {
+            "name": "the offers guide explains AND semantics, store timezone and the website-only limit",
+            "sql": "select count(*)::text from public.help_articles where slug='create-and-manage-offers' and status='published' and body like '%<h2>Extra conditions</h2>%' and body like '%<strong>All of them must be true</strong>%' and body like '%use your store''s timezone%' and body like '%work on your website only%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "constraints": ["offers_conditions_shape_check"],
+        "functions": ["offers_conditions_valid()"],
+        "queries": [
+          {
+            "name": "offers carry a conditions list, defaulting to none",
+            "sql": "select count(*)::text from information_schema.columns where table_schema='public' and table_name='offers' and column_name='conditions' and data_type='jsonb' and is_nullable='NO'",
+            "equals": "1"
+          },
+          {
+            "name": "a non-array conditions value is refused, not read as NULL",
+            "sql": "select count(*)::text from pg_constraint where conname='offers_conditions_shape_check' and pg_get_constraintdef(oid) ilike '%jsonb_typeof%'",
+            "equals": "1"
+          },
+          {
+            "name": "website-only conditions are refused for a register offer",
+            "sql": "select count(*)::text from pg_proc where proname='offers_conditions_valid' and prosrc like '%only works on the website%' and prosrc like '%v_reaches_pos%'",
+            "equals": "1"
+          },
+          {
+            "name": "widening an offer's channels re-checks its conditions",
+            "sql": "select count(*)::text from pg_trigger t join pg_proc p on p.oid=t.tgfoid where t.tgname='offers_conditions_valid' and t.tgrelid='public.offers'::regclass and NOT t.tgisinternal and p.proname='offers_conditions_valid'",
+            "equals": "1"
+          },
+          {
+            "name": "the offers guide explains AND semantics, store timezone and the website-only limit",
+            "sql": "select count(*)::text from public.help_articles where slug='create-and-manage-offers' and status='published' and body like '%<h2>Extra conditions</h2>%' and body like '%<strong>All of them must be true</strong>%' and body like '%use your store''s timezone%' and body like '%work on your website only%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260903_0066_offers_phase_f",
+      "description": "Allow the free_shipping offer reward and refuse it for register-inclusive offers",
+      "file": "sql/20260903_0066_offers_phase_f.sql",
+      "checksum": "35ca0e2474ead2754ae83c26d28ee615fb38d72178101102287b9d56b4b33a43",
+      "transaction": true,
+      "requires": ["20260903_0065_offers_phase_e"],
+      "verify": {},
+      "applyVerify": {
+        "constraints": ["offers_reward_type_check"],
+        "functions": ["offers_reward_channel_fit()"],
+        "queries": [
+          {
+            "name": "free delivery is an allowed reward",
+            "sql": "select count(*)::text from pg_constraint where conname = 'offers_reward_type_check' and pg_get_constraintdef(oid) like '%free_shipping%'",
+            "equals": "1"
+          },
+          {
+            "name": "a free-delivery offer cannot include the register, even with no channels set",
+            "sql": "select count(*)::text from pg_proc where proname = 'offers_reward_channel_fit' and prosrc like '%only applies to website orders%' and prosrc like '%array_length(NEW.channels, 1), 0) = 0%'",
+            "equals": "1"
+          },
+          {
+            "name": "the reward channel rule is enforced by a trigger on the offers table",
+            "sql": "select count(*)::text from pg_trigger where tgname = 'offers_reward_channel_fit' and tgrelid = 'public.offers'::regclass and NOT tgisinternal",
+            "equals": "1"
+          },
+          {
+            "name": "the offers guide explains cheapest-wins, the separate axis and the courier cost",
+            "sql": "select count(*)::text from public.help_articles where slug = 'create-and-manage-offers' and status = 'published' and body like '%<h2>Free delivery</h2>%' and body like '%only ever makes delivery cheaper%' and body like '%alongside a discount, not instead of one%' and body like '%You still pay the courier%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "constraints": ["offers_reward_type_check"],
+        "functions": ["offers_reward_channel_fit()"],
+        "queries": [
+          {
+            "name": "free delivery is an allowed reward",
+            "sql": "select count(*)::text from pg_constraint where conname = 'offers_reward_type_check' and pg_get_constraintdef(oid) like '%free_shipping%'",
+            "equals": "1"
+          },
+          {
+            "name": "a free-delivery offer cannot include the register, even with no channels set",
+            "sql": "select count(*)::text from pg_proc where proname = 'offers_reward_channel_fit' and prosrc like '%only applies to website orders%' and prosrc like '%array_length(NEW.channels, 1), 0) = 0%'",
+            "equals": "1"
+          },
+          {
+            "name": "the reward channel rule is enforced by a trigger on the offers table",
+            "sql": "select count(*)::text from pg_trigger where tgname = 'offers_reward_channel_fit' and tgrelid = 'public.offers'::regclass and NOT tgisinternal",
+            "equals": "1"
+          },
+          {
+            "name": "the offers guide explains cheapest-wins, the separate axis and the courier cost",
+            "sql": "select count(*)::text from public.help_articles where slug = 'create-and-manage-offers' and status = 'published' and body like '%<h2>Free delivery</h2>%' and body like '%only ever makes delivery cheaper%' and body like '%alongside a discount, not instead of one%' and body like '%You still pay the courier%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260903_0067_offers_phase_g",
+      "description": "Allow the free_item offer reward and enforce that a gift offer names a product and a bounded quantity",
+      "file": "sql/20260903_0067_offers_phase_g.sql",
+      "checksum": "546f3b0fef3c4ab5647dcaac065e7db20b12a36e62220bb3b471e993a436107d",
+      "transaction": true,
+      "requires": ["20260903_0066_offers_phase_f"],
+      "verify": {},
+      "applyVerify": {
+        "constraints": [
+          "offers_reward_type_check",
+          "offers_free_item_shape_check"
+        ],
+        "functions": [],
+        "queries": [
+          {
+            "name": "a free gift is an allowed reward",
+            "sql": "select count(*)::text from pg_constraint where conname = 'offers_reward_type_check' and pg_get_constraintdef(oid) like '%free_item%'",
+            "equals": "1"
+          },
+          {
+            "name": "a gift offer cannot omit its product or quantity",
+            "sql": "select count(*)::text from pg_constraint where conname = 'offers_free_item_shape_check' and pg_get_constraintdef(oid) ilike '%coalesce%'",
+            "equals": "1"
+          },
+          {
+            "name": "the offers guide explains stock, one-per-order and the unreviewed tax treatment",
+            "sql": "select count(*)::text from public.help_articles where slug = 'create-and-manage-offers' and status = 'published' and body like '%<h2>Free gift with an order</h2>%' and body like '%stops on its own when the gift runs out%' and body like '%check with your accountant%' and body like '%not automatically clawed back%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "constraints": [
+          "offers_reward_type_check",
+          "offers_free_item_shape_check"
+        ],
+        "functions": [],
+        "queries": [
+          {
+            "name": "a free gift is an allowed reward",
+            "sql": "select count(*)::text from pg_constraint where conname = 'offers_reward_type_check' and pg_get_constraintdef(oid) like '%free_item%'",
+            "equals": "1"
+          },
+          {
+            "name": "a gift offer cannot omit its product or quantity",
+            "sql": "select count(*)::text from pg_constraint where conname = 'offers_free_item_shape_check' and pg_get_constraintdef(oid) ilike '%coalesce%'",
+            "equals": "1"
+          },
+          {
+            "name": "the offers guide explains stock, one-per-order and the unreviewed tax treatment",
+            "sql": "select count(*)::text from public.help_articles where slug = 'create-and-manage-offers' and status = 'published' and body like '%<h2>Free gift with an order</h2>%' and body like '%stops on its own when the gift runs out%' and body like '%check with your accountant%' and body like '%not automatically clawed back%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260903_0068_offers_phase_h",
+      "description": "Allow bundle_price and credit_back offer rewards, enforce their shapes, and add the cashback store-credit kind",
+      "file": "sql/20260903_0068_offers_phase_h.sql",
+      "checksum": "0af78657775481d8d665628f25c621240afc7ab7d0207421791958f5d65d0616",
+      "transaction": true,
+      "requires": ["20260903_0067_offers_phase_g"],
+      "verify": {},
+      "applyVerify": {
+        "constraints": [
+          "offers_reward_type_check",
+          "offers_bundle_shape_check",
+          "offers_credit_back_shape_check",
+          "customer_credit_ledger_kind_check"
+        ],
+        "functions": [],
+        "queries": [
+          {
+            "name": "bundles and cashback are allowed rewards",
+            "sql": "select count(*)::text from pg_constraint where conname = 'offers_reward_type_check' and pg_get_constraintdef(oid) like '%bundle_price%' and pg_get_constraintdef(oid) like '%credit_back%'",
+            "equals": "1"
+          },
+          {
+            "name": "a bundle of one is refused, because that is a fixed price",
+            "sql": "select count(*)::text from pg_constraint where conname = 'offers_bundle_shape_check' and pg_get_constraintdef(oid) ilike '%coalesce%'",
+            "equals": "1"
+          },
+          {
+            "name": "cashback has its own credit-ledger kind, kept apart from a manual grant",
+            "sql": "select count(*)::text from pg_constraint where conname = 'customer_credit_ledger_kind_check' and pg_get_constraintdef(oid) like '%cashback%' and pg_get_constraintdef(oid) like '%grant%'",
+            "equals": "1"
+          },
+          {
+            "name": "the offers guide explains dearest-into-the-bundle and that cashback is a liability",
+            "sql": "select count(*)::text from public.help_articles where slug = 'create-and-manage-offers' and status = 'published' and body like '%most expensive qualifying items go into the bundle%' and body like '%a bundle can never raise a price%' and body like '%Cashback is not a discount%' and body like '%money you owe%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "constraints": [
+          "offers_reward_type_check",
+          "offers_bundle_shape_check",
+          "offers_credit_back_shape_check",
+          "customer_credit_ledger_kind_check"
+        ],
+        "functions": [],
+        "queries": [
+          {
+            "name": "bundles and cashback are allowed rewards",
+            "sql": "select count(*)::text from pg_constraint where conname = 'offers_reward_type_check' and pg_get_constraintdef(oid) like '%bundle_price%' and pg_get_constraintdef(oid) like '%credit_back%'",
+            "equals": "1"
+          },
+          {
+            "name": "a bundle of one is refused, because that is a fixed price",
+            "sql": "select count(*)::text from pg_constraint where conname = 'offers_bundle_shape_check' and pg_get_constraintdef(oid) ilike '%coalesce%'",
+            "equals": "1"
+          },
+          {
+            "name": "cashback has its own credit-ledger kind, kept apart from a manual grant",
+            "sql": "select count(*)::text from pg_constraint where conname = 'customer_credit_ledger_kind_check' and pg_get_constraintdef(oid) like '%cashback%' and pg_get_constraintdef(oid) like '%grant%'",
+            "equals": "1"
+          },
+          {
+            "name": "the offers guide explains dearest-into-the-bundle and that cashback is a liability",
+            "sql": "select count(*)::text from public.help_articles where slug = 'create-and-manage-offers' and status = 'published' and body like '%most expensive qualifying items go into the bundle%' and body like '%a bundle can never raise a price%' and body like '%Cashback is not a discount%' and body like '%money you owe%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260903_0069_offers_bundle_scope",
+      "description": "Require a bundle_price offer to name the items it bundles",
+      "file": "sql/20260903_0069_offers_bundle_scope.sql",
+      "checksum": "0b59d8937362887b4f60a63650d2e1e38b0ef7c5aadba3a5550320e650e25f99",
+      "transaction": true,
+      "requires": ["20260903_0068_offers_phase_h"],
+      "verify": {},
+      "applyVerify": {
+        "constraints": [],
+        "functions": ["offers_contents_trigger_needs_scope()"],
+        "queries": [
+          {
+            "name": "a bundle offer must name the items it bundles",
+            "sql": "select count(*)::text from pg_proc where proname = 'offers_contents_trigger_needs_scope' and prosrc like '%bundle_price%'",
+            "equals": "1"
+          },
+          {
+            "name": "rewards that touch no line are still not required to name items",
+            "sql": "select count(*)::text from pg_proc where proname = 'offers_contents_trigger_needs_scope' and prosrc not like '%credit_back%' and prosrc not like '%free_shipping%' and prosrc not like '%free_item%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "constraints": [],
+        "functions": ["offers_contents_trigger_needs_scope()"],
+        "queries": [
+          {
+            "name": "a bundle offer must name the items it bundles",
+            "sql": "select count(*)::text from pg_proc where proname = 'offers_contents_trigger_needs_scope' and prosrc like '%bundle_price%'",
+            "equals": "1"
+          },
+          {
+            "name": "rewards that touch no line are still not required to name items",
+            "sql": "select count(*)::text from pg_proc where proname = 'offers_contents_trigger_needs_scope' and prosrc not like '%credit_back%' and prosrc not like '%free_shipping%' and prosrc not like '%free_item%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260903_0070_offers_phase_i_mink",
+      "description": "Add Mink offer authority: three default-off gates, offer draft kinds, the offer approval target and a mandatory budget cap",
+      "file": "sql/20260903_0070_offers_phase_i_mink.sql",
+      "checksum": "27a1e713e3980b355fc66807a43b2b6cf1b399e3b6d2c4ed020dd6ee710a3949",
+      "transaction": true,
+      "requires": ["20260903_0069_offers_bundle_scope"],
+      "verify": {},
+      "applyVerify": {
+        "constraints": [
+          "mink_drafts_kind_check",
+          "mink_action_tool_access_name_check",
+          "mink_action_audit_tool_check",
+          "mink_action_approvals_resource_type_check",
+          "mink_action_approvals_offer_budget_check",
+          "mink_action_approvals_offer_target_check"
+        ],
+        "functions": [],
+        "queries": [
+          {
+            "name": "the three offer tools are gateable, auditable and proposable",
+            "sql": "select count(*)::text from pg_constraint where conname in ('mink_action_tool_access_name_check','mink_action_audit_tool_check') and pg_get_constraintdef(oid) like '%create_offer%' and pg_get_constraintdef(oid) like '%activate_offer%'",
+            "equals": "2"
+          },
+          {
+            "name": "activation is its own draft kind, separate from creating the terms",
+            "sql": "select count(*)::text from pg_constraint where conname = 'mink_drafts_kind_check' and pg_get_constraintdef(oid) like '%offer_create%' and pg_get_constraintdef(oid) like '%offer_activate%'",
+            "equals": "1"
+          },
+          {
+            "name": "an offer approval cannot be saved without a budget",
+            "sql": "select count(*)::text from pg_constraint where conname = 'mink_action_approvals_offer_budget_check' and pg_get_constraintdef(oid) ilike '%coalesce%'",
+            "equals": "1"
+          },
+          {
+            "name": "the Help guide states the budget rule and the separate activation",
+            "sql": "select count(*)::text from public.help_articles where slug = 'create-and-manage-offers' and status = 'published' and body like '%An offer Mink creates is switched off%' and body like '%must have a total budget%' and body like '%cannot propose bundles, free gifts, spending ladders or free delivery%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "constraints": [
+          "mink_drafts_kind_check",
+          "mink_action_tool_access_name_check",
+          "mink_action_audit_tool_check",
+          "mink_action_approvals_resource_type_check",
+          "mink_action_approvals_offer_budget_check",
+          "mink_action_approvals_offer_target_check"
+        ],
+        "functions": [],
+        "queries": [
+          {
+            "name": "the three offer tools are gateable, auditable and proposable",
+            "sql": "select count(*)::text from pg_constraint where conname in ('mink_action_tool_access_name_check','mink_action_audit_tool_check') and pg_get_constraintdef(oid) like '%create_offer%' and pg_get_constraintdef(oid) like '%activate_offer%'",
+            "equals": "2"
+          },
+          {
+            "name": "activation is its own draft kind, separate from creating the terms",
+            "sql": "select count(*)::text from pg_constraint where conname = 'mink_drafts_kind_check' and pg_get_constraintdef(oid) like '%offer_create%' and pg_get_constraintdef(oid) like '%offer_activate%'",
+            "equals": "1"
+          },
+          {
+            "name": "an offer approval cannot be saved without a budget",
+            "sql": "select count(*)::text from pg_constraint where conname = 'mink_action_approvals_offer_budget_check' and pg_get_constraintdef(oid) ilike '%coalesce%'",
+            "equals": "1"
+          },
+          {
+            "name": "the Help guide states the budget rule and the separate activation",
+            "sql": "select count(*)::text from public.help_articles where slug = 'create-and-manage-offers' and status = 'published' and body like '%An offer Mink creates is switched off%' and body like '%must have a total budget%' and body like '%cannot propose bundles, free gifts, spending ladders or free delivery%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260903_0071_mink_offer_approval_tool",
+      "description": "Widen the fourth tool allowlist 0070 missed, so an offer approval can be saved",
+      "file": "sql/20260903_0071_mink_offer_approval_tool.sql",
+      "checksum": "661006d80afb31551106acacd037f507135885b7e4d774a96dab9760d5bd4a16",
+      "transaction": true,
+      "requires": ["20260903_0070_offers_phase_i_mink"],
+      "verify": {},
+      "applyVerify": {
+        "constraints": ["mink_action_approvals_tool_check"],
+        "functions": [],
+        "queries": [
+          {
+            "name": "an offer approval names a tool the approvals table accepts",
+            "sql": "select count(*)::text from pg_constraint where conname = 'mink_action_approvals_tool_check' and pg_get_constraintdef(oid) like '%create_offer%' and pg_get_constraintdef(oid) like '%activate_offer%'",
+            "equals": "1"
+          },
+          {
+            "name": "every tool allowlist agrees about the offer tools",
+            "sql": "select count(*)::text from pg_constraint where contype = 'c' and pg_get_constraintdef(oid) like '%create_coupon%' and pg_get_constraintdef(oid) not like '%create_offer%'",
+            "equals": "0"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "constraints": ["mink_action_approvals_tool_check"],
+        "functions": [],
+        "queries": [
+          {
+            "name": "an offer approval names a tool the approvals table accepts",
+            "sql": "select count(*)::text from pg_constraint where conname = 'mink_action_approvals_tool_check' and pg_get_constraintdef(oid) like '%create_offer%' and pg_get_constraintdef(oid) like '%activate_offer%'",
+            "equals": "1"
+          },
+          {
+            "name": "every tool allowlist agrees about the offer tools",
+            "sql": "select count(*)::text from pg_constraint where contype = 'c' and pg_get_constraintdef(oid) like '%create_coupon%' and pg_get_constraintdef(oid) not like '%create_offer%'",
+            "equals": "0"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260903_0072_mink_phase_6bc_workflows",
+      "description": "Add durable read-only revenue-decline investigation and product-launch preparation workflows",
+      "file": "sql/20260903_0072_mink_phase_6bc_workflows.sql",
+      "checksum": "a7ab06ac1bfe14a651479036edc8206ac1dee3e565e970da5e1f83a5b45a3e35",
+      "transaction": true,
+      "requires": ["20260903_0071_mink_offer_approval_tool"],
+      "verify": {},
+      "applyVerify": {
+        "constraints": ["mink_workflow_runs_template_check"],
+        "queries": [
+          {
+            "name": "workflow template constraint includes Phase 6B and 6C",
+            "sql": "select count(*)::text from pg_constraint where conname = 'mink_workflow_runs_template_check' and conrelid = 'public.mink_workflow_runs'::regclass and pg_get_constraintdef(oid) like '%revenue_decline_investigation%' and pg_get_constraintdef(oid) like '%product_launch_preparation%'",
+            "equals": "1"
+          },
+          {
+            "name": "the Mink guide documents revenue investigations and private launch packages",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%<h2>Investigate a revenue decline</h2>%' and body like '%reports evidence and correlations, not invented causes%' and body like '%<h2>Prepare a private product launch package</h2>%' and body like '%exact existing product or variant SKU%' and body like '%flags a location-level gap%' and body like '%does not generate an image%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "constraints": ["mink_workflow_runs_template_check"],
+        "queries": [
+          {
+            "name": "Phase 6B and 6C templates already exist",
+            "sql": "select count(*)::text from pg_constraint where conname = 'mink_workflow_runs_template_check' and conrelid = 'public.mink_workflow_runs'::regclass and pg_get_constraintdef(oid) like '%revenue_decline_investigation%' and pg_get_constraintdef(oid) like '%product_launch_preparation%'",
+            "equals": "1"
+          },
+          {
+            "name": "the Mink guide already documents Phase 6B and 6C",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%<h2>Investigate a revenue decline</h2>%' and body like '%<h2>Prepare a private product launch package</h2>%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260903_0073_mink_phase_6d_slow_inventory",
+      "description": "Add the durable location-aware slow-inventory promotion-recommendation workflow",
+      "file": "sql/20260903_0073_mink_phase_6d_slow_inventory.sql",
+      "checksum": "2af4a11c8bb1524881f75f74edfd55e8c14b2ecab4ef7fcfe0439526c5c28050",
+      "transaction": true,
+      "requires": ["20260903_0072_mink_phase_6bc_workflows"],
+      "verify": {},
+      "applyVerify": {
+        "constraints": ["mink_workflow_runs_template_check"],
+        "queries": [
+          {
+            "name": "workflow template constraint includes Phase 6D",
+            "sql": "select count(*)::text from pg_constraint where conname = 'mink_workflow_runs_template_check' and conrelid = 'public.mink_workflow_runs'::regclass and pg_get_constraintdef(oid) like '%slow_inventory_promotion%'",
+            "equals": "1"
+          },
+          {
+            "name": "the Mink guide documents guarded slow-inventory promotion recommendations",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%<h2>Find slow inventory and prepare a promotion</h2>%' and body like '%positive on-hand stock%' and body like '%Zero-stock and untracked items are not called slow inventory%' and body like '%at most 20 highest-priority SKU-location shelves%' and body like '%private recommendation only%' and body like '%not an offer-eligibility boundary%' and body like '%choose a total budget%' and body like '%approve activation in a separate human step%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "constraints": ["mink_workflow_runs_template_check"],
+        "queries": [
+          {
+            "name": "Phase 6D template already exists",
+            "sql": "select count(*)::text from pg_constraint where conname = 'mink_workflow_runs_template_check' and conrelid = 'public.mink_workflow_runs'::regclass and pg_get_constraintdef(oid) like '%slow_inventory_promotion%'",
+            "equals": "1"
+          },
+          {
+            "name": "the Mink guide already documents Phase 6D",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%<h2>Find slow inventory and prepare a promotion</h2>%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260903_0074_mink_phase_6e_delayed_pickups",
+      "description": "Add the durable PII-minimized delayed-pickup review and duplicate-safe communication-preparation workflow",
+      "file": "sql/20260903_0074_mink_phase_6e_delayed_pickups.sql",
+      "checksum": "0af1bfe006203da268d43aff39be2982016af0f97d17b4d8d9bf759b448c0d5b",
+      "transaction": true,
+      "requires": ["20260903_0073_mink_phase_6d_slow_inventory"],
+      "verify": {},
+      "applyVerify": {
+        "constraints": ["mink_workflow_runs_template_check"],
+        "queries": [
+          {
+            "name": "workflow template constraint includes Phase 6E",
+            "sql": "select count(*)::text from pg_constraint where conname = 'mink_workflow_runs_template_check' and conrelid = 'public.mink_workflow_runs'::regclass and pg_get_constraintdef(oid) like '%delayed_pickup_review%'",
+            "equals": "1"
+          },
+          {
+            "name": "the Mink guide documents private duplicate-safe delayed-pickup reviews",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%<h2>Review delayed pickups and prepare communication guidance</h2>%' and body like '%Orders Manage%' and body like '%48-hour reminder window%' and body like '%at most 25 highest-priority orders%' and body like '%Customer names, email addresses, phone numbers, postal addresses, notes and collection codes are never included%' and body like '%not a saved Mink draft%' and body like '%withholds duplicate collection-reminder copy%' and body like '%one-time reminder marker%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "constraints": ["mink_workflow_runs_template_check"],
+        "queries": [
+          {
+            "name": "Phase 6E template already exists",
+            "sql": "select count(*)::text from pg_constraint where conname = 'mink_workflow_runs_template_check' and conrelid = 'public.mink_workflow_runs'::regclass and pg_get_constraintdef(oid) like '%delayed_pickup_review%'",
+            "equals": "1"
+          },
+          {
+            "name": "the Mink guide already documents Phase 6E",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%<h2>Review delayed pickups and prepare communication guidance</h2>%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260904_0075_mink_offer_audit_resource_type",
+      "description": "Widen the audit resource-type allowlist 0070 missed, so an executed offer action can be recorded",
+      "file": "sql/20260904_0075_mink_offer_audit_resource_type.sql",
+      "checksum": "a025877c64013e72c136059440fc0c5e2f952a3118eadc42e21611b0055c9435",
+      "transaction": true,
+      "requires": ["20260903_0074_mink_phase_6e_delayed_pickups"],
+      "verify": {
+        "constraints": ["mink_action_audit_resource_type_check"],
+        "functions": [],
+        "queries": [
+          {
+            "name": "an executed offer action can be recorded in the audit trail",
+            "sql": "select count(*)::text from pg_constraint where conname = 'mink_action_audit_resource_type_check' and conrelid = 'public.mink_action_audit'::regclass and pg_get_constraintdef(oid) like '%offer%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "applyVerify": {
+        "constraints": ["mink_action_audit_resource_type_check"],
+        "functions": [],
+        "queries": [
+          {
+            "name": "an executed offer action can be recorded in the audit trail",
+            "sql": "select count(*)::text from pg_constraint where conname = 'mink_action_audit_resource_type_check' and conrelid = 'public.mink_action_audit'::regclass and pg_get_constraintdef(oid) like '%offer%'",
+            "equals": "1"
+          },
+          {
+            "name": "every resource-type allowlist agrees about offers",
+            "sql": "select count(*)::text from pg_constraint where contype = 'c' and pg_get_constraintdef(oid) like '%price_bulk%' and pg_get_constraintdef(oid) like '%inventory_bulk%' and pg_get_constraintdef(oid) not like '%offer%'",
+            "equals": "0"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "constraints": ["mink_action_audit_resource_type_check"],
+        "functions": [],
+        "queries": [
+          {
+            "name": "the audit trail already accepts an offer resource",
+            "sql": "select count(*)::text from pg_constraint where conname = 'mink_action_audit_resource_type_check' and conrelid = 'public.mink_action_audit'::regclass and pg_get_constraintdef(oid) like '%offer%'",
+            "equals": "1"
+          },
+          {
+            "name": "every resource-type allowlist agrees about offers",
+            "sql": "select count(*)::text from pg_constraint where contype = 'c' and pg_get_constraintdef(oid) like '%price_bulk%' and pg_get_constraintdef(oid) like '%inventory_bulk%' and pg_get_constraintdef(oid) not like '%offer%'",
+            "equals": "0"
+          }
+        ]
+      }
     }
   ]
 }

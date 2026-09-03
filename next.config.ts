@@ -159,6 +159,47 @@ const nextConfig: NextConfig = {
   // /dashboard/activity/import-export?kind=export lands correctly.
   async redirects() {
     return [
+      // Offers (docs/offers-plan.md §2). A coupon is a DELIVERY METHOD of an
+      // offer, not a separate feature, so the coupons pages fold into
+      // /dashboard/offers rather than living beside it.
+      //
+      // ⚠ `/dashboard/promotions` had no route behind it at ALL — the
+      // permission section pointed there and every merchant granted it saw a
+      // link that 404'd. This is the first thing that has ever answered it.
+      //
+      // 307, not 308, for the reason the log redirects below give: these are
+      // admin paths behind a login with no SEO signals to consolidate, and a
+      // 308 is cached by browsers indefinitely.
+      {
+        source: "/dashboard/promotions",
+        destination: "/dashboard/offers",
+        permanent: false,
+      },
+      {
+        source: "/dashboard/marketing/coupons",
+        destination: "/dashboard/offers",
+        permanent: false,
+      },
+      {
+        // A new discount is an offer now, so this lands on the offer editor
+        // rather than bouncing to a list the merchant then has to act on.
+        source: "/dashboard/marketing/coupons/new",
+        destination: "/dashboard/offers/new",
+        permanent: false,
+      },
+      // ★★ NO CATCH-ALL. `/:path*` also swallowed `[id]/edit` and
+      // `[id]/email`, and BOTH are still live surfaces over the `coupons`
+      // TABLE, which offers has not replaced:
+      //   • coupon EMAIL CAMPAIGNS are keyed on a coupon row throughout
+      //     (`lib/mink/campaign-*`, `email_campaigns`), so `[id]/email` is the
+      //     only way to send one — the Pro feature had no reachable UI at all.
+      //   • Mink Phase 4C still CREATES `coupons`, and its own artifacts hand
+      //     the merchant `/dashboard/marketing/coupons/{id}/edit`
+      //     (`lib/mink/tools/draft-tools.ts`, `lib/mink/domain-actions.ts`).
+      //     That id may exist ONLY in `coupons`, so redirecting it to the
+      //     offers list dead-ends on a list that cannot contain it.
+      // Retiring those two means migrating campaigns off coupons first; until
+      // then this covers the destinations that genuinely moved.
       {
         source: "/dashboard/activity",
         destination: "/dashboard/logs",

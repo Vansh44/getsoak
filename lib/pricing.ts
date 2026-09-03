@@ -14,14 +14,30 @@ export function discountPercent(base: number, selling: number): number {
   return Math.round(((base - selling) / base) * 100);
 }
 
-export interface PricedVariant {
-  base_price: number;
+/**
+ * Exactly the fields `variantEffectiveSelling` reads — deliberately narrower
+ * than `PricedVariant`.
+ *
+ * ★ THE NARROWNESS IS THE POINT. The server's checkout reads select only the
+ * price columns they need and never `base_price`, so a parameter type that
+ * demanded it would not accept a DB row — and the way round that is to inline
+ * `special ?? selling` at the call site, i.e. a second copy of this rule. That
+ * is exactly how the storefront came to DISPLAY `special_price` while
+ * `placeOrder` CHARGED `selling_price`. Keep this shape at the minimum the
+ * function actually reads so every caller — display, cart and charge — can use
+ * the one helper.
+ */
+export interface VariantSellingFields {
   selling_price: number;
   // Overrides selling_price when present. NULL/undefined → variant prices as
   // normal. Used to flag a temporary sale on a single variant (e.g. push the
   // bigger pack at an aggressive discount); the storefront also renders a
   // "best value" price tag on the variant chip when this is set.
   special_price?: number | null;
+}
+
+export interface PricedVariant extends VariantSellingFields {
+  base_price: number;
   sort_order?: number;
 }
 
@@ -36,6 +52,25 @@ export interface EffectivePricing {
   selling: number; // price actually charged
   discount: number; // percent off, 0 when none
   hasVariants: boolean;
+  /**
+   * The price `selling` is ON SALE FROM — the chosen variant's
+   * `selling_price` when a `special_price` is being charged, and equal to
+   * `selling` otherwise.
+   *
+   * ★★ THIS IS NOT `base`, AND CONFUSING THE TWO BREAKS OFFER PRICING.
+   * `base` is the struck-through MRP, which is a list price rather than a
+   * price this product was recently sold at. The offer engine reads
+   * `regularUnitPrice` as "what this line is discounted from" and uses it to
+   * decide `onSalePrice` — so passing MRP marks EVERY product with an MRP set
+   * as on sale, and under the default `best` mode the offer is then measured
+   * against the MRP and scores nothing. The shop grid's badge did exactly that
+   * and silently showed no badge for most of a catalogue.
+   *
+   * Only `effectivePricing` knows which variant `selling` came from, so this is
+   * the only place that can answer it — computing it at a call site means
+   * re-deriving the default-variant choice and getting it wrong differently.
+   */
+  regularSelling: number;
 }
 
 // Normalize a single base/selling pair: fall back to base when no selling
@@ -62,6 +97,10 @@ export function effectivePricing(p: PricedLike): EffectivePricing {
       selling: pair.selling,
       discount: discountPercent(pair.base, pair.selling),
       hasVariants: false,
+      // A product carries no special price — `special_price` is variant-only —
+      // so what is charged IS the regular price, and the engine reads the two
+      // being equal as "not on sale".
+      regularSelling: pair.selling,
     };
   }
 
@@ -81,15 +120,29 @@ export function effectivePricing(p: PricedLike): EffectivePricing {
     selling: def.selling,
     discount: discountPercent(def.base, def.selling),
     hasVariants: true,
+    // ★ The chosen variant's REGULAR price, clamped the same way `selling` is
+    // so the pair cannot invert. Equal to `selling` when no special price is
+    // set, which is what "not on sale" looks like to the engine.
+    regularSelling: normalizePair(v.base_price, v.selling_price).selling,
   };
 }
 
 /**
- * The effective selling price for a single variant: special_price when set
- * (non-null, > 0), otherwise the regular selling_price. Exported so the PDP
- * and cart can resolve the per-variant price consistently with the helper.
+ * ★ THE ONE RULE FOR WHAT A VARIANT COSTS: special_price when set (non-null,
+ * > 0), otherwise the regular selling_price.
+ *
+ * Every surface that shows, sums or CHARGES a variant price must come through
+ * here — the PDP and shop grid, the cart's tax basis (`getCartTaxRates`) and
+ * the authoritative charge (`placeOrder`). `placePosSale` applies the
+ * identical rule at the till.
+ *
+ * ⚠ It was not always shared, and the gap was a real overcharge: the PDP used
+ * this helper while `placeOrder` read `selling_price` directly, so a variant on
+ * sale displayed ₹450 and billed ₹1,000 online while the till charged ₹450.
+ * Same class of defect `lib/pos/totals.ts` exists to prevent. Do not inline
+ * `special ?? selling` anywhere; call this.
  */
-export function variantEffectiveSelling(v: PricedVariant): number {
+export function variantEffectiveSelling(v: VariantSellingFields): number {
   if (v.special_price != null && v.special_price > 0) return v.special_price;
   return v.selling_price;
 }

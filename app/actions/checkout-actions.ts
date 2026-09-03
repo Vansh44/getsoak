@@ -17,11 +17,30 @@ import { getCurrentStore, getCurrentStoreId } from "@/lib/store/resolve";
 import { isDemoStore } from "@/lib/store/launch";
 import { rateLimit, clientIp } from "@/lib/rate-limit";
 import { validateCoupon } from "./coupon-actions";
+import { loadCustomerGroupIds } from "@/lib/offers/resolve";
+import type {
+  Offer as StorefrontOffer,
+  OnSalePriceMode,
+} from "@/lib/offers/types";
+import type { AppliedOffer } from "@/lib/offers/apply";
+import {
+  bonusOffersToReserve,
+  loadOffersForStorefront,
+  recordOfferRedemptions,
+  releaseOfferUses,
+  reserveOfferUses,
+  resolveOffersForCart,
+  type ReservedOffer,
+} from "@/lib/offers/cart";
 import { CartItem } from "@/app/(storefront)/components/cart/CartProvider";
 import { computeTax } from "@/lib/billing/tax";
+import { variantEffectiveSelling } from "@/lib/pricing";
+import { toPaise } from "@/lib/money/allocate";
+import type { VariantSellingFields } from "@/lib/pricing";
 import { getLiveStoreGateway, getStoreGateway } from "@/lib/payments/provider";
 import {
   getCreditBalance,
+  issueCredit,
   spendCredit,
   reinstateCreditForOrder,
 } from "@/lib/credit/store-credit";
@@ -375,6 +394,17 @@ export interface CartTaxResult {
   inclusive: boolean;
   tax: number;
   byRate: Array<{ rate: number; label: string; tax: number }>;
+  /**
+   * The authoritative per-line data this result was computed from, passed
+   * through so a sibling consumer does not have to fetch it again.
+   *
+   * ★ ONE ROUND TRIP, TWO CONSUMERS. `useCartOffers` needs each line's
+   * category to price a category-scoped offer the same way the server will,
+   * and that resolution is already being done here. Fetching it separately
+   * would double the cart's server calls to answer a question one of them has
+   * already answered.
+   */
+  lines?: CartTaxRateLine[];
 }
 
 export interface CartTaxRateLine {
@@ -382,10 +412,78 @@ export interface CartTaxRateLine {
   variantId: string | null;
   /** Authoritative per-unit price (from the DB) — the tax base. */
   price: number;
+  /**
+   * The price this line is ON SALE FROM — the variant's `selling_price` when a
+   * `special_price` is charged, otherwise equal to `price`.
+   *
+   * ★★ WITHOUT IT THE CART PRICES EVERY LINE AS NOT-ON-SALE, and `placeOrder`
+   * does not: the engine reads absent-or-equal as "no sale", so under
+   * `offers.onSalePrice = "skip"` the cart applied an offer the charge then
+   * declined and the total went UP at the last step, and under `best` the cart
+   * overstated the saving. Server-side for the same reason `categoryId` is —
+   * `CartItem.price` is the sale price captured at add time and nothing in the
+   * cart records what it was reduced from.
+   *
+   * ⚠ NOT `base_price`: an MRP is a struck-through list price, not a sale
+   * price, and passing it would let `best` discount from a much higher base.
+   */
+  regularUnitPrice: number;
   /** Resolved tax rate as a percentage (0..100). */
   rate: number;
   /** Tax class name, for the per-rate breakdown label. */
   label?: string;
+  /**
+   * The product's category, for offer scoping.
+   *
+   * ★ RESOLVED SERVER-SIDE, NOT READ OFF THE CART. `CartItem` carries the
+   * category NAME for display and nothing carries its id — and adding one
+   * would only be correct for lines added AFTER the change, so every persisted
+   * cart would silently mis-price a category-scoped offer until the shopper
+   * re-added the item. The client is not the source of truth for scoping any
+   * more than it is for price, and this read already resolves the price.
+   */
+  categoryId: string | null;
+}
+
+/**
+ * The automatic offers and policy the CART may price with, for display.
+ *
+ * The client then runs the pure engine locally, so a quantity change costs no
+ * round trip — the same shape `getCartTaxRates` + `useCartTax` already use, and
+ * for the same reason.
+ *
+ * ★ TENANCY FROM THE HOST, never an argument. This is a public endpoint (every
+ * export of a "use server" file is), so a store id parameter would let anyone
+ * enumerate another store's offers.
+ *
+ * ★ AUTOMATIC OFFERS ONLY, and codes are stripped — `loadOffersForStorefront`
+ * enforces both. A typed code is validated by `placeOrder`; publishing the
+ * list would hand every active discount code to anyone reading the response.
+ */
+export async function getStorefrontOffers(): Promise<{
+  offers: StorefrontOffer[];
+  showNearMiss: boolean;
+  policy: {
+    onSalePrice: OnSalePriceMode;
+    maxTotalDiscountPercent: number;
+    autoApply: boolean;
+    timeZone?: string | null;
+  };
+  viewer: { groupIds: string[]; isFirstOrder: boolean | null };
+} | null> {
+  try {
+    const storeId = await getCurrentStoreId();
+    const user = await getServerUser();
+    const groupIds = user
+      ? await withService((db) => loadCustomerGroupIds(db, user.id))
+      : [];
+    return await loadOffersForStorefront(storeId, user?.id ?? null, groupIds);
+  } catch (err) {
+    // Display only: a cart that cannot show a badge still sells, and
+    // `placeOrder` re-prices authoritatively either way.
+    console.error("getStorefrontOffers:", errMsg(err));
+    return null;
+  }
 }
 
 export interface CartTaxRates {
@@ -447,6 +545,7 @@ export async function getCartTaxRates(
         selling_price: products.sellingPrice,
         cost_price: products.costPrice,
         tax_class_id: products.taxClassId,
+        category_id: products.categoryId,
       })
       .from(products)
       .where(
@@ -457,6 +556,10 @@ export async function getCartTaxRates(
           .select({
             id: productVariants.id,
             selling_price: productVariants.sellingPrice,
+            // The cart's tax basis must be the price actually charged, so a
+            // variant on sale is taxed on its special price, not its regular
+            // one — resolved through variantEffectiveSelling below.
+            special_price: productVariants.specialPrice,
           })
           .from(productVariants)
           .where(
@@ -472,11 +575,15 @@ export async function getCartTaxRates(
   const pMap = new Map(
     productRows.map((p) => [
       p.id as string,
-      p as { selling_price: number; tax_class_id: string | null },
+      p as {
+        selling_price: number;
+        tax_class_id: string | null;
+        category_id: string | null;
+      },
     ]),
   );
   const vMap = new Map(
-    variantRows.map((v) => [v.id as string, v as { selling_price: number }]),
+    variantRows.map((v) => [v.id as string, v as VariantSellingFields]),
   );
   const classById = new Map(taxClassList.map((c) => [c.id, c]));
 
@@ -487,20 +594,27 @@ export async function getCartTaxRates(
         productId: l.productId,
         variantId: l.variantId,
         price: 0,
+        regularUnitPrice: 0,
         rate: 0,
+        categoryId: null,
       };
     }
-    const price = l.variantId
-      ? (vMap.get(l.variantId)?.selling_price ?? p.selling_price)
-      : p.selling_price;
+    const v = l.variantId ? vMap.get(l.variantId) : null;
+    // One shared rule with the PDP and with placeOrder (lib/pricing.ts).
+    const price = v ? variantEffectiveSelling(v) : p.selling_price;
     const classId = p.tax_class_id ?? billing.defaultTaxClassId;
     const cls = classId ? classById.get(classId) : null;
     return {
       productId: l.productId,
       variantId: l.variantId,
       price,
+      // The non-sale price the offer engine measures `onSalePrice` against.
+      // Equal to `price` for a product or an un-discounted variant, which the
+      // engine reads as "not on sale".
+      regularUnitPrice: v ? v.selling_price : p.selling_price,
       rate: cls?.rate ?? 0,
       label: cls?.name,
+      categoryId: p.category_id ?? null,
     };
   });
 
@@ -868,6 +982,11 @@ export async function placeOrder(
         length_cm: products.lengthCm,
         width_cm: products.widthCm,
         height_cm: products.heightCm,
+        // Offer scoping (docs/offers-plan.md). Selected here rather than in a
+        // second read: the offer engine needs it for every line, and a cart
+        // must not pay another round trip at ~46ms for a column this query is
+        // already positioned to return.
+        category_id: products.categoryId,
       })
       .from(products)
       .where(
@@ -905,6 +1024,7 @@ export async function placeOrder(
       id: string;
       name: string;
       selling_price: number;
+      special_price: number | null;
       cost_price: number | null;
       track_inventory?: boolean | null;
       allow_backorder?: boolean | null;
@@ -923,6 +1043,10 @@ export async function placeOrder(
           id: productVariants.id,
           name: productVariants.name,
           selling_price: productVariants.sellingPrice,
+          // ★ WITHOUT THIS COLUMN THE CHARGE CANNOT SEE THE SALE. Omitting it
+          // is what made a variant on sale display its special price and bill
+          // the regular one.
+          special_price: productVariants.specialPrice,
           cost_price: productVariants.costPrice,
           track_inventory: productVariants.trackInventory,
           allow_backorder: productVariants.allowBackorder,
@@ -954,6 +1078,7 @@ export async function placeOrder(
     name: string;
     variant_name: string | null;
     price: number;
+    listed_price: number;
     quantity: number;
     total: number;
     unit_cost: number | null;
@@ -962,6 +1087,7 @@ export async function placeOrder(
     tax_rate: number;
     tax_amount: number;
     tax_class_name: string | null;
+    category_id: string | null;
     sku: string;
     hsn_code: string | null;
     requires_shipping: boolean;
@@ -977,6 +1103,11 @@ export async function placeOrder(
       return { error: `Product no longer available: ${item.name}` };
 
     let price = dbProduct.selling_price;
+    // The non-sale price, kept beside the charged one so the offer engine can
+    // tell a discounted line from a full-price one (`offers.onSalePrice`).
+    // Only variants carry a special price, so for a simple product the two are
+    // equal — which the engine reads as "not on sale".
+    let listedPrice = dbProduct.selling_price;
     let unitCost = dbProduct.cost_price;
     const name = dbProduct.name;
     let variantName: string | null = null;
@@ -993,7 +1124,10 @@ export async function placeOrder(
       const dbVariant = variantsMap.get(item.variantId);
       if (!dbVariant)
         return { error: `Variant no longer available: ${item.variantName}` };
-      price = dbVariant.selling_price;
+      // The price CHARGED comes from the same helper the PDP displays and the
+      // till charges — never `selling_price` directly (lib/pricing.ts).
+      price = variantEffectiveSelling(dbVariant);
+      listedPrice = dbVariant.selling_price;
       unitCost = dbVariant.cost_price ?? dbProduct.cost_price;
       variantName = dbVariant.name;
       logistics = {
@@ -1015,24 +1149,261 @@ export async function placeOrder(
       name,
       variant_name: variantName,
       price,
+      listed_price: listedPrice,
       quantity: item.quantity,
       total: price * item.quantity,
       unit_cost: unitCost,
       tax_rate: taxInfo.rate,
       tax_amount: 0,
       tax_class_name: taxInfo.name,
+      category_id: dbProduct.category_id,
       ...logistics,
       hsn_code: dbProduct.hsn_code,
     });
   }
 
-  // 3. Validate and apply coupon. Round to whole rupees and clamp to subtotal so
-  //    the stored total matches what the cart showed the shopper (CartProvider
-  //    rounds identically).
+  // 3. Apply offers, then fall back to the legacy coupon path.
+  //
+  // ★ ONE OR THE OTHER, NEVER BOTH. A coupon IS an offer since
+  // 20260902_0059 (docs/offers-plan.md §2), so running both paths would
+  // double-count a migrated coupon's discount AND its usage counter. The offer
+  // engine is authoritative whenever it resolves.
+  //
+  // ★ AND `null` MEANS "OFFERS ARE UNAVAILABLE", NOT "NOTHING APPLIED".
+  // Database DDL is a separate release gate, so this code reaches production
+  // before its migration; in that window `resolveOffersForCart` returns null
+  // and the coupon path below keeps every advertised code working. Without the
+  // fallback, deploying first would silently break every coupon on the
+  // platform — the same order-independence `getStoreChrome`'s `store_menus`
+  // fallback exists for (CODEBASE.md §11).
+  let offerResult = await resolveOffersForCart({
+    storeId,
+    channel: "storefront",
+    // ★ NO LOCATION ONLINE, and not merely because routing has not run yet
+    // (it hasn't — `fulfilmentLocationId` is resolved further down, after the
+    // total). A location-scoped offer is a POS concept: an online order's
+    // fulfilment location is an internal routing OUTCOME the shopper never
+    // chose and which can change between carts, so pricing a web order
+    // against it would make the same basket cost different amounts for
+    // reasons invisible to the customer. The engine fails CLOSED on a
+    // location-scoped offer with no location, so such an offer simply does
+    // not apply online — which is the honest reading of "this offer is for
+    // that shop".
+    locationId: null,
+    customerId: user.id,
+    code: couponCode ?? null,
+    // ★ THE METHOD THE SHOPPER CHOSE, which is also what the cart preview was
+    // priced against — the two must agree or the total moves at the last
+    // step. A fully credit-covered order is relabelled `store_credit` further
+    // down, and an unpaid gateway order is cancelled by the reaper, so the
+    // choice is the honest input either way.
+    paymentMethod,
+    // ★ SAFE TO DERIVE FROM THE REQUEST HERE, and provably so: an invalid
+    // pickup location RETURNS AN ERROR below (it does not fall back to
+    // delivery), so if this call reaches the order insert with
+    // `pickupLocationId` set, the order IS a collection. Were that a silent
+    // fallback instead, a rejected pickup would keep a pickup-only discount on
+    // a delivered order.
+    fulfilmentType: pickupLocationId ? "pickup" : "delivery",
+    lines: validItems.map((it, idx) => ({
+      id: String(idx),
+      productId: it.product_id,
+      variantId: it.variant_id,
+      categoryId: it.category_id,
+      quantity: it.quantity,
+      unitPrice: it.price,
+      // ★ `offers.onSalePrice` NOW WORKS ONLINE, because `placeOrder` charges
+      // `product_variants.special_price` when one is set (see the variant
+      // select above) — so `unitPrice` is the sale price and this is the price
+      // it is on sale FROM. Same pair the till passes, so a basket prices
+      // identically in both channels.
+      // ⚠ NOT `base_price`: MRP is a struck-through list price, not a sale
+      // price, and treating it as one would let `best` mode discount from a
+      // much higher base. For a line that is not on sale the two are equal,
+      // which the engine reads as "no sale" and every mode collapses to the
+      // same arithmetic.
+      regularUnitPrice: it.listed_price,
+    })),
+  });
+
+  // ★★ THE GIFT BECOMES A REAL LINE, appended BEFORE tax, stock and the insert
+  // so every one of those paths handles it with no special case (plan §12).
+  // Its stock is reserved by the same loop as any paid line, its tax snapshot
+  // is computed by the same call, and it appears on the order, the invoice and
+  // the confirmation email because it is genuinely part of the order.
+  //
+  // ★★ APPENDED BEFORE `offerDiscounts` IS SIZED, and that ordering is
+  // load-bearing rather than tidy. `offerDiscounts` is `validItems.map(() => 0)`
+  // and is read by index when the order items are written; appending the gift
+  // after it leaves `offerDiscounts[giftIndex]` UNDEFINED, which is written
+  // straight into `order_items.offer_discount` — a NOT NULL column with a
+  // DEFAULT, and an explicit undefined does not fall back to a default. That is
+  // the `storeCreditUsed: null` failure (CODEBASE §22) exactly: every order
+  // carrying a gift would fail on INSERT, and the cashier or shopper would see
+  // only "Failed to save order items".
+  //
+  // The gift's own entry is therefore a genuine zero, which is true: it was
+  // never discounted, it was added.
+  //
+  // Pinned by "a free gift becomes a real ₹0 line with a REAL zero offer
+  // discount" in `checkout-actions.test.ts`, which fails with
+  // `expected undefined to be +0` if this append moves below the array. It
+  // needed `makeDbMock`'s `selectByTable` to exist: the gift's product read
+  // sits behind a conditional among reads whose count varies with the cart, so
+  // no position in the POSITIONAL `selectQueue` reaches it.
+  //
+  // ★ PRICED AND NAMED FROM THE DATABASE, never from the offer row. The offer
+  // stores ids; what the line says and what it is worth come from the product
+  // itself, exactly as for a paid line.
+  // What the gift is WORTH, for the offer's budget cap only — the ₹0 line
+  // below is what the customer is charged. Resolved here because the engine is
+  // pure and never prices a gift.
+  let giftValuePaise = 0;
+  let giftLineIndex = -1;
+  if (offerResult?.gift) {
+    const wanted = offerResult.gift;
+    let giftUnitPrice = 0;
+    const giftLine = await (async () => {
+      const [row] = await withService((db) =>
+        db
+          .select({
+            id: products.id,
+            name: products.name,
+            // ★ What the shopper would OTHERWISE have paid, which is what the
+            // gift costs this offer's budget — the same rule the shipping
+            // waiver's `offerWaivedAmount` follows. The LINE is still ₹0.
+            selling_price: products.sellingPrice,
+            tax_class_id: products.taxClassId,
+            category_id: products.categoryId,
+            sku: products.sku,
+            hsn_code: products.hsnCode,
+            requires_shipping: products.requiresShipping,
+            weight_grams: products.weightGrams,
+            length_cm: products.lengthCm,
+            width_cm: products.widthCm,
+            height_cm: products.heightCm,
+          })
+          .from(products)
+          // ★ STORE-SCOPED, like every other product read here. The offer row
+          // is store-scoped too, but a gift is the one product id that reaches
+          // this function without having been in the shopper's cart, so the
+          // predicate is doing real work rather than restating a guarantee.
+          .where(
+            and(
+              eq(products.id, wanted.productId),
+              eq(products.storeId, storeId),
+            ),
+          )
+          .limit(1),
+      );
+      if (!row) return null;
+
+      let variantName: string | null = null;
+      if (wanted.variantId) {
+        const [variant] = await withService((db) =>
+          db
+            .select({
+              id: productVariants.id,
+              name: productVariants.name,
+              selling_price: productVariants.sellingPrice,
+              special_price: productVariants.specialPrice,
+            })
+            .from(productVariants)
+            .where(
+              and(
+                eq(productVariants.id, wanted.variantId as string),
+                eq(productVariants.productId, wanted.productId),
+              ),
+            )
+            .limit(1),
+        );
+        if (!variant) return null;
+        variantName = variant.name;
+        giftUnitPrice = variantEffectiveSelling(variant);
+      }
+
+      // ★★ A ₹0 LINE IS NOT A ZERO-TAX LINE, and the class is recorded even
+      // though the tax computed on a zero taxable value is zero (plan §12).
+      // Under India's GST a free good given with a sale is not automatically
+      // outside the tax base, and inventing "no tax class" here would be a
+      // filing decision disguised as an implementation detail. Recording the
+      // gift's own class means the data is there if the treatment turns out to
+      // require valuing it at open market value.
+      //
+      // ⚠ THE TREATMENT ITSELF IS NOT PROFESSIONALLY REVIEWED — the §25/§28
+      // posture: the fields are right, get a CA to confirm before anyone
+      // files against it. The Help guide says so to the merchant.
+      if (!wanted.variantId) giftUnitPrice = row.selling_price;
+      const taxInfo = resolveTax(row);
+      return {
+        product_id: row.id,
+        variant_id: wanted.variantId,
+        name: row.name,
+        variant_name: variantName,
+        price: 0,
+        listed_price: 0,
+        quantity: wanted.quantity,
+        total: 0,
+        // No cost snapshot: a gift's margin impact is its full cost, and
+        // recording it as a ₹0 sale with a cost would report a loss on a line
+        // that is a marketing expense. Left null, which reads as "unknown"
+        // rather than as zero (§20's gross-margin contract).
+        unit_cost: null,
+        tax_rate: taxInfo.rate,
+        tax_amount: 0,
+        tax_class_name: taxInfo.name,
+        category_id: row.category_id,
+        sku: row.sku,
+        hsn_code: row.hsn_code,
+        requires_shipping: row.requires_shipping,
+        weight_grams: row.weight_grams,
+        length_cm: row.length_cm,
+        width_cm: row.width_cm,
+        height_cm: row.height_cm,
+      };
+    })();
+
+    if (giftLine) {
+      giftLineIndex = validItems.length;
+      validItems.push(giftLine);
+      giftValuePaise = toPaise(giftUnitPrice * giftLine.quantity);
+    } else {
+      // The gift vanished between the offer resolution and here. The order is
+      // fine without it; silently dropping the gift is far better than
+      // refusing a paying customer over a free extra.
+      offerResult = { ...offerResult, gift: null };
+    }
+  }
+
   let discount = 0;
+  // Per-line offer allocation, indexed the same way as `validItems`. §8: a
+  // scoped reward belongs to ONE line, so it is snapshotted per line rather
+  // than spread — otherwise GST is misstated and a partial return over-refunds.
+  const offerDiscounts = validItems.map(() => 0);
+
   let couponApplied = false;
   const couponCodeNormalized = couponCode ? normalizeCode(couponCode) : null;
-  if (couponCode) {
+
+  // ★ THE LEGACY COUPON PATH IS THE FALLBACK WHENEVER THE ENGINE APPLIED
+  // NOTHING — not only when offers are unavailable. Three live cases need it,
+  // and refusing an unmatched code outright breaks all three:
+  //   1. the deploy window before 20260902_0059 runs (offerResult is null);
+  //   2. a coupon row that is not an offer — Mink Phase 4C still creates
+  //      `coupons` under human approval, and `createCoupon` remains callable;
+  //   3. a coupon left behind by the migration because its stored code is not
+  //      in normal form, which cannot match an offer by definition.
+  // Only one path can ever produce a discount, so nothing double-counts.
+  //
+  // ⚠ Known transitional gap: if an AUTOMATIC offer applies and the shopper
+  // also holds a legacy coupon worth more, they get the automatic offer and
+  // their code is ignored rather than compared. Both discount systems running
+  // at once is the cause; it resolves when `coupons` stops being written.
+  if (offerResult && offerResult.applied.length > 0) {
+    offerResult.lines.forEach((line, idx) => {
+      offerDiscounts[idx] = line.offerDiscount;
+    });
+    discount = Math.min(offerResult.discount, subtotal);
+  } else if (couponCode) {
     const validation = await validateCoupon(couponCode, subtotal);
     if (validation.error) {
       return { error: `Coupon error: ${validation.error}` };
@@ -1055,12 +1426,23 @@ export async function placeOrder(
   //     Inclusive: tax is already inside the listed prices, so it's reported but
   //     NOT added again. Per-line tax is written back to each order item below.
   const taxResult = computeTax({
-    lines: validItems.map((it) => ({
+    lines: validItems.map((it, idx) => ({
       amount: it.total,
       rate: it.tax_rate,
       label: it.tax_class_name ?? undefined,
+      // ★ THE OFFER'S SHARE OF THIS LINE, not a proportional slice of the
+      // order total. §8: ₹200 off a ₹1,000 18% shirt beside a ₹1,000 5% book
+      // is taxed as ₹194, not the ₹207 the spread produces — and nothing
+      // anywhere would report the difference as an error.
+      discount: offerDiscounts[idx],
     })),
-    discount,
+    // Whatever the offers did NOT allocate to a line stays order-level and is
+    // still spread proportionally. With offers resolved that is zero; with the
+    // legacy coupon fallback it is the whole discount.
+    discount: Math.max(
+      0,
+      discount - offerDiscounts.reduce((sum, d) => sum + d, 0),
+    ),
     pricesIncludeTax: billing.pricesIncludeTax,
     enabled: billing.taxEnabled,
   });
@@ -1130,7 +1512,77 @@ export async function placeOrder(
     }
   }
 
-  const releaseCoupon = async () => {
+  // 3b-ii. Claim every applied offer's caps, atomically, before the order
+  //         exists — the same position and the same reasoning as the coupon
+  //         reservation above. `reserve_offer_use` puts the redemption cap, the
+  //         budget cap and the per-customer cap inside ONE conditional UPDATE,
+  //         so two simultaneous checkouts cannot both take the last redemption.
+  //
+  // ★ HITTING A CAP IS REPORTED; AN UNREACHABLE DATABASE IS NOT. A cap is a
+  // real answer the shopper must see, because the price they were quoted has
+  // just changed. A transient failure is not a reason to refuse a paying
+  // customer, so it fails open at the priced total — the trade
+  // `increment_coupon_usage` already makes.
+  let reservedOffers: ReservedOffer[] = [];
+  // ★ EXACTLY WHAT WAS CLAIMED, carried to `recordOfferRedemptions` so the
+  // ledger and the caps describe the same set. Re-deriving it there is what
+  // left every gift, cashback and shipping redemption unrecorded.
+  const redeemedOffers: AppliedOffer[] = [];
+  if (offerResult && offerResult.applied.length > 0) {
+    const claim = await reserveOfferUses(storeId, offerResult.applied, user.id);
+    reservedOffers = claim.reserved;
+    if (!claim.ok) {
+      await releaseOfferUses(storeId, reservedOffers);
+      return { error: claim.error ?? "That offer is no longer available." };
+    }
+    redeemedOffers.push(...offerResult.applied);
+  }
+
+  // ★★ A GIFT OR CASHBACK CAP DROPS THE EXTRA; IT NEVER REFUSES THE SALE.
+  // These caps are MEANT to be reached — "a free tumbler with the first 100
+  // orders" hits its limit on order 101 by design. Treating that like a
+  // merchandise cap would stop the shop selling anything at all until somebody
+  // noticed and disabled the offer, which is far worse than the bug this
+  // reservation exists to fix. It is the rule the gift block above already
+  // follows when the product has vanished: never refuse a paying customer over
+  // a free extra.
+  const bonuses = offerResult
+    ? bonusOffersToReserve(offerResult, giftValuePaise)
+    : [];
+  for (const bonus of bonuses) {
+    const claim = await reserveOfferUses(storeId, [bonus], user.id);
+    reservedOffers = [...reservedOffers, ...claim.reserved];
+    if (claim.ok) {
+      redeemedOffers.push(bonus);
+      continue;
+    }
+    // Withdrawn, not charged for: the line is dropped from the order and the
+    // credit is never issued.
+    if (bonus.level === "gift") {
+      // ★ THE EXACT INDEX RECORDED WHEN THE LINE WAS APPENDED, never a
+      // search. Matching on "this product at ₹0" would also match a genuinely
+      // free paid line, and removing the wrong element would silently shift
+      // `offerDiscounts` out of step with its lines.
+      if (giftLineIndex >= 0) {
+        validItems.splice(giftLineIndex, 1);
+        offerDiscounts.splice(giftLineIndex, 1);
+      }
+      offerResult = offerResult ? { ...offerResult, gift: null } : offerResult;
+    } else {
+      offerResult = offerResult
+        ? { ...offerResult, credit: null }
+        : offerResult;
+    }
+  }
+
+  // ★ ONE UNWIND HELPER FOR BOTH, called from all seven failure paths. Adding
+  // a second release call beside each of them is how the eighth path ends up
+  // leaking an offer's budget forever.
+  const releaseDiscounts = async () => {
+    if (reservedOffers.length > 0) {
+      await releaseOfferUses(storeId, reservedOffers);
+      reservedOffers = [];
+    }
     if (couponReserved && couponCodeNormalized) {
       await withService((db) =>
         db.execute(
@@ -1235,6 +1687,11 @@ export async function placeOrder(
       deliveryPostcode: cleanField(form.postalCode),
       cod: paymentMethod === "cod",
       merchandiseSubtotal: subtotal,
+      // ★ CHEAPEST WINS (plan §14). The store's standing free-above threshold
+      // and this offer are ORed inside `freeShippingApplies`, so an offer can
+      // only ever LOWER the charge — never raise it on a cart the standing
+      // policy already ships free.
+      offerWaivesShipping: offerResult?.shipping != null,
       parcel: packageForShippingLines(
         validItems.map((item) => ({
           quantity: item.quantity,
@@ -1247,7 +1704,7 @@ export async function placeOrder(
       ),
     });
     if (!shippingQuote.options.length) {
-      await releaseCoupon();
+      await releaseDiscounts();
       return {
         error:
           shippingQuote.error || "Delivery is not available for this address.",
@@ -1259,7 +1716,7 @@ export async function placeOrder(
         )
       : shippingQuote.options[0];
     if (!selectedRate) {
-      await releaseCoupon();
+      await releaseDiscounts();
       return {
         error:
           "That delivery rate changed. Review the latest options and try again.",
@@ -1270,7 +1727,7 @@ export async function placeOrder(
       typeof selectedShippingRateAmount === "number" &&
       Math.abs(selectedRate.amount - selectedShippingRateAmount) > 0.009
     ) {
-      await releaseCoupon();
+      await releaseDiscounts();
       return {
         error:
           "That delivery price changed. Review the latest options and try again.",
@@ -1282,6 +1739,50 @@ export async function placeOrder(
       provider: selectedRate.courierId ? "shiprocket" : "manual",
       quotedAt: new Date().toISOString(),
     };
+
+    // ★★ THE SHIPPING OFFER IS RESERVED HERE, NOT WITH THE MERCHANDISE ONES,
+    // because only now is it worth anything. The engine is pure and never sees
+    // a carrier quote, so it reports the waiver with `amount: 0`; reserving it
+    // at that point would consume a redemption while charging the offer's
+    // BUDGET nothing, and a merchant who capped a free-delivery campaign at
+    // ₹5,000 would find the cap never binding.
+    //
+    // ★ The waived amount is what the shopper would OTHERWISE have paid, which
+    // is exactly `carrierCost` when the carrier quoted one and the flat rate
+    // otherwise — `selectedRate.amount` is already zero by the time we get
+    // here, so reading it would record every waiver as worth nothing.
+    //
+    // ★ It is PUSHED onto `reservedOffers`, so all seven later failure paths
+    // release it through the one unwind helper. A separate release call beside
+    // each of them is how the eighth path leaks a budget forever.
+    if (offerResult?.shipping) {
+      // Computed by the quote, where both facts are known: what this offer
+      // specifically waived, as opposed to what the store's own standing
+      // free-above threshold was already giving away.
+      const waived = selectedRate.offerWaivedAmount ?? 0;
+      const shippingRedemption: AppliedOffer = {
+        offerId: offerResult.shipping.offerId,
+        offerName: offerResult.shipping.offerName,
+        code: offerResult.shipping.code,
+        rewardType: "free_shipping",
+        level: "shipping",
+        amount: Math.max(0, waived),
+      };
+      const claim = await reserveOfferUses(
+        storeId,
+        [shippingRedemption],
+        user.id,
+      );
+      reservedOffers = [...reservedOffers, ...claim.reserved];
+      if (!claim.ok) {
+        await releaseDiscounts();
+        return { error: claim.error ?? "That offer is no longer available." };
+      }
+      // ★ RECORDED, not only reserved. `max_per_customer` is counted from
+      // `offer_redemptions`, so a waiver that moved `redemption_count` without
+      // writing a row left the per-customer cap unable to bind at all.
+      redeemedOffers.push(shippingRedemption);
+    }
   }
   total = Math.max(
     0,
@@ -1388,7 +1889,7 @@ export async function placeOrder(
 
   const order = orderRows?.[0];
   if (!order) {
-    await releaseCoupon(); // give the reserved coupon use back
+    await releaseDiscounts(); // give the reserved coupon/offer uses back
     return { error: "Failed to create order. Please try again." };
   }
 
@@ -1551,7 +2052,7 @@ export async function placeOrder(
       await releaseHolds();
       await releaseStock();
       await deleteOrder();
-      await releaseCoupon();
+      await releaseDiscounts();
       // Report the exact shortfall so the shopper knows what to do rather than
       // seeing a generic "not enough stock". reserve_stock failed because the
       // SKU is tracked, non-backorderable, and short — so the live count is the
@@ -1586,7 +2087,14 @@ export async function placeOrder(
   //    reserved stock (order still present so the movements write), then delete
   //    the order, then give the coupon use back — no orphan order is left behind
   //    (there is no cross-statement transaction).
-  const orderItemsToInsert = validItems.map((item) => ({
+  //
+  // ★ IDS ARE GENERATED HERE, not read back from RETURNING. `order_item_offers`
+  // needs to know which persisted row each engine line became, and relying on
+  // a multi-row INSERT returning rows in VALUES order is an assumption the SQL
+  // standard does not make. The orders table already does exactly this.
+  const orderItemIds = validItems.map(() => crypto.randomUUID());
+  const orderItemsToInsert = validItems.map((item, idx) => ({
+    id: orderItemIds[idx],
     orderId: order.id,
     productId: item.product_id,
     variantId: item.variant_id,
@@ -1599,6 +2107,10 @@ export async function placeOrder(
     taxRate: item.tax_rate,
     taxAmount: item.tax_amount,
     taxClassName: item.tax_class_name,
+    // §8: which line the offer actually discounted. `total` stays GROSS of it,
+    // exactly as it is gross of the order-level discount, so every existing
+    // reader is unaffected and `refundBreakdown` subtracts this directly.
+    offerDiscount: offerDiscounts[idx],
     hsnCode: item.hsn_code,
     sku: item.sku,
     requiresShipping: item.requires_shipping,
@@ -1620,11 +2132,66 @@ export async function placeOrder(
     await releaseHolds();
     await releaseStock();
     await deleteOrder();
-    await releaseCoupon();
+    await releaseDiscounts();
     return { error: "Failed to save order items. Please try again." };
   }
 
   await recordStorefrontOrderAttribution(order.id, storeId);
+
+  // Which offer discounted which line, and who redeemed what. Deliberately
+  // AFTER the order and its items are safely persisted, and best-effort like
+  // every other bookkeeping write here: losing this is a reporting gap, while
+  // failing the sale at this point would take the money and then tell the
+  // shopper it did not work. Idempotent on (offer, order) and
+  // (order_item, offer), so a retry cannot double-count a redemption.
+  if (
+    offerResult &&
+    (offerResult.allocations.length > 0 || redeemedOffers.length > 0)
+  ) {
+    await recordOfferRedemptions({
+      storeId,
+      orderId: order.id,
+      customerId: user.id,
+      result: offerResult,
+      redeemed: redeemedOffers,
+      orderItemIdByLine: new Map(
+        validItems.map((_, idx) => [String(idx), orderItemIds[idx]]),
+      ),
+    });
+  }
+
+  // ★★ CASHBACK IS ISSUED AFTER THE ORDER COMMITS, and never before. It is a
+  // LIABILITY, not a discount (plan §14): it changes nothing about what the
+  // customer paid, so issuing it early would credit a balance for an order
+  // that then failed to save. Idempotent on the order — `issueCredit`'s unique
+  // key is (store, customer, kind, ref) — so a retry credits once.
+  //
+  // ★ ITS OWN LEDGER KIND, not `grant`. §29 keeps `reinstate` apart from
+  // `grant` because "a report that can't tell a returned spend from a goodwill
+  // gesture overstates what the store gave away"; cashback earned by a
+  // promotion is a third thing again, and a merchant reviewing what their
+  // offers cost must be able to see it separately from what they handed out by
+  // hand.
+  //
+  // ★ NEVER FAILS THE ORDER. The money is taken and the goods are committed;
+  // refusing here would tell a paying customer their order did not work
+  // because a free extra could not be recorded.
+  if (offerResult?.credit && offerResult.credit.amount > 0) {
+    await issueCredit({
+      storeId,
+      customerId: user.id,
+      amount: offerResult.credit.amount,
+      kind: "cashback",
+      ref: order.id,
+      note: offerResult.credit.offerName,
+    }).catch((err: unknown) =>
+      logError("checkout.cashback_failed", err, {
+        storeId,
+        orderId: order.id,
+        offerId: offerResult?.credit?.offerId,
+      }),
+    );
+  }
 
   // Shopify's durable split: the order records the sale; this work object says
   // which location must prepare it. A migration rolling out moments after the
@@ -1804,7 +2371,7 @@ export async function placeOrder(
       await releaseHolds();
       await releaseStock();
       await deleteOrder();
-      await releaseCoupon();
+      await releaseDiscounts();
       await releaseCredit();
     };
 

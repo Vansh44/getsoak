@@ -70,6 +70,7 @@ const ITEM: PosCatalogItem = {
   trackInventory: true,
   allowBackorder: false,
   taxClassId: null,
+  categoryId: null,
 };
 
 const CONFIG: RegisterConfig = {
@@ -88,6 +89,12 @@ const CONFIG: RegisterConfig = {
   canOverridePrice: false,
   onlinePayments: false,
   gatewayKeyId: null,
+  offers: [],
+  offerPolicy: {
+    onSalePrice: "best",
+    maxTotalDiscountPercent: 50,
+    autoApply: false,
+  },
   storeName: "Echoes",
 };
 

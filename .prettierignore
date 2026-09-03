@@ -1,0 +1,27 @@
+# Prettier reads .gitignore by default, which covers the root build output
+# (/.next, /coverage, /out, /build) and node_modules. This file exists for what
+# .gitignore CANNOT cover.
+#
+# ★★ A CLAUDE CODE WORKTREE IS A FULL SECOND CHECKOUT, and it is excluded from
+# git via .git/info/exclude — a LOCAL-ONLY mechanism Prettier cannot see. So
+# `prettier --write .` walked into it and reformatted a few thousand generated
+# files under `.claude/worktrees/*/.next/`.
+#
+# ★ AND `--write` MAKES THAT MORE THAN SLOW: a worktree is another branch's
+# working tree, so formatting it rewrites files belonging to work in progress
+# somewhere else, invisibly, with no diff in this checkout to show for it.
+#
+# ⚠ CI NEVER SEES THIS. `.claude/worktrees/` is git-excluded, so only the local
+# run breaks — the one a person actually reads. `eslint.config.mjs` records the
+# identical failure from 2026-08-10, when a worktree's build output turned
+# `npm run lint` into 65,172 problems. `tsconfig.json` is immune for a different
+# reason: TypeScript's `**` globs skip dot-directories, so `.claude` is never
+# descended into.
+.claude/worktrees/
+
+# ★ `**/` IS LOAD-BEARING, exactly as it is in eslint.config.mjs. .gitignore's
+# entries are root-ANCHORED (`/.next/`, `/coverage`), so they match the build
+# output here and nowhere else. These catch generated output in any nested
+# checkout, which should never be formatted wherever it sits.
+**/.next/
+**/coverage/

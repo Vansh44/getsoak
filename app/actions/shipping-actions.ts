@@ -10,6 +10,7 @@ import {
   storeShippingSettings,
 } from "@/drizzle/schema";
 import { withService } from "@/lib/db/client";
+import { variantEffectiveSelling } from "@/lib/pricing";
 import { getServerUser } from "@/lib/auth/server-user";
 import { getCurrentStoreId } from "@/lib/store/resolve";
 import { clientIp, rateLimit } from "@/lib/rate-limit";
@@ -34,6 +35,7 @@ import {
   quoteShippingForOrder,
   readShippingSettings,
 } from "@/lib/shipping/quote";
+import { resolveOffersForCart } from "@/lib/offers/cart";
 import type { CartItem } from "@/app/(storefront)/components/cart/CartProvider";
 
 export interface ShippingSettingsState {
@@ -176,6 +178,8 @@ export async function getCheckoutShippingOptions(input: {
   items: CartItem[];
   postalCode: string;
   paymentMethod: "cod" | "razorpay";
+  /** Delivery or collection, for a `fulfilment_type` offer condition. */
+  fulfilmentType?: "delivery" | "pickup";
 }): Promise<{ options: CheckoutShippingOption[]; error?: string }> {
   const user = await getServerUser();
   if (!user) return { options: [], error: "Sign in to see delivery rates." };
@@ -208,6 +212,9 @@ export async function getCheckoutShippingOptions(input: {
         .select({
           id: products.id,
           price: products.sellingPrice,
+          // Needed only by the offer engine, which prices a category-scoped
+          // offer — the parcel does not care what shelf a product came from.
+          categoryId: products.categoryId,
           trackInventory: products.trackInventory,
           allowBackorder: products.allowBackorder,
           requiresShipping: products.requiresShipping,
@@ -227,6 +234,10 @@ export async function getCheckoutShippingOptions(input: {
             .select({
               id: productVariants.id,
               price: productVariants.sellingPrice,
+              // The merchandise subtotal below decides free-shipping and the
+              // declared value, so it must be the price actually charged — a
+              // variant on sale was previously valued at its regular price.
+              specialPrice: productVariants.specialPrice,
               trackInventory: productVariants.trackInventory,
               allowBackorder: productVariants.allowBackorder,
               requiresShipping: productVariants.requiresShipping,
@@ -254,7 +265,13 @@ export async function getCheckoutShippingOptions(input: {
     if (!product) return [];
     const variant = item.variantId ? variantMap.get(item.variantId) : null;
     if (item.variantId && !variant) return [];
-    subtotal += (variant?.price ?? product.price) * item.quantity;
+    subtotal +=
+      (variant
+        ? variantEffectiveSelling({
+            selling_price: variant.price,
+            special_price: variant.specialPrice,
+          })
+        : product.price) * item.quantity;
     return [
       {
         productId: item.productId,
@@ -293,12 +310,75 @@ export async function getCheckoutShippingOptions(input: {
       ],
     };
   }
+  // ★★ DERIVED HERE, NEVER ACCEPTED FROM THE CLIENT. "An offer waives my
+  // delivery charge" is precisely the claim a browser would like to make about
+  // itself, and this quote is what the shopper is shown AND what `placeOrder`
+  // re-checks against. Resolving it server-side costs one read on a path that
+  // already makes a carrier round trip, and it is the only way the preview can
+  // match the charge.
+  //
+  // ★ Priced from the SAME rows this function already read for the parcel, so
+  // the offer engine and the shipping quote cannot disagree about what is in
+  // the cart.
+  const offerWaivesShipping = await (async () => {
+    try {
+      const result = await resolveOffersForCart({
+        storeId,
+        channel: "storefront",
+        locationId: null,
+        customerId: user.id,
+        code: null,
+        paymentMethod: input.paymentMethod,
+        fulfilmentType: input.fulfilmentType ?? "delivery",
+        lines: input.items.flatMap((item, idx) => {
+          const product = productMap.get(item.productId);
+          if (!product) return [];
+          const variant = item.variantId
+            ? variantMap.get(item.variantId)
+            : null;
+          return [
+            {
+              id: String(idx),
+              productId: item.productId,
+              variantId: item.variantId ?? null,
+              categoryId: product.categoryId ?? null,
+              quantity: item.quantity,
+              unitPrice: variant
+                ? variantEffectiveSelling({
+                    selling_price: variant.price,
+                    special_price: variant.specialPrice,
+                  })
+                : product.price,
+              // ★ The price this line is on sale FROM, so `onSalePrice` reads
+              // the same here as it does in `placeOrder`. Omitting it made
+              // every line look full-price, so a scoped free-shipping offer
+              // could quote ₹0 delivery in the preview and the real rate at
+              // checkout.
+              regularUnitPrice: variant ? variant.price : product.price,
+            },
+          ];
+        }),
+      });
+      return result?.shipping != null;
+    } catch {
+      // A quote that cannot resolve offers still quotes. Failing to `false`
+      // charges for delivery, which `placeOrder` then re-checks and waives —
+      // the shopper is never charged more than the authoritative path says.
+      return false;
+    }
+  })();
+
   if (shippingSettings.mode !== "shiprocket") {
-    return { options: [manualShippingOption(shippingSettings, subtotal)] };
+    return {
+      options: [
+        manualShippingOption(shippingSettings, subtotal, offerWaivesShipping),
+      ],
+    };
   }
   const fulfilmentLocationId = await resolveFulfilmentLocation(storeId, lines);
   return quoteShippingForOrder({
     storeId,
+    offerWaivesShipping,
     fulfilmentLocationId,
     deliveryPostcode: input.postalCode,
     cod: input.paymentMethod === "cod",
@@ -471,12 +551,19 @@ export async function getProductDeliveryEstimate(input: {
     };
   }
 
+  // The special-price rule comes from lib/pricing, not a copy of it: this used
+  // to inline `special ?? selling` while the checkout quote above omitted the
+  // rule altogether, so the two quotes valued the same sale cart differently.
+  const variantUnit = variant
+    ? variantEffectiveSelling({
+        selling_price: variant.price,
+        special_price: variant.specialPrice,
+      })
+    : 0;
   const unitPrice = variant
-    ? variant.specialPrice != null && variant.specialPrice > 0
-      ? variant.specialPrice
-      : variant.price > 0
-        ? variant.price
-        : variant.basePrice
+    ? variantUnit > 0
+      ? variantUnit
+      : variant.basePrice
     : product.price > 0
       ? product.price
       : product.basePrice;

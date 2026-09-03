@@ -6,6 +6,7 @@ import {
   variantEffectiveSelling,
   hasSpecialPrice,
 } from "./pricing";
+import type { PricedVariant } from "./pricing";
 
 // formatPrice() is the storefront's currency formatter — rupees, Indian
 // grouping (lakh/crore commas), no trailing zeros.
@@ -75,6 +76,9 @@ describe("effectivePricing", () => {
       selling: 80,
       discount: 20,
       hasVariants: false,
+      // A product has no special price, so what it charges IS its regular
+      // price — the pair the offer engine reads as "not on sale".
+      regularSelling: 80,
     });
   });
 
@@ -184,43 +188,48 @@ describe("effectivePricing", () => {
   });
 });
 
-// variantEffectiveSelling — exported helper used by the PDP/cart to resolve a
-// single variant's "what is it being sold at right now" price.
+// variantEffectiveSelling — THE one rule for what a variant costs, shared by
+// the PDP/shop display, the cart's tax basis (getCartTaxRates) and the
+// authoritative charge (placeOrder). `base_price` is deliberately absent from
+// these fixtures: the helper never reads it, and its parameter type is narrowed
+// to exactly the two columns it does read so a server row that selects only
+// those is a valid input.
 describe("variantEffectiveSelling", () => {
   // No special price → regular selling_price.
   it("returns selling_price when no special_price set", () => {
-    expect(
-      variantEffectiveSelling({ base_price: 100, selling_price: 80 }),
-    ).toBe(80);
+    expect(variantEffectiveSelling({ selling_price: 80 })).toBe(80);
   });
 
   // special_price (when > 0) wins over selling_price.
   it("returns special_price when set", () => {
     expect(
-      variantEffectiveSelling({
-        base_price: 100,
-        selling_price: 80,
-        special_price: 60,
-      }),
+      variantEffectiveSelling({ selling_price: 80, special_price: 60 }),
     ).toBe(60);
   });
 
   // null / 0 special_price is treated as "not set".
   it("ignores null or zero special_price", () => {
     expect(
-      variantEffectiveSelling({
-        base_price: 100,
-        selling_price: 80,
-        special_price: null,
-      }),
+      variantEffectiveSelling({ selling_price: 80, special_price: null }),
     ).toBe(80);
     expect(
-      variantEffectiveSelling({
-        base_price: 100,
-        selling_price: 80,
-        special_price: 0,
-      }),
+      variantEffectiveSelling({ selling_price: 80, special_price: 0 }),
     ).toBe(80);
+  });
+
+  // ★ A FULL VARIANT ROW MUST STILL BE ACCEPTED. The PDP passes a whole
+  // `PricedVariant` (base_price, sort_order and all) and `effectivePricing`
+  // passes one internally, so narrowing the parameter must not have broken
+  // that — this pins the assignability rather than leaving it to a compile
+  // that nobody re-runs.
+  it("accepts a full PricedVariant row", () => {
+    const row: PricedVariant = {
+      base_price: 100,
+      selling_price: 80,
+      special_price: 60,
+      sort_order: 0,
+    };
+    expect(variantEffectiveSelling(row)).toBe(60);
   });
 });
 
@@ -232,5 +241,74 @@ describe("hasSpecialPrice", () => {
     expect(hasSpecialPrice({ special_price: 0 })).toBe(false);
     expect(hasSpecialPrice({ special_price: null })).toBe(false);
     expect(hasSpecialPrice({})).toBe(false);
+  });
+});
+
+// ★★ `regularSelling` IS NOT `base`, AND CONFUSING THEM BREAKS OFFER PRICING.
+//
+// The offer engine reads `regularUnitPrice` as "what this line is discounted
+// FROM" and uses it to decide `onSalePrice`. `base` is the struck-through MRP —
+// a list price, not a price this product was recently sold at — so passing it
+// marks every product with an MRP set as on sale, and under the default `best`
+// mode the offer is then measured against that MRP and scores nothing. The shop
+// grid's badge did exactly that: silently absent across most of a catalogue,
+// present only on products with no MRP.
+describe("effectivePricing — the price a line is ON SALE FROM", () => {
+  it("★ a product without variants is never on sale: the two are equal", () => {
+    // `special_price` is variant-only, so what a product charges IS its regular
+    // price however deep its MRP discount looks.
+    const p = effectivePricing({ base_price: 1000, selling_price: 500 });
+    expect(p.selling).toBe(500);
+    expect(p.regularSelling).toBe(500);
+    // ★ And the MRP is still reported for the struck-through display — the two
+    // fields answer different questions.
+    expect(p.base).toBe(1000);
+  });
+
+  it("★★ a variant on special reports the price it was reduced from", () => {
+    const p = effectivePricing({
+      base_price: 1000,
+      selling_price: 900,
+      variants: [{ base_price: 1000, selling_price: 500, special_price: 450 }],
+    });
+    expect(p.selling).toBe(450);
+    // Not 1000. `placeOrder` passes the variant's `selling_price` as the pair,
+    // so the grid must agree or a badge prices differently from the cart.
+    expect(p.regularSelling).toBe(500);
+  });
+
+  it("★ a variant with no special price reports them equal", () => {
+    const p = effectivePricing({
+      base_price: 1000,
+      selling_price: 900,
+      variants: [{ base_price: 1000, selling_price: 500, special_price: null }],
+    });
+    expect(p.selling).toBe(500);
+    expect(p.regularSelling).toBe(500);
+  });
+
+  it("★ follows the SAME default variant `selling` came from", () => {
+    // Computing this at a call site means re-deriving the sort-order choice and
+    // getting it wrong differently.
+    const p = effectivePricing({
+      base_price: 1000,
+      selling_price: 900,
+      variants: [
+        {
+          base_price: 900,
+          selling_price: 800,
+          special_price: 700,
+          sort_order: 2,
+        },
+        {
+          base_price: 600,
+          selling_price: 500,
+          special_price: 400,
+          sort_order: 1,
+        },
+      ],
+    });
+    expect(p.selling).toBe(400);
+    expect(p.regularSelling).toBe(500);
   });
 });

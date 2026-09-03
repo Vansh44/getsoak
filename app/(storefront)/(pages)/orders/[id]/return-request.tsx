@@ -28,6 +28,7 @@ import {
   type ReturnReason,
 } from "@/lib/returns/reasons";
 import { exchangeSettlement } from "@/lib/returns/exchange";
+import { refundBreakdown } from "@/lib/pos/returns";
 import styles from "../orders.module.css";
 
 function money(n: number): string {
@@ -57,16 +58,41 @@ export function ReturnRequest({ view }: { view: ReturnableOrderView }) {
   const selectable = view.lines.filter((l) => l.remaining > 0);
   const anyReturnable = selectable.some((l) => l.returnable);
 
-  // The goods value of what's ticked — an approximation of the server's
-  // `refundBreakdown.amount`, good enough to preview a fee against.
-  const goodsValue = useMemo(
+  /**
+   * What the store will actually hand back for what is ticked.
+   *
+   * ★★ THE SERVER'S OWN FUNCTION, NOT AN APPROXIMATION OF IT. This used to sum
+   * `unitPrice × qty`, which ignores EVERY discount — so a customer who had
+   * used a coupon, or won an offer, was quoted the full list value of the goods
+   * and refunded the discounted value. `requestReturn` settles with
+   * `refundBreakdown`, so the estimate is computed with it too and the two
+   * cannot disagree.
+   *
+   * ★ EVERY LINE IS PASSED, not just the ticked ones. The order-level remainder
+   * is allocated ACROSS the order in proportion to each line's value, so
+   * allocating over a subset would give the ticked lines a larger share than
+   * the sale did — the same reason `priceReturn` reads all of `order_items`.
+   */
+  const breakdown = useMemo(
     () =>
-      selectable.reduce(
-        (sum, l) => sum + (qty[l.orderItemId] ?? 0) * l.unitPrice,
-        0,
-      ),
-    [selectable, qty],
+      refundBreakdown({
+        lines: view.lines.map((l) => ({
+          id: l.orderItemId,
+          quantity: l.quantity,
+          lineTotal: l.lineTotal,
+          taxAmount: l.taxAmount,
+          offerDiscount: l.offerDiscount,
+          alreadyReturned: l.returned,
+        })),
+        orderDiscount: view.orderDiscount,
+        request: Object.entries(qty).map(([id, q]) => ({ id, quantity: q })),
+      }),
+    [view, qty],
   );
+
+  // The GOODS value, excluding tax — what fees are charged on and what an
+  // exchange is settled against, matching `requestReturn` on both counts.
+  const goodsValue = breakdown.amount;
 
   const fees = useMemo(
     () =>

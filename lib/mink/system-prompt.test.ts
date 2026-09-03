@@ -40,6 +40,37 @@ describe("Mink system prompt document", () => {
       "structured artifact already contains the full record list",
     );
     expect(template).toContain("There is no model tool to approve");
+    expect(template).toContain(
+      "Use start_weekly_trading_report only when the user explicitly asks",
+    );
+    expect(template).toContain("a cancelled workflow cannot resume");
+    expect(template).toContain(
+      "Use start_revenue_decline_investigation only when the user explicitly asks",
+    );
+    expect(template).toContain(
+      "measured correlations, never as proven causation",
+    );
+    expect(template).toContain(
+      "Use start_product_launch_preparation only when the user explicitly asks",
+    );
+    expect(template).toContain("does not generate an image");
+    expect(template).toContain(
+      "Use start_slow_inventory_promotion only when the user explicitly asks",
+    );
+    expect(template).toContain(
+      "Do not call zero-stock or untracked items slow inventory",
+    );
+    expect(template).toContain(
+      "not automatically an offer-eligibility boundary",
+    );
+    expect(template).toContain("choose a total budget");
+    expect(template).toContain(
+      "Use start_delayed_pickup_review only when the user explicitly asks",
+    );
+    expect(template).toContain(
+      "not customer names, email, phone, address, notes or collection codes",
+    );
+    expect(template).toContain("preserve the duplicate-withheld result");
   });
 
   it("renders only trusted actor fields and permission-filtered tool names", () => {

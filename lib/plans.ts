@@ -166,6 +166,15 @@ export interface PlanLimits {
   aiGenerationsPerMonth: number | null;
   /** Max simultaneously-active coupons (null = unlimited). */
   maxActiveCoupons: number | null;
+  /**
+   * Active offers a store may run at once. `null` = unlimited.
+   *
+   * ★ THE OFFER POOL INCLUDES MIGRATED COUPONS, so this is not additive with
+   * `maxActiveCoupons` — counting the two separately would hand a free store
+   * three of each. `maxActiveCoupons` stays only for the legacy coupon table's
+   * own gate until nothing reads it.
+   */
+  maxActiveOffers: number | null;
   /** May connect a custom domain. */
   customDomain: boolean;
   /** May connect a payment gateway (Razorpay) for online payments. */
@@ -211,6 +220,7 @@ export const PLAN_LIMITS: Record<Plan, PlanLimits> = {
     maxStaff: 1,
     aiGenerationsPerMonth: 3,
     maxActiveCoupons: 3,
+    maxActiveOffers: 3,
     customDomain: false,
     onlinePayments: false,
     customerBlogSubmissions: false,
@@ -233,6 +243,7 @@ export const PLAN_LIMITS: Record<Plan, PlanLimits> = {
     maxStaff: 3,
     aiGenerationsPerMonth: 10,
     maxActiveCoupons: null,
+    maxActiveOffers: null,
     // Pro only. Connecting a domain provisions a certificate per merchant on
     // the platform's load balancer — real infrastructure with a real ceiling,
     // unlike a row limit — so it sits on the top tier. The pricing page derives
@@ -259,6 +270,7 @@ export const PLAN_LIMITS: Record<Plan, PlanLimits> = {
     maxStaff: null,
     aiGenerationsPerMonth: 50,
     maxActiveCoupons: null,
+    maxActiveOffers: null,
     customDomain: true,
     onlinePayments: true,
     customerBlogSubmissions: true,
