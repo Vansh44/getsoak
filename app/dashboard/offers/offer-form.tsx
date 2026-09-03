@@ -707,6 +707,12 @@ export function OfferForm({
   // What this offer will do, in the merchant's own words, updated live. A
   // rule expressed as five separate inputs is hard to read back; one sentence
   // is how a merchant catches "₹1,000 off" when they meant "₹100".
+  //
+  // ★ `products` IS A REAL DEPENDENCY, not a lint formality: the sentence names
+  // the gift by looking it up in that list, so memoising on `form` alone keeps
+  // the old name when the list arrives or changes. Its absence also made the
+  // React Compiler skip optimising this whole component — "the inferred
+  // dependency was `products`, but the source dependencies were [form]".
   const summary = useMemo(() => {
     const scopeCount =
       form.productIds.length + form.variantIds.length + form.categoryIds.length;
@@ -795,7 +801,7 @@ export function OfferForm({
       .filter(Boolean);
     const only = extras.length > 0 ? `, ${extras.join(", and ")}` : "";
     return `${gives}${when}${only}${how}.`;
-  }, [form]);
+  }, [form, products]);
 
   const submit = () =>
     startTransition(async () => {

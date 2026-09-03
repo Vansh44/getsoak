@@ -2199,7 +2199,12 @@ describe("applyOffers — a free gift", () => {
     // A caller that does not resolve gifts — a historical replay, a cached
     // register catalogue — must not have every gift offer silently vanish.
     // Only an explicit false withdraws it.
-    const { giftAvailable: _omit, ...unchecked } = tumbler;
+    // Deleted rather than destructured away: an unused `_omit` binding is a
+    // lint warning here, and `delete` states the intent — the field is ABSENT,
+    // which is what "unchecked" means. `giftAvailable` is optional, so this is
+    // type-safe.
+    const unchecked = { ...tumbler };
+    delete unchecked.giftAvailable;
     const r = applyOffers({
       lines: [line({ unitPrice: 2500 })],
       offers: [unchecked],
