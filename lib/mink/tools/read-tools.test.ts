@@ -10,6 +10,10 @@ const mocks = vi.hoisted(() => ({
   enqueueLaunchWorkflow: vi.fn(),
   enqueueSlowInventoryWorkflow: vi.fn(),
   enqueueDelayedPickupWorkflow: vi.fn(),
+  readStorefrontPages: vi.fn(),
+  readStorefrontPage: vi.fn(),
+  readStorefrontSection: vi.fn(),
+  readStorefrontDesign: vi.fn(),
 }));
 vi.mock("../catalog-health-read", () => ({
   readMinkCatalogHealth: mocks.readCatalog,
@@ -24,6 +28,12 @@ vi.mock("../workflows", () => ({
   enqueueProductLaunchPreparation: mocks.enqueueLaunchWorkflow,
   enqueueSlowInventoryPromotion: mocks.enqueueSlowInventoryWorkflow,
   enqueueDelayedPickupReview: mocks.enqueueDelayedPickupWorkflow,
+}));
+vi.mock("../storefront-context-read", () => ({
+  readMinkStorefrontPages: mocks.readStorefrontPages,
+  readMinkStorefrontPageContext: mocks.readStorefrontPage,
+  readMinkStorefrontSectionContext: mocks.readStorefrontSection,
+  readMinkStorefrontDesignContext: mocks.readStorefrontDesign,
 }));
 
 import { minkReadToolRegistry } from "./read-tools";
@@ -102,6 +112,52 @@ beforeEach(() => {
     currentStep: 0,
     totalSteps: 3,
   });
+  mocks.readStorefrontPages.mockResolvedValue({
+    pages: [
+      {
+        pageSlug: "home",
+        title: "Home",
+        status: "published",
+        draftSectionCount: 3,
+        hasUnpublishedChanges: true,
+        requiresRepair: false,
+        dashboardPath: "/dashboard/builder?page=home",
+      },
+    ],
+    dataAsOf: "2026-09-04T10:00:00.000Z",
+    dashboardPath: "/dashboard/builder",
+  });
+  mocks.readStorefrontPage.mockResolvedValue({
+    page: { pageSlug: "home", title: "Home", hasUnpublishedChanges: true },
+    sections: [
+      {
+        id: "section-1",
+        position: 1,
+        type: "hero",
+        enabled: true,
+        summary: "Hero · Welcome",
+      },
+    ],
+    dashboardPath: "/dashboard/builder?page=home",
+  });
+  mocks.readStorefrontSection.mockResolvedValue({
+    pageSlug: "home",
+    section: {
+      id: "section-1",
+      position: 1,
+      type: "hero",
+      enabled: true,
+      summary: "Hero · Welcome",
+    },
+    dashboardPath: "/dashboard/builder?page=home&section=section-1",
+  });
+  mocks.readStorefrontDesign.mockResolvedValue({
+    brand: { name: "Echos", primaryColor: "#6d4aff" },
+    theme: { id: "studio", name: "Studio", version: "0.1.0" },
+    chrome: { chromeVersion: "2026-09-04T10:00:00Z" },
+    capabilities: { customCodeEnabled: true },
+    dashboardPath: "/dashboard/builder",
+  });
 });
 
 describe("Mink read-tool declarations", () => {
@@ -110,6 +166,10 @@ describe("Mink read-tool declarations", () => {
 
     expect(declarations.map((tool) => tool.name)).toEqual([
       "get_store_profile",
+      "list_storefront_pages",
+      "get_storefront_page_context",
+      "get_storefront_section_context",
+      "get_storefront_design_context",
       "get_catalog_summary",
       "search_products",
       "get_sales_summary",
@@ -161,6 +221,12 @@ describe("Mink read-tool declarations", () => {
     expect(declared({ dashboard: ["view"] })).toEqual([
       "get_store_profile",
       "search_help_centre",
+    ]);
+    expect(declared({ builder: ["view"] })).toEqual([
+      "list_storefront_pages",
+      "get_storefront_page_context",
+      "get_storefront_section_context",
+      "get_storefront_design_context",
     ]);
     expect(declared({ dashboard: ["view"], products: ["view"] })).toEqual([
       "get_store_profile",
@@ -245,6 +311,55 @@ describe("Mink read-tool declarations", () => {
         })
         .map((tool) => tool.name),
     ).not.toContain("start_slow_inventory_promotion");
+  });
+
+  it("forwards only exact bounded builder selectors and returns storefront artifacts", async () => {
+    const page = await minkReadToolRegistry.execute(ACTOR, {
+      id: "call-page",
+      name: "get_storefront_page_context",
+      args: { page_slug: "home" },
+    });
+    expect(mocks.readStorefrontPage).toHaveBeenCalledWith(ACTOR, {
+      pageSlug: "home",
+    });
+    expect(page.artifact).toMatchObject({
+      type: "records",
+      recordType: "storefront",
+      records: [{ id: "section-1" }],
+    });
+
+    const section = await minkReadToolRegistry.execute(ACTOR, {
+      id: "call-section",
+      name: "get_storefront_section_context",
+      args: {
+        page_slug: "home",
+        section_id: "section-1",
+        code_field: "css",
+        code_offset: 8_000,
+      },
+    });
+    expect(mocks.readStorefrontSection).toHaveBeenCalledWith(ACTOR, {
+      pageSlug: "home",
+      sectionId: "section-1",
+      codeField: "css",
+      codeOffset: 8_000,
+    });
+    expect(section.artifact).toMatchObject({
+      recordType: "storefront",
+      records: [{ id: "section-1" }],
+    });
+
+    const declaration = minkReadToolRegistry
+      .declarationsFor(ACTOR)
+      .find((tool) => tool.name === "get_storefront_section_context");
+    expect(declaration?.parametersJsonSchema).toMatchObject({
+      required: ["page_slug", "section_id"],
+      additionalProperties: false,
+      properties: {
+        code_field: { enum: ["html", "css", "js"] },
+        code_offset: { minimum: 0, maximum: 65_536 },
+      },
+    });
   });
 
   it("queues bounded Phase 6B and 6C workflows through permission-gated tools", async () => {

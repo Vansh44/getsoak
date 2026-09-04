@@ -56,6 +56,7 @@ is large enough to need its own decisions doc BEFORE any of it is built.
 | —      | Mink location-aware SKU catalogue health + structured answer UI   | M    | ✅ done |
 | —      | Mink ambiguous-stock clarification + per-location comparison      | M    | ✅ done |
 | —      | Mink durable workflows 6A–6E, including delayed pickup review     | L    | ✅ done |
+| —      | Mink read-only Website Builder context + sandbox contract (7A)    | M    | ✅ done |
 | —      | Locations fulfilment navigation and aligned routing workspace     | S    | ✅ done |
 | **P1** | **Release verification and high-risk action hardening**           | XL   | ◐ part  |
 | **0**  | **Platform → merchant billing rebuild**                           | XL   | ◐ part  |

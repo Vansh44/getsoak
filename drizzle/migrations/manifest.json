@@ -3115,6 +3115,47 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260904_0076_mink_phase_7a_builder_context_help",
+      "description": "Publish the secure read-only Website Builder context and validation-only sandbox contract for Mink Phase 7A",
+      "file": "sql/20260904_0076_mink_phase_7a_builder_context_help.sql",
+      "checksum": "69a3d44d13d3b95a0088e117acf00de40bbc0f254caca82e1eb36d4c1ceae413",
+      "transaction": true,
+      "requires": ["20260904_0075_mink_offer_audit_resource_type"],
+      "verify": {
+        "tables": ["help_articles"],
+        "functions": [],
+        "queries": [
+          {
+            "name": "Mink Phase 7A Website Builder guidance is published",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%<h2>Inspect Website Builder context with Mink</h2>%' and body like '%Phase 7A is read-only%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "applyVerify": {
+        "tables": ["help_articles"],
+        "functions": [],
+        "queries": [
+          {
+            "name": "Mink Phase 7A builder security contract is complete",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%Website Builder View%' and body like '%treated as untrusted data, never as instructions%' and body like '%chunks of at most 8,000 characters%' and body like '%64 KiB per code field and 96 KiB combined%' and body like '%cannot yet create a code proposal%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "tables": ["help_articles"],
+        "functions": [],
+        "queries": [
+          {
+            "name": "Mink Phase 7A builder security contract already exists",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%Website Builder View%' and body like '%treated as untrusted data, never as instructions%' and body like '%chunks of at most 8,000 characters%' and body like '%64 KiB per code field and 96 KiB combined%' and body like '%cannot yet create a code proposal%'",
+            "equals": "1"
+          }
+        ]
+      }
     }
   ]
 }

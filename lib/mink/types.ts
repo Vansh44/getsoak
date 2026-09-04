@@ -97,7 +97,7 @@ export type MinkArtifact =
   | {
       type: "records";
       title: string;
-      recordType: "order" | "product" | "inventory";
+      recordType: "order" | "product" | "inventory" | "storefront";
       records: Array<{
         id: string;
         title: string;

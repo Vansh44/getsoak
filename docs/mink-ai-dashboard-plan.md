@@ -1,6 +1,6 @@
 # Mink AI Dashboard Agent — Architecture and Delivery Plan
 
-> **Status:** Phases 0–4, Phases 5A–5F and Phases 6A–6E are implemented in code. Phase 2
+> **Status:** Phases 0–4, Phases 5A–5F, Phases 6A–6E and Phase 7A are implemented in code. Phase 2
 > remains the invited read-only merchant beta. Phase 3 adds a separate,
 > fail-closed operator opt-in
 > for private versioned drafts and atomic weighted credits through migration
@@ -47,13 +47,16 @@
 > Migration `20260903_0074_mink_phase_6e_delayed_pickups` adds a bounded,
 > PII-minimized delayed-pickup review with private preparation-delay copy and
 > duplicate-safe handoff to StoreMink's existing one-time reminder sweep.
+> Migration `20260904_0076_mink_phase_7a_builder_context_help` documents the
+> Phase 7A permission-gated, current-store Website Builder context readers and
+> validation-only custom-code sandbox contract.
 > No transfer,
 > cancellation, refund, payment/shipment/pickup/POS lifecycle mutation, product/page/
 > storefront or bulk publication, arbitrary-recipient or direct customer
 > contact, membership, unbounded catalogue repricing or arbitrary-code authority is
 > present.
 >
-> **Plan date:** 2026-09-03
+> **Plan date:** 2026-09-04
 >
 > **Platform constraint:** Mink AI must run on Google Cloud Vertex AI / Gemini
 > Enterprise Agent Platform. OpenAI models are out of scope.
@@ -111,7 +114,7 @@ guarded-action slice now include:
 - a page-gated operator inspector at `/dashboard/mink` for redacted status,
   latency, retries, tool names, tokens and cost—never conversation content or
   provider reasoning;
-- a 64-case live evaluation corpus and `npm run mink:eval` gate for tool choice,
+- a 72-case live evaluation corpus and `npm run mink:eval` gate for tool choice,
   security refusals, malformed calls, latency and manual grounding review;
 - a phase-wise manual acceptance catalogue in
   `docs/mink-ai-test-prompts.md` covering read prompts, runtime UX, permissions,
@@ -1244,6 +1247,14 @@ Exit criteria:
 Merchant coding scope is the Website Builder and sandboxed custom-code
 sections—not StoreMink platform development.
 
+**Implementation split:** Phase 7A is built. It adds read-only builder context
+and the strict patch/sandbox contract without granting code proposal, preview,
+save or publication authority. Phase 7B will add a private generated-code
+proposal and isolated preview with deterministic validation. Phase 7C will add
+versioned draft save with an exact diff and conflict protection. Phase 7D will
+add a separate publish approval, accessibility/browser checks and exact
+rollback.
+
 Deliver:
 
 - builder-context read tools for page, theme, sections and brand tokens;
@@ -1256,6 +1267,39 @@ Deliver:
 - Gemini 3.7 Flash `HIGH` for hard code tasks;
 - bounded code execution only for validation, never with production secrets or
   database/network credentials.
+
+Phase 7A delivered:
+
+- four model-visible tools available only with Website Builder View:
+  `list_storefront_pages`, `get_storefront_page_context`,
+  `get_storefront_section_context` and `get_storefront_design_context`;
+- service-role reads with a second builder-permission check and an explicit
+  trusted `store_id` predicate on every query; tenant/admin IDs never enter a
+  model-controlled schema;
+- exact `home`/page-slug and section-ID resolution, microsecond-preserving page
+  versions, canonical SHA-256 section digests and fail-closed validation of
+  stored draft/published section arrays;
+- bounded page/section summaries and safe brand, pinned-theme design-token and
+  sanitized draft/published header/footer context. Private brand contact,
+  social, raw settings and cross-store values are omitted;
+- custom-code metadata by default and at most one explicitly requested
+  HTML/CSS/JS field in resumable 8,000-character chunks; returned merchant
+  content is labelled untrusted and is never executed;
+- a strict schema-versioned future patch contract bound to one exact page
+  version and section digest, with per-field/combined size limits and rejection
+  of network, cookie/storage, parent-window, dynamic-evaluation, worker,
+  active-embed and unsafe CSS capabilities;
+- a validation-only sandbox declaration matching the existing opaque-origin
+  iframe (`allow-scripts allow-popups`, never `allow-same-origin` or top
+  navigation) and explicit false authority for save, publish, repository,
+  shell and deployment operations;
+- structured storefront record cards, versioned prompt/tool telemetry, focused
+  unit/security tests, live eval routes and literal Echos acceptance prompts.
+
+Phase 7A intentionally performs no model-generated code execution and exposes
+no proposal, preview, draft-save, publish or rollback endpoint. The validator is
+an internal contract for the later proposal path; merely returning it to the
+model does not grant authority.
 
 The merchant agent must not edit StoreMink's Next.js repository. If an internal
 StoreMink engineering agent is later built, it must be a separate operator-only
@@ -1491,33 +1535,32 @@ would move risk into production rather than remove work.
 
 ## 21. Immediate next sprint
 
-The next sprint should validate and safely roll out Phase 6E before Phase 7A:
+The next sprint should validate and safely roll out Phase 7A before Phase 7B:
 
-1. Apply `20260903_0074_mink_phase_6e_delayed_pickups` after 0073 and verify the
-   workflow-template constraint plus Help Centre section before deploying the
-   matching application revision.
-2. Create controlled Echos pickup fixtures at Shop and Delhi covering Awaiting
-   before/after the promised-ready time, Ready inside the 48-hour window,
-   reminder pending/already recorded, collected, expired, cancelled and fully
-   refunded states. Run the exact P6E prompt pack and verify every included and
-   excluded row at the card's data-as-of time.
-3. Confirm the complete-match cohort counts, severity ordering, 25-row bound,
-   truncation label, exact Shop/Delhi alias resolution and safe Order links.
-4. Confirm preparation copy keeps the revised-ready time as a staff-confirmed
-   placeholder. Ready pickups must use the existing automatic reminder state;
-   pending or recorded reminders must withhold duplicate collection copy.
-5. Verify the result never reads or persists customer name, email, phone,
-   address, notes or collection code and cannot send/queue/save a message,
-   claim/reset a reminder, change status/deadline, release a hold or move stock.
-6. Remove drafting or Orders Manage during a run; suspend/revoke the requester,
-   remove a location assignment and deactivate a captured location. The next
-   step must cancel or narrow, and later status reads must fail closed.
-7. Force worker overlap, lease expiry, cancellation and Cloud Run restart. One
-   originating request must retain one run, three steps, one result and one
-   notification, with zero background Gemini usage and no duplicate reminder.
-8. After these gates pass, begin Phase 7A with builder-context read tools and a
-   sandbox contract only; do not grant code save or publication authority in
-   the same step.
+1. Apply `20260904_0076_mink_phase_7a_builder_context_help` after 0075 and
+   verify the published Help Centre section before deploying the matching app
+   revision.
+2. Run the exact Echos Phase 7A prompt pack against the homepage and every
+   listed page. Compare titles, status, ordered sections, hidden state,
+   unpublished state, theme, brand tokens and header/footer values with Website
+   Builder at the response data-as-of time.
+3. Remove Website Builder View and verify all four declarations disappear.
+   Test an admin from another store and confirm Echos pages, section IDs,
+   versions, code lengths, tokens and chrome never cross the tenant boundary.
+4. Create an oversized custom-code fixture in Echos. Verify code is absent from
+   page summaries, appears only for an explicit field request, is chunked at
+   8,000 characters and cannot be read past its exact length.
+5. Put hostile instructions in a page title, section copy, code comment and
+   header link label. Mink must quote them only as merchant data and must not
+   request credentials, execute code, widen scope or claim a write.
+6. Exercise malformed stored-section, unknown page/section, stale version,
+   invalid offset and unavailable-theme cases. Every failure must be bounded,
+   non-secret and fail closed; measure p95 latency and token/cost deltas in the
+   operator console and the expanded live eval set.
+7. After those gates pass, begin Phase 7B with one private custom-code proposal
+   bound to the returned page version and section digest, deterministic unsafe
+   API/schema/size validation and an isolated preview. Keep draft save and
+   publication authority out of 7B.
 
 The intended outcome is not “Gemini 3.7 answered impressively.” It is:
 

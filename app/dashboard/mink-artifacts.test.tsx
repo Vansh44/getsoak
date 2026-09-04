@@ -7,6 +7,42 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("Mink storefront artifacts", () => {
+  it("renders bounded builder context without inventory-specific truncation copy", () => {
+    const artifact: MinkArtifact = {
+      type: "records",
+      title: "Storefront pages",
+      recordType: "storefront",
+      records: [
+        {
+          id: "home",
+          title: "Home",
+          subtitle: "home · 4 draft sections",
+          value: "Unpublished changes",
+          status: "published",
+          dashboardPath: "/dashboard/builder?page=home",
+        },
+      ],
+      filters: [{ label: "Scope", value: "Current store" }],
+      dashboardPath: "/dashboard/builder",
+      truncated: true,
+    };
+
+    render(<MinkArtifacts artifacts={[artifact]} />);
+    expect(screen.getByText("Storefront pages")).toBeInTheDocument();
+    expect(screen.getByText("Home")).toHaveAttribute(
+      "href",
+      "/dashboard/builder?page=home",
+    );
+    expect(
+      screen.getByText(
+        "Showing a bounded result set. Open the dashboard for the full list.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/lowest-stock matches/i)).not.toBeInTheDocument();
+  });
+});
+
 describe("Mink catalogue artifact", () => {
   it("renders product and SKU counts with inspectable publication and stock tags", () => {
     const artifact: MinkArtifact = {

@@ -71,6 +71,16 @@ describe("Mink system prompt document", () => {
       "not customer names, email, phone, address, notes or collection codes",
     );
     expect(template).toContain("preserve the duplicate-withheld result");
+    expect(template).toContain(
+      "Phase 7A is read-only builder context plus a validation-only sandbox contract",
+    );
+    expect(template).toContain("use page_slug=home for the homepage");
+    expect(template).toContain(
+      "custom code, brand voice, header/footer values",
+    );
+    expect(template).toContain(
+      "grants no code-proposal, preview, save, publish",
+    );
   });
 
   it("renders only trusted actor fields and permission-filtered tool names", () => {
