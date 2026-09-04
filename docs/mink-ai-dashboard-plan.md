@@ -1,6 +1,6 @@
 # Mink AI Dashboard Agent — Architecture and Delivery Plan
 
-> **Status:** Phases 0–4, Phases 5A–5F, Phases 6A–6E and Phase 7A are implemented in code. Phase 2
+> **Status:** Phases 0–4, Phases 5A–5F, Phases 6A–6E and Phases 7A–7B are implemented in code. Phase 2
 > remains the invited read-only merchant beta. Phase 3 adds a separate,
 > fail-closed operator opt-in
 > for private versioned drafts and atomic weighted credits through migration
@@ -50,6 +50,9 @@
 > Migration `20260904_0076_mink_phase_7a_builder_context_help` documents the
 > Phase 7A permission-gated, current-store Website Builder context readers and
 > validation-only custom-code sandbox contract.
+> Migration `20260904_0077_mink_phase_7b_storefront_code_preview` adds the
+> constrained private-proposal draft kind and publishes the Phase 7B
+> permission, validation, isolation, credit and no-write contract.
 > No transfer,
 > cancellation, refund, payment/shipment/pickup/POS lifecycle mutation, product/page/
 > storefront or bulk publication, arbitrary-recipient or direct customer
@@ -1247,10 +1250,11 @@ Exit criteria:
 Merchant coding scope is the Website Builder and sandboxed custom-code
 sections—not StoreMink platform development.
 
-**Implementation split:** Phase 7A is built. It adds read-only builder context
-and the strict patch/sandbox contract without granting code proposal, preview,
-save or publication authority. Phase 7B will add a private generated-code
-proposal and isolated preview with deterministic validation. Phase 7C will add
+**Implementation split:** Phases 7A and 7B are built. Phase 7A adds read-only
+builder context and the strict patch/sandbox contract. Phase 7B adds one
+immutable private generated-code proposal against an existing custom-code
+section plus a network-isolated preview, without builder save or publication
+authority. Phase 7C will add
 versioned draft save with an exact diff and conflict protection. Phase 7D will
 add a separate publish approval, accessibility/browser checks and exact
 rollback.
@@ -1289,10 +1293,9 @@ Phase 7A delivered:
   version and section digest, with per-field/combined size limits and rejection
   of network, cookie/storage, parent-window, dynamic-evaluation, worker,
   active-embed and unsafe CSS capabilities;
-- a validation-only sandbox declaration matching the existing opaque-origin
-  iframe (`allow-scripts allow-popups`, never `allow-same-origin` or top
-  navigation) and explicit false authority for save, publish, repository,
-  shell and deployment operations;
+- a validation-only sandbox declaration for the future proposal boundary and
+  explicit false authority for save, publish, repository, shell and deployment
+  operations;
 - structured storefront record cards, versioned prompt/tool telemetry, focused
   unit/security tests, live eval routes and literal Echos acceptance prompts.
 
@@ -1300,6 +1303,38 @@ Phase 7A intentionally performs no model-generated code execution and exposes
 no proposal, preview, draft-save, publish or rollback endpoint. The validator is
 an internal contract for the later proposal path; merely returning it to the
 model does not grant authority.
+
+Phase 7B delivered:
+
+- `propose_storefront_custom_code`, exposed only with Mink drafting and Website
+  Builder Manage, for one existing custom-code section in the authenticated
+  current store;
+- an exact page-version plus canonical section-digest recheck before weighted
+  credit charging, with no model-controlled tenant or actor selector and no
+  fuzzy page/section fallback;
+- immutable private proposal persistence at 5 AI credits. The streamed and
+  restored artifact contains only metadata and digests; code is loaded later
+  through an owner-scoped, rate-limited, no-store endpoint;
+- byte-preserving HTML/CSS/JavaScript storage, 64-KiB per-field and 96-KiB
+  combined bounds, unknown-field rejection, and deterministic rejection of
+  network, external-resource, storage, cookie, parent/opener, messaging,
+  navigation, evaluation, worker, form, frame and unsafe-CSS capabilities;
+- a desktop/mobile preview in an opaque-origin iframe with only
+  `sandbox="allow-scripts"`, no popup authority, no referrer and a
+  deny-by-default CSP. Existing merchant code is shown only as escaped diff
+  text and is never executed in the proposed preview;
+- target-state revalidation when the card loads, so later builder edits mark
+  the proposal stale without discarding its private review snapshot;
+- no generic draft editing/rollback, Builder save, new-section creation,
+  header/footer mutation, publication, repository, shell, commit or deployment
+  path; and
+- request-aware Gemini HIGH thinking for explicit storefront code generation
+  only when the trusted permission-filtered proposal declaration exists. Other
+  reads and analysis remain LOW for latency and cost control.
+
+Phase 7B intentionally stops before applying code to the Website Builder.
+Phase 7C must create a fresh guarded save contract instead of reusing the
+generic draft mutation endpoint.
 
 The merchant agent must not edit StoreMink's Next.js repository. If an internal
 StoreMink engineering agent is later built, it must be a separate operator-only
@@ -1535,32 +1570,29 @@ would move risk into production rather than remove work.
 
 ## 21. Immediate next sprint
 
-The next sprint should validate and safely roll out Phase 7A before Phase 7B:
+The next sprint should validate Phase 7B and then design Phase 7C's separate
+guarded Builder-draft save:
 
-1. Apply `20260904_0076_mink_phase_7a_builder_context_help` after 0075 and
-   verify the published Help Centre section before deploying the matching app
-   revision.
-2. Run the exact Echos Phase 7A prompt pack against the homepage and every
-   listed page. Compare titles, status, ordered sections, hidden state,
-   unpublished state, theme, brand tokens and header/footer values with Website
-   Builder at the response data-as-of time.
-3. Remove Website Builder View and verify all four declarations disappear.
-   Test an admin from another store and confirm Echos pages, section IDs,
-   versions, code lengths, tokens and chrome never cross the tenant boundary.
-4. Create an oversized custom-code fixture in Echos. Verify code is absent from
-   page summaries, appears only for an explicit field request, is chunked at
-   8,000 characters and cannot be read past its exact length.
-5. Put hostile instructions in a page title, section copy, code comment and
-   header link label. Mink must quote them only as merchant data and must not
-   request credentials, execute code, widen scope or claim a write.
-6. Exercise malformed stored-section, unknown page/section, stale version,
-   invalid offset and unavailable-theme cases. Every failure must be bounded,
-   non-secret and fail closed; measure p95 latency and token/cost deltas in the
-   operator console and the expanded live eval set.
-7. After those gates pass, begin Phase 7B with one private custom-code proposal
-   bound to the returned page version and section digest, deterministic unsafe
-   API/schema/size validation and an isolated preview. Keep draft save and
-   publication authority out of 7B.
+1. Apply `20260904_0077_mink_phase_7b_storefront_code_preview` after the already
+   applied 0076 migration and verify both new constraints plus the replacement
+   Help Centre text before deploying the matching app revision.
+2. Run the exact Echos Phase 7A and 7B prompt packs with a controlled existing
+   custom-code section. Compare the target version/digest, proposed source,
+   desktop/mobile output, charged credits and Builder data before and after;
+   the Builder page must remain byte-for-byte unchanged.
+3. Remove Builder Manage, disable drafting, disable custom code and test a
+   different-store actor independently. The proposal declaration or target
+   must fail closed without charging and no Echos code or identifiers may leak.
+4. Run the unsafe HTML/CSS/JavaScript prompt pack plus oversized, malformed,
+   hostile-comment and stale-checkpoint cases. Confirm the generated iframe has
+   opaque origin, `sandbox="allow-scripts"`, no popup and the strict CSP.
+5. Measure HIGH-thinking latency, thought tokens and cost for explicit code
+   generation against LOW-thinking builder reads. Verify user wording alone
+   cannot turn HIGH on when the proposal declaration is absent.
+6. Design Phase 7C as a fresh short-lived approval against the latest exact
+   page/section checkpoint, with a complete escaped diff, idempotency,
+   transactional conflict handling and an audit event. Do not add publication
+   authority to the save approval.
 
 The intended outcome is not “Gemini 3.7 answered impressively.” It is:
 

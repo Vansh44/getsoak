@@ -3156,6 +3156,69 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260904_0077_mink_phase_7b_storefront_code_preview",
+      "description": "Add owner-private Mink storefront-code proposals, exact target constraints, isolated preview guidance, and no builder-write authority for Phase 7B",
+      "file": "sql/20260904_0077_mink_phase_7b_storefront_code_preview.sql",
+      "checksum": "21f35186a1022070c3ba6757283a19ddc5f4e943faac5fde09a90858d9fb9b76",
+      "transaction": true,
+      "requires": ["20260904_0076_mink_phase_7a_builder_context_help"],
+      "verify": {
+        "tables": ["mink_drafts", "help_articles"],
+        "constraints": [
+          "mink_drafts_kind_check",
+          "mink_drafts_storefront_code_target_check"
+        ],
+        "functions": [],
+        "queries": [
+          {
+            "name": "Mink Phase 7B storefront code draft kind is allowed",
+            "sql": "select count(*)::text from pg_constraint where conname = 'mink_drafts_kind_check' and conrelid = 'public.mink_drafts'::regclass and pg_get_constraintdef(oid) like '%storefront_custom_code%'",
+            "equals": "1"
+          },
+          {
+            "name": "Mink Phase 7B preview-only guidance is published",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%Phase 7B adds an immutable, private custom-code proposal%' and body like '%sandbox=\"allow-scripts\"%' and body like '%Phase 7B remains preview-only%' and body not like '%cannot yet create a code proposal%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "applyVerify": {
+        "tables": ["mink_drafts", "help_articles"],
+        "constraints": [
+          "mink_drafts_kind_check",
+          "mink_drafts_storefront_code_target_check"
+        ],
+        "functions": [],
+        "queries": [
+          {
+            "name": "Mink Phase 7B draft target is fully constrained",
+            "sql": "select count(*)::text from pg_constraint where conname = 'mink_drafts_storefront_code_target_check' and conrelid = 'public.mink_drafts'::regclass and pg_get_constraintdef(oid) like '%expected_page_version%' and pg_get_constraintdef(oid) like '%expected_section_digest%' and pg_get_constraintdef(oid) like '%patch_digest%'",
+            "equals": "1"
+          },
+          {
+            "name": "Mink Phase 7B security and no-write contract is complete",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%costs 5 AI credits%' and body like '%deny-by-default Content Security Policy%' and body like '%The stored before snapshot is never executed%' and body like '%cannot edit that immutable proposal%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "tables": ["mink_drafts", "help_articles"],
+        "constraints": [
+          "mink_drafts_kind_check",
+          "mink_drafts_storefront_code_target_check"
+        ],
+        "functions": [],
+        "queries": [
+          {
+            "name": "Mink Phase 7B schema and guidance already exist",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%Phase 7B adds an immutable, private custom-code proposal%' and body like '%Phase 7B remains preview-only%'",
+            "equals": "1"
+          }
+        ]
+      }
     }
   ]
 }

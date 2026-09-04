@@ -169,7 +169,7 @@ describe("Phase 7A storefront context reads", () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
-  it("returns only safe brand/theme/chrome fields and the no-write sandbox contract", async () => {
+  it("returns only safe brand/theme/chrome fields and an actor-aware sandbox contract", async () => {
     execute.mockResolvedValueOnce({
       rows: [
         {
@@ -215,9 +215,14 @@ describe("Phase 7A storefront context reads", () => {
       theme: { id: "basket", version: "1.0.0" },
       capabilities: { customCodeEnabled: true },
       sandboxContract: {
-        phase: "7A",
-        mode: "validation_only",
-        authority: { canSaveCode: false, canPublish: false },
+        phase: "7B",
+        mode: "private_proposal_preview",
+        authority: {
+          canCreatePrivateProposal: false,
+          canPreviewGeneratedCode: false,
+          canSaveCode: false,
+          canPublish: false,
+        },
       },
     });
     const serialized = JSON.stringify(output);

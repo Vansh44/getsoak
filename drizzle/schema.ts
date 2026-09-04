@@ -4833,7 +4833,7 @@ export const minkDrafts = pgTable(
     }).onDelete("cascade"),
     check(
       "mink_drafts_kind_check",
-      sql`kind = ANY (ARRAY['product_description'::text, 'product_seo'::text, 'blog'::text, 'coupon_email'::text, 'customer_message'::text, 'product_create'::text, 'coupon_create'::text, 'coupon_update'::text, 'customer_group_create'::text, 'customer_group_update'::text, 'inventory_adjustment'::text, 'bulk_inventory_adjustment'::text, 'order_status_transition'::text, 'bulk_price_update'::text])`,
+      sql`kind = ANY (ARRAY['product_description'::text, 'product_seo'::text, 'blog'::text, 'coupon_email'::text, 'customer_message'::text, 'product_create'::text, 'coupon_create'::text, 'coupon_update'::text, 'customer_group_create'::text, 'customer_group_update'::text, 'inventory_adjustment'::text, 'bulk_inventory_adjustment'::text, 'order_status_transition'::text, 'bulk_price_update'::text, 'offer_create'::text, 'offer_update'::text, 'offer_activate'::text, 'storefront_custom_code'::text])`,
     ),
     check(
       "mink_drafts_status_check",
@@ -4858,6 +4858,10 @@ export const minkDrafts = pgTable(
     check(
       "mink_drafts_bulk_price_target_check",
       sql`kind <> 'bulk_price_update' OR (destination_type = 'price_bulk' AND destination_id IS NULL AND location_id IS NULL AND variant_id IS NULL AND jsonb_typeof(content_json -> 'lines_json') = 'string')`,
+    ),
+    check(
+      "mink_drafts_storefront_code_target_check",
+      sql`kind <> 'storefront_custom_code' OR (destination_type = 'storefront_section' AND destination_id IS NULL AND location_id IS NULL AND variant_id IS NULL AND jsonb_typeof(content_json -> 'page_slug') = 'string' AND jsonb_typeof(content_json -> 'section_id') = 'string' AND jsonb_typeof(content_json -> 'expected_page_version') = 'string' AND jsonb_typeof(content_json -> 'expected_section_digest') = 'string' AND jsonb_typeof(content_json -> 'patch_digest') = 'string' AND jsonb_typeof(content_json -> 'html') = 'string' AND jsonb_typeof(content_json -> 'css') = 'string' AND jsonb_typeof(content_json -> 'js') = 'string' AND jsonb_typeof(content_json -> 'height_mode') = 'string' AND jsonb_typeof(content_json -> 'fixed_height') = 'string' AND jsonb_typeof(content_json -> 'explanation') = 'string')`,
     ),
     check(
       "mink_drafts_title_check",

@@ -23,7 +23,7 @@ const BASE_PATCH = {
   },
 } as const;
 
-describe("Phase 7A storefront code contract", () => {
+describe("Phase 7B storefront code contract", () => {
   it("normalizes a safe, exactly targeted patch without executing it", () => {
     const result = validateMinkStorefrontCodePatch(BASE_PATCH);
     expect(result.ok).toBe(true);
@@ -34,9 +34,19 @@ describe("Phase 7A storefront code contract", () => {
     });
     expect(result.value.patchDigest).toMatch(/^[a-f0-9]{64}$/);
     expect(MINK_STOREFRONT_SANDBOX_CONTRACT).toMatchObject({
-      mode: "validation_only",
-      iframe: { sameOrigin: false, topNavigation: false },
-      authority: { canSaveCode: false, canPublish: false },
+      phase: "7B",
+      mode: "private_proposal_preview",
+      iframe: {
+        sandboxAttribute: "allow-scripts",
+        sameOrigin: false,
+        topNavigation: false,
+      },
+      authority: {
+        canCreatePrivateProposal: true,
+        canPreviewGeneratedCode: true,
+        canSaveCode: false,
+        canPublish: false,
+      },
       limits: { codeReadChunkCharacters: MINK_STOREFRONT_CODE_CHUNK_CHARS },
     });
   });
@@ -61,6 +71,14 @@ describe("Phase 7A storefront code contract", () => {
     ["eval", { js: "eval('alert(1)')" }, "dynamic code"],
     ["active html", { html: "<iframe src=/admin></iframe>" }, "HTML"],
     ["CSS import", { css: "@import url('/private.css');" }, "@import"],
+    [
+      "computed parent",
+      { js: "window['parent'].postMessage('x', '*')" },
+      "computed access",
+    ],
+    ["navigation", { js: "window.open('/dashboard')" }, "navigation"],
+    ["messaging", { js: "postMessage('secret', '*')" }, "cross-context"],
+    ["unbounded loop", { js: "while (true) {}" }, "unbounded loops"],
   ])("rejects %s capabilities", (_label, override, expected) => {
     const result = validateMinkStorefrontCodePatch({
       ...BASE_PATCH,

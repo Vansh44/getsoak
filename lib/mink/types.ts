@@ -138,6 +138,29 @@ export type MinkArtifact =
       creditSource: MinkDraftCreditSource;
     }
   | {
+      type: "storefront_code_proposal";
+      draftId: string;
+      title: string;
+      destinationLabel: string;
+      destinationPath: string;
+      explanation: string;
+      target: {
+        pageSlug: string;
+        sectionId: string;
+        expectedPageVersion: string;
+        expectedSectionDigest: string;
+      };
+      patchDigest: string;
+      changedFields: Array<"html" | "css" | "js" | "height">;
+      beforeCharacters: number;
+      afterCharacters: number;
+      validationChecks: string[];
+      status: "private_preview";
+      expectedCredits: number;
+      chargedCredits: number;
+      creditSource: MinkDraftCreditSource;
+    }
+  | {
       type: "workflow";
       runId: string;
       template: MinkWorkflowTemplate;

@@ -352,7 +352,18 @@ export async function readMinkStorefrontDesignContext(actor: MinkActorContext) {
       capabilities: {
         customCodeEnabled: resolvedSettings["pages.customCode"] === true,
       },
-      sandboxContract: MINK_STOREFRONT_SANDBOX_CONTRACT,
+      sandboxContract: {
+        ...MINK_STOREFRONT_SANDBOX_CONTRACT,
+        authority: {
+          ...MINK_STOREFRONT_SANDBOX_CONTRACT.authority,
+          canCreatePrivateProposal:
+            actor.draftingEnabled === true &&
+            can(actor.permissions, "builder", "manage", actor.isSuperadmin),
+          canPreviewGeneratedCode:
+            actor.draftingEnabled === true &&
+            can(actor.permissions, "builder", "manage", actor.isSuperadmin),
+        },
+      },
       contentTrust: "untrusted_storefront_data" as const,
       scope: "current_store" as const,
       dataAsOf: new Date().toISOString(),

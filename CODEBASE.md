@@ -42,6 +42,15 @@ tokens were renamed to `--sm-*` and `WHOLESIP_STORE_ID` to `FALLBACK_STORE_ID`.
 | Browsers  | **`browserslist` in package.json is the stated floor: Chrome/Edge 111, Firefox 128, Safari/iOS 16.4.** Not a preference — Tailwind v4 depends on `@property` and `color-mix()` and does not work below it, so this records a constraint a dependency already imposed rather than inventing one. Two authored CSS features sit BELOW that floor and so are always available: `:has()` (Chrome 105+/Safari 15.4+/Firefox 121+) and container queries (Chrome 105+/Safari 16+/Firefox 110+), both used by the dashboard table compaction, which is nonetheless wrapped in `@supports selector(:has(+ *)) and (container-type: inline-size)` so the dependency is stated where it is used and stays graceful if the floor is ever lowered. **⚠ There is NO cross-browser test infrastructure** — vitest runs in jsdom, which renders nothing. Chrome is the only browser this has been exercised in                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | Deploy    | **Google Cloud Run** via branch-specific Cloud Build triggers (`dev` → `storemink-web-dev`, `staging` → `storemink-web`, `main` → `storemink-web-prod`; Dockerfile + `cloudbuild.yaml`). The Cloud Build deploy owns the complete runtime environment; Mink's model/limit settings and separate invited-beta requirement are declared as substitutions. The global runtime defaults enabled, while the per-store invitation requirement defaults on and remains the fail-closed merchant boundary. CI on GitHub Actions (`.github/workflows/ci.yml`: lint → typecheck → test → test:shuffle → prettier → build); `npm run typecheck` runs `next typegen` before `tsc --noEmit` because the Next-managed `next-env.d.ts` is deliberately gitignored and a clean checkout otherwise has no static-image or route declarations. Database DDL is a separate, checksummed release gate (`npm run db:migrate`; see `drizzle/manual/README.md`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 
+> **Mink Phase 7B map update (2026-09-04):** the Phase 7A-only wording in the
+> compact AI row above is superseded by Phase 7B. With drafting plus Builder
+> Manage, Mink may create one 5-credit immutable private generated-code
+> proposal for an existing custom-code section and show an owner-only,
+> network-isolated desktop/mobile preview. It still has no Builder save,
+> new-section, publish, rollback, repository, shell or deployment authority.
+> Explicit authorised code-generation intent uses HIGH thinking; other work
+> remains LOW.
+
 ## 3. Multi-tenancy architecture (the core concept)
 
 Every request belongs to exactly one store, resolved from the **Host header**.
@@ -278,6 +287,8 @@ wholesip/
 │   │   │                      # plus private proposal cards; mink-proposal-card.tsx edits,
 │   │   │                      # versions/restores proposals and provides Phase 4's exact,
 │   │   │                      # explicitly approved product/coupon/group action/rollback UX.
+│   │   │                      # mink-storefront-code-proposal-card.tsx owner-loads Phase 7B
+│   │   │                      # code, target state and escaped source into an isolated preview.
 │   │   ├── mink-feedback.tsx  # Per-answer thumbs + bounded, privacy-redacted issue report.
 │   │   ├── mink-mark.tsx      # Shared solid-purple robot mark matching Help Centre Mink.
 │   │   ├── page.tsx           # Overview: metrics, revenue chart, activity, inventory…
@@ -616,8 +627,10 @@ wholesip/
 │       │   │                  # publish now or persist one bounded schedule after human approval.
 │       │   ├── campaign-action/ # ★ Phase 5E same-origin audience options/preview/execute;
 │       │   │                  # exact coupon-email snapshot + final queue/schedule confirmation.
-│       │   └── bulk-price-action/ # ★ Phase 5F same-origin preview/execute for one saved
+│       │   ├── bulk-price-action/ # ★ Phase 5F same-origin preview/execute for one saved
 │       │                      # max-20 exact-SKU tuple; impact review + atomic all-or-nothing write.
+│       │   └── storefront-code-preview/ # ★ Phase 7B owner-only no-store code/diff DTO;
+│       │                      # revalidates integrity and current/stale exact target state.
 │       ├── pos/live/          # ★ Authenticated no-store GET transport for every
 │       │                      # background POS read (badge, queue, stock, paged
 │       │                      # catalogue). Server Actions are client-serialized,
@@ -1098,9 +1111,11 @@ wholesip/
 │   │                          # using Inventory's simple-product/variant, missing-shelf-zero and
 │   │                          # effective-threshold contract.
 │   │                          # storefront-context-read.ts adds Phase 7A's explicitly tenant-
-│   │                          # scoped page/section/design reads; storefront-code-contract.ts
-│   │                          # defines the exact-version/digest, size and unsafe-capability
-│   │                          # validation-only contract for future custom-code proposals.
+│   │                          # scoped page/section/design reads; storefront-code-contract.ts,
+│   │                          # storefront-code-proposals.ts and tools/storefront-code-tools.ts
+│   │                          # add Phase 7B exact-target validation, immutable private storage
+│   │                          # and network-isolated preview metadata. thinking.ts selects HIGH
+│   │                          # only for authorised explicit storefront code generation.
 │   │                          # timestamps.ts canonicalizes coupon business dates without
 │   │                          # weakening full-precision resource-version checkpoints.
 │   │                          # No model tool can publish, schedule, send or execute a live mutation.
@@ -3032,10 +3047,14 @@ resolve only exact page slugs/section IDs, preserve microsecond page versions,
 return section digests, expose safe brand/theme/chrome design context and keep
 custom-code bodies absent unless one HTML/CSS/JS field is explicitly requested
 in an 8,000-character chunk. All merchant builder content is marked untrusted.
-`lib/mink/storefront-code-contract.ts` validates a future exact-target patch's
-schema, field/combined sizes and prohibited APIs without executing or saving
-it; its declared sandbox has no same-origin, top-navigation, repository, shell,
-deployment, save or publish authority. Sales and orders reuse the dashboard's
+`lib/mink/storefront-code-contract.ts` validates Phase 7B exact-target patches,
+field/combined sizes and prohibited APIs without server execution. With
+drafting plus Builder Manage, Mink can store one 5-credit immutable private
+proposal for an existing custom-code section. The owner-only no-store card
+rechecks the target and renders only proposed code in an opaque-origin
+`allow-scripts` iframe with a deny-by-default CSP; current code is escaped diff
+text. No Builder save, section-create, publish, repository, shell or deployment
+path exists. Sales and orders reuse the dashboard's
 date/timezone/refund/channel contract. Catalogue health now separates
 product-level publication counts from sellable-SKU inventory counts, evaluates
 simple products and variants with the Inventory workspace's effective-threshold
@@ -3531,7 +3550,7 @@ the trusted `store_id`, and direct customer PII is minimized/masked.
      `docs/mink-ai-test-prompts.md` catalogue covers phase-wise manual prompts
      plus UX, permission, tenancy, credit, approval, conflict, idempotency and
      rollback acceptance scenarios. The original migration
-     publishes the guide; migrations 0036–0058 and 0072–0076 keep
+     publishes the guide; migrations 0036–0058 and 0072–0077 keep
      `use-mink-ai-in-your-dashboard` aligned with these capabilities and limits.
 
 21. **Help Centre (`help.storemink.com`) — platform-global, operator-managed

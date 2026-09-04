@@ -36,6 +36,7 @@ describe("Mink draft contracts", () => {
       // twice for one piece of work. It is a separate APPROVAL, not a separate
       // piece of drafting.
       offer_activate: 0,
+      storefront_custom_code: 5,
     });
   });
 
@@ -211,6 +212,40 @@ describe("Mink draft contracts", () => {
     ).toMatchObject({
       kind: "order_status_transition",
       expectedCredits: 1,
+    });
+    expect(
+      estimateMinkDraftIntent(
+        "Redesign the Echos homepage hero and generate custom code",
+      ),
+    ).toMatchObject({
+      kind: "storefront_custom_code",
+      expectedCredits: 5,
+    });
+  });
+
+  it("preserves generated code byte-for-byte while normalizing proposal metadata", () => {
+    const content = normalizeMinkDraftContent("storefront_custom_code", {
+      page_slug: " home ",
+      section_id: " section-1 ",
+      expected_page_version: " 2026-09-04T10:20:30.123456+00:00 ",
+      expected_section_digest: ` ${"a".repeat(64)} `,
+      patch_digest: ` ${"b".repeat(64)} `,
+      html: "  <section>Keep whitespace</section>\n",
+      css: "\n.hero { color: red; }\n",
+      js: "  const label = 'é';\n",
+      height_mode: " auto ",
+      fixed_height: " 480 ",
+      explanation: "  A private preview.  ",
+    });
+    expect(content).toMatchObject({
+      page_slug: "home",
+      section_id: "section-1",
+      html: "  <section>Keep whitespace</section>\n",
+      css: "\n.hero { color: red; }\n",
+      js: "  const label = 'é';\n",
+      height_mode: "auto",
+      fixed_height: "480",
+      explanation: "A private preview.",
     });
   });
 });

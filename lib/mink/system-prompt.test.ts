@@ -72,14 +72,20 @@ describe("Mink system prompt document", () => {
     );
     expect(template).toContain("preserve the duplicate-withheld result");
     expect(template).toContain(
-      "Phase 7A is read-only builder context plus a validation-only sandbox contract",
+      "Phase 7B retains the read-only builder-context rules",
     );
     expect(template).toContain("use page_slug=home for the homepage");
     expect(template).toContain(
       "custom code, brand voice, header/footer values",
     );
     expect(template).toContain(
-      "grants no code-proposal, preview, save, publish",
+      "preserve the returned page version and section digest exactly",
+    );
+    expect(template).toContain(
+      "opaque-origin iframe with a deny-by-default network policy",
+    );
+    expect(template).toContain(
+      "Those operations are not available in Phase 7B",
     );
   });
 

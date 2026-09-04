@@ -13,8 +13,7 @@ import {
 export const MINK_STOREFRONT_PATCH_SCHEMA_VERSION = 1 as const;
 export const MINK_STOREFRONT_CODE_CHUNK_CHARS = 8_000;
 export const MINK_STOREFRONT_PATCH_MAX_CHARS = 96 * 1024;
-export const MINK_STOREFRONT_SANDBOX_ATTRIBUTE =
-  "allow-scripts allow-popups" as const;
+export const MINK_STOREFRONT_SANDBOX_ATTRIBUTE = "allow-scripts" as const;
 
 export interface MinkStorefrontCodePatch {
   schemaVersion: typeof MINK_STOREFRONT_PATCH_SCHEMA_VERSION;
@@ -44,8 +43,8 @@ export interface ValidatedMinkStorefrontCodePatch {
 
 export interface MinkStorefrontSandboxContract {
   schemaVersion: typeof MINK_STOREFRONT_PATCH_SCHEMA_VERSION;
-  phase: "7A";
-  mode: "validation_only";
+  phase: "7B";
+  mode: "private_proposal_preview";
   target: {
     pageSlug: "exact";
     sectionId: "exact";
@@ -69,6 +68,8 @@ export interface MinkStorefrontSandboxContract {
   authority: {
     canReadBuilderContext: true;
     canValidatePatchShape: true;
+    canCreatePrivateProposal: boolean;
+    canPreviewGeneratedCode: boolean;
     canSaveCode: false;
     canPublish: false;
     canAccessRepository: false;
@@ -78,8 +79,8 @@ export interface MinkStorefrontSandboxContract {
 
 export const MINK_STOREFRONT_SANDBOX_CONTRACT = Object.freeze({
   schemaVersion: MINK_STOREFRONT_PATCH_SCHEMA_VERSION,
-  phase: "7A",
-  mode: "validation_only",
+  phase: "7B",
+  mode: "private_proposal_preview",
   target: {
     pageSlug: "exact",
     sectionId: "exact",
@@ -111,6 +112,8 @@ export const MINK_STOREFRONT_SANDBOX_CONTRACT = Object.freeze({
   authority: {
     canReadBuilderContext: true,
     canValidatePatchShape: true,
+    canCreatePrivateProposal: true,
+    canPreviewGeneratedCode: true,
     canSaveCode: false,
     canPublish: false,
     canAccessRepository: false,
@@ -130,9 +133,11 @@ const SECTION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 const SHA256_RE = /^[a-f0-9]{64}$/;
 
 /**
- * Validate the immutable Phase 7A contract only. This function never executes,
- * stores or publishes code. A later phase must independently re-read and match
- * both optimistic-lock fields before it can even propose a guarded write.
+ * Validate the immutable storefront-code contract. Phase 7B may store the
+ * validated value as a private Mink proposal and execute it only inside the
+ * opaque preview iframe. This function never executes code or updates a
+ * Website Builder page. A later phase must independently re-read and match
+ * both optimistic-lock fields before it can propose a guarded builder write.
  */
 export function validateMinkStorefrontCodePatch(
   input: unknown,
@@ -314,6 +319,11 @@ function readCodeField(
   if (value.length > CODE_MAX_CHARS) {
     issues.push(`code.${field} exceeds ${CODE_MAX_CHARS} characters.`);
   }
+  if (/\u0000|[\u202a-\u202e\u2066-\u2069]/i.test(value)) {
+    issues.push(
+      `code.${field} may not contain null bytes or bidirectional control characters.`,
+    );
+  }
   return value;
 }
 
@@ -359,6 +369,10 @@ function validateGeneratedJavaScript(value: string, issues: string[]): void {
       /\b(?:window\.)?(?:parent|top|opener)\b/i,
       "parent, top, or opener access",
     ],
+    [
+      /\[\s*["'](?:parent|top|opener|fetch|location|cookie|referrer)["']\s*\]/i,
+      "computed access to privileged browser capabilities",
+    ],
     [/\b(?:eval|Function)\s*\(/i, "dynamic code evaluation"],
     [/\b(?:Worker|SharedWorker)\s*\(|serviceWorker\b/i, "worker APIs"],
     [/\bimport\s*\(/i, "dynamic imports"],
@@ -366,8 +380,20 @@ function validateGeneratedJavaScript(value: string, issues: string[]): void {
       /\b(?:new\s+)?Image\s*\(|\.src\s*=|setAttribute\s*\(\s*["']src/i,
       "network-capable resource loading",
     ],
-    [/\b(?:location\s*=|location\.(?:assign|replace)\s*\()/i, "navigation"],
+    [
+      /\b(?:location\s*=|location\.(?:assign|replace)\s*\(|window\.open\s*\(|history\.(?:pushState|replaceState)\s*\()/i,
+      "navigation",
+    ],
+    [
+      /\b(?:postMessage|document\.referrer|window\.name)\b/i,
+      "cross-context messaging or embedding metadata",
+    ],
+    [/\b(?:https?|wss?):\/\//i, "external URL literals"],
     [/\bdocument\.(?:write|writeln)\s*\(/i, "document.write"],
+    [
+      /\bwhile\s*\(\s*(?:true|1)\s*\)|\bfor\s*\(\s*;\s*;\s*\)/i,
+      "obvious unbounded loops",
+    ],
   ];
   addPatternIssues("JavaScript", value, checks, issues);
 }
