@@ -3,6 +3,7 @@ import { getMinkActorContext } from "@/lib/mink/actor-context";
 import { getMinkConfig } from "@/lib/mink/config";
 import { MinkRequestError } from "@/lib/mink/errors";
 import { getMinkStorefrontCodePreview } from "@/lib/mink/storefront-code-proposals";
+import { getLatestMinkStorefrontCodeAction } from "@/lib/mink/storefront-code-actions";
 import { logError, logWarn } from "@/lib/observability/logger";
 import { rateLimit } from "@/lib/rate-limit";
 
@@ -45,9 +46,12 @@ export async function GET(
         { status: 429 },
       );
     }
-    const preview = await getMinkStorefrontCodePreview(actor, draftId);
+    const [preview, lastAction] = await Promise.all([
+      getMinkStorefrontCodePreview(actor, draftId),
+      getLatestMinkStorefrontCodeAction(actor, draftId),
+    ]);
     return NextResponse.json(
-      { preview },
+      { preview, lastAction },
       {
         headers: {
           "Cache-Control": "no-store, private",

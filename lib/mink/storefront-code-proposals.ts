@@ -156,8 +156,8 @@ export async function getMinkStorefrontCodePreview(
       404,
     );
   }
-  const validation = validateStoredProposal(draft.content);
-  const beforeConfig = storedCodeConfig(draft.before, "before");
+  const validation = validateStoredStorefrontProposal(draft.content);
+  const beforeConfig = readStoredStorefrontCodeConfig(draft.before, "before");
   const changedFields = changedCodeFields(
     beforeConfig,
     validation.value.config,
@@ -187,6 +187,7 @@ export async function getMinkStorefrontCodePreview(
 
   return {
     id: draft.id,
+    draftVersion: draft.currentVersion,
     title: draft.title,
     destinationLabel: draft.destinationLabel,
     destinationPath: draft.destinationPath,
@@ -203,7 +204,7 @@ export async function getMinkStorefrontCodePreview(
     authority: {
       canPreview: true,
       canEditProposal: false,
-      canSaveBuilderDraft: false,
+      canSaveBuilderDraft: targetState === "current",
       canPublish: false,
     },
   };
@@ -296,7 +297,7 @@ function assertFreshTarget(
   }
 }
 
-function validateStoredProposal(content: MinkDraftContent) {
+export function validateStoredStorefrontProposal(content: MinkDraftContent) {
   const result = validateMinkStorefrontCodePatch({
     schemaVersion: MINK_STOREFRONT_PATCH_SCHEMA_VERSION,
     operation: "replace_custom_code",
@@ -324,7 +325,7 @@ function validateStoredProposal(content: MinkDraftContent) {
   return result;
 }
 
-function storedCodeConfig(
+export function readStoredStorefrontCodeConfig(
   content: MinkDraftContent,
   label: string,
 ): CustomCodeConfig {

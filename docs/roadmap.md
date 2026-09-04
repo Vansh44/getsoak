@@ -1963,6 +1963,16 @@ semantic sections before cross-article fusion. The next retrieval step is an
 operator-owned golden query set with measured recall/precision before changing
 the default similarity threshold or introducing any approximate vector index.
 
+Mink storefront coding Phase 7C is now implemented behind a separate default-off
+operator gate. A signed-in proposal owner with Website Builder Manage can review
+a complete immutable custom-code diff and create a five-minute approval tied to
+the exact tenant, admin, proposal version, page version and section digest. One
+transaction replaces only that existing section in `store_pages.sections`,
+records execution/conflict/expiry in the action audit, and makes retries
+idempotent. It never touches `published_sections`, page publication state,
+header/footer, repository code or deployment. Phase 7D publication,
+accessibility/browser validation and exact rollback remain next.
+
 ### Returns, exchanges, BORIS, credit notes
 
 Spec: `docs/returns-exchanges-plan.md`. The twelve `returns.*` settings,

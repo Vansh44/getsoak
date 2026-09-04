@@ -72,7 +72,7 @@ describe("Mink system prompt document", () => {
     );
     expect(template).toContain("preserve the duplicate-withheld result");
     expect(template).toContain(
-      "Phase 7B retains the read-only builder-context rules",
+      "Phases 7B–7C retain the read-only builder-context rules",
     );
     expect(template).toContain("use page_slug=home for the homepage");
     expect(template).toContain(
@@ -84,8 +84,12 @@ describe("Mink system prompt document", () => {
     expect(template).toContain(
       "opaque-origin iframe with a deny-by-default network policy",
     );
+    expect(template).toContain("Phase 7C exposes no model execution tool");
     expect(template).toContain(
-      "Those operations are not available in Phase 7B",
+      "only the signed-in human can request the fresh five-minute approval",
+    );
+    expect(template).toContain(
+      "Never claim that you clicked either button or saved the Builder draft",
     );
   });
 

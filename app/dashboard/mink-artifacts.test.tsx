@@ -71,6 +71,7 @@ describe("Mink storefront artifacts", () => {
         json: async () => ({
           preview: {
             id: draftId,
+            draftVersion: 0,
             title: "Storefront code for Home",
             destinationLabel: "Home · custom code",
             destinationPath: "/dashboard/builder?page=home&section=hero-code",
@@ -158,7 +159,10 @@ describe("Mink storefront artifacts", () => {
     expect(frame).toHaveAttribute("sandbox", "allow-scripts");
     expect(frame.getAttribute("srcdoc")).toContain("connect-src 'none'");
     expect(
-      screen.queryByRole("button", { name: /save|publish/i }),
+      screen.getByRole("button", { name: /review builder draft save/i }),
+    ).toBeDisabled();
+    expect(
+      screen.queryByRole("button", { name: /publish/i }),
     ).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /mobile/i }));

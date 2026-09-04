@@ -5,6 +5,7 @@ const holder = vi.hoisted(() => ({
   enabled: true,
   actor: vi.fn(),
   preview: vi.fn(),
+  latestAction: vi.fn(),
   rateAllowed: true,
 }));
 
@@ -19,6 +20,9 @@ vi.mock("@/lib/mink/actor-context", () => ({
 }));
 vi.mock("@/lib/mink/storefront-code-proposals", () => ({
   getMinkStorefrontCodePreview: holder.preview,
+}));
+vi.mock("@/lib/mink/storefront-code-actions", () => ({
+  getLatestMinkStorefrontCodeAction: holder.latestAction,
 }));
 vi.mock("@/lib/rate-limit", () => ({
   rateLimit: vi.fn(async () => ({ allowed: holder.rateAllowed })),
@@ -43,6 +47,7 @@ beforeEach(() => {
     permissions: { builder: ["view", "manage"] },
   });
   holder.preview.mockResolvedValue({ id: DRAFT_ID, targetState: "current" });
+  holder.latestAction.mockResolvedValue(null);
 });
 
 describe("GET /api/mink/drafts/[draftId]/storefront-code-preview", () => {
@@ -59,6 +64,10 @@ describe("GET /api/mink/drafts/[draftId]/storefront-code-preview", () => {
       expect.objectContaining({ storeId: "store-1", adminId: "admin-1" }),
       DRAFT_ID,
     );
+    expect(await response.json()).toEqual({
+      preview: { id: DRAFT_ID, targetState: "current" },
+      lastAction: null,
+    });
   });
 
   it("rejects malformed ids before authentication", async () => {

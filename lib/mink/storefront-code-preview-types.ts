@@ -2,6 +2,7 @@ import type { CustomCodeConfig } from "@/lib/sections/registry";
 
 export interface MinkStorefrontCodePreviewDto {
   id: string;
+  draftVersion: number;
   title: string;
   destinationLabel: string;
   destinationPath: string;
@@ -30,7 +31,7 @@ export interface MinkStorefrontCodePreviewDto {
   authority: {
     canPreview: true;
     canEditProposal: false;
-    canSaveBuilderDraft: false;
+    canSaveBuilderDraft: boolean;
     canPublish: false;
   };
 }

@@ -1,6 +1,8 @@
 "use client";
 
 import {
+  CheckCircle2,
+  Clock3,
   Code2,
   ExternalLink,
   LoaderCircle,
@@ -13,6 +15,11 @@ import { useEffect, useState, type ReactNode } from "react";
 import { CustomCodeFrame } from "@/app/(storefront)/components/sections/custom-code-frame";
 import { validateConfig, type CustomCodeConfig } from "@/lib/sections/registry";
 import type { MinkStorefrontCodePreviewDto } from "@/lib/mink/storefront-code-preview-types";
+import type {
+  MinkStorefrontCodeActionApproval,
+  MinkStorefrontCodeActionResult,
+  MinkStorefrontCodeActionValues,
+} from "@/lib/mink/storefront-code-action-types";
 import type { MinkArtifact } from "@/lib/mink/types";
 
 type Proposal = Extract<MinkArtifact, { type: "storefront_code_proposal" }>;
@@ -30,16 +37,25 @@ export function MinkStorefrontCodeProposalCard({
   } | null>(null);
   const [view, setView] = useState<"desktop" | "mobile">("desktop");
   const [tab, setTab] = useState<"preview" | SourceField>("preview");
+  const [approval, setApproval] =
+    useState<MinkStorefrontCodeActionApproval | null>(null);
+  const [actionResult, setActionResult] =
+    useState<MinkStorefrontCodeActionResult | null>(null);
+  const [actionBusy, setActionBusy] = useState<"preview" | "execute" | null>(
+    null,
+  );
+  const [actionError, setActionError] = useState<string | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
     void requestPreview(proposal.draftId, controller.signal)
-      .then((result) => {
+      .then((loaded) => {
         setResult({
           draftId: proposal.draftId,
-          preview: result,
+          preview: loaded.preview,
           error: null,
         });
+        setActionResult(loaded.lastAction);
       })
       .catch((requestError) => {
         if (controller.signal.aborted) return;
@@ -63,6 +79,104 @@ export function MinkStorefrontCodeProposalCard({
     ? proposal.changedFields.join(", ")
     : "none";
 
+  async function reviewDraftSave() {
+    if (!preview) return;
+    setActionBusy("preview");
+    setActionError(null);
+    try {
+      const response = await requestStorefrontAction(proposal.draftId, {
+        action: "preview",
+        expectedDraftVersion: preview.draftVersion,
+        idempotencyKey: crypto.randomUUID(),
+      });
+      setApproval(response.approval ?? null);
+      setActionResult(null);
+    } catch (requestError) {
+      setActionError(
+        requestError instanceof Error
+          ? requestError.message
+          : "The Builder draft save could not be reviewed.",
+      );
+    } finally {
+      setActionBusy(null);
+    }
+  }
+
+  async function approveDraftSave() {
+    if (!approval) return;
+    setActionBusy("execute");
+    setActionError(null);
+    try {
+      const response = await requestStorefrontAction(proposal.draftId, {
+        action: "execute",
+        approvalId: approval.id,
+      });
+      if (!response.result)
+        throw new Error("The save response was incomplete.");
+      setActionResult(response.result);
+      setApproval(null);
+    } catch (requestError) {
+      // A 4xx is a definite refusal, but a transport error or 5xx may arrive
+      // after the transaction committed. Reconcile once, then preserve the
+      // same approval ID so a retry stays idempotent.
+      if (
+        !(requestError instanceof StorefrontActionRequestError) ||
+        requestError.outcome !== "unknown"
+      ) {
+        setApproval(null);
+        setActionError(
+          requestError instanceof Error
+            ? requestError.message
+            : "The Builder draft save was not applied.",
+        );
+        void refreshPreview();
+        return;
+      }
+      const settled = await reconcileUnknownSave(approval.id);
+      if (settled) {
+        setActionResult(settled);
+        setApproval(null);
+        return;
+      }
+      setActionError(UNKNOWN_STOREFRONT_ACTION_OUTCOME);
+    } finally {
+      setActionBusy(null);
+    }
+  }
+
+  async function refreshPreview() {
+    const controller = new AbortController();
+    try {
+      const loaded = await requestPreview(proposal.draftId, controller.signal);
+      setResult({
+        draftId: proposal.draftId,
+        preview: loaded.preview,
+        error: null,
+      });
+      setActionResult(loaded.lastAction);
+    } catch {
+      // Keep the actionable server refusal already shown. A manual card reload
+      // will retry the private preview without replacing that verdict.
+    }
+  }
+
+  async function reconcileUnknownSave(approvalId: string) {
+    const controller = new AbortController();
+    try {
+      const loaded = await requestPreview(proposal.draftId, controller.signal);
+      setResult({
+        draftId: proposal.draftId,
+        preview: loaded.preview,
+        error: null,
+      });
+      return loaded.lastAction?.approval.id === approvalId
+        ? loaded.lastAction
+        : null;
+    } catch {
+      return null;
+    }
+  }
+
   return (
     <section className="overflow-hidden rounded-2xl border border-[#ddd6fe] bg-white shadow-[0_1px_3px_rgba(38,25,77,0.08)]">
       <header className="border-b border-[#ebe7f7] bg-[#fbfaff] px-3 py-2.5">
@@ -76,8 +190,8 @@ export function MinkStorefrontCodeProposalCard({
                 {proposal.title}
               </h3>
               <p className="mt-0.5 text-[9px] text-[#716d78]">
-                Private preview · {proposal.expectedCredits} AI credits · no
-                builder changes
+                Private proposal · {proposal.expectedCredits} AI credits · draft
+                save needs approval
               </p>
             </div>
           </div>
@@ -207,13 +321,97 @@ export function MinkStorefrontCodeProposalCard({
                 Patch SHA-256: {preview.patchDigest}
               </div>
             </details>
+
+            {actionResult ? (
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-[10px] leading-4 text-emerald-900">
+                <div className="flex items-start gap-2">
+                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
+                  <div>
+                    <p className="font-semibold">
+                      Saved to the private Website Builder draft
+                    </p>
+                    <p className="mt-1">
+                      The live storefront was not published or changed. Audit
+                      reference: {actionResult.auditId}.
+                    </p>
+                    <a
+                      href={actionResult.approval.resource.dashboardPath}
+                      className="mt-2 inline-flex items-center gap-1 font-semibold text-emerald-800 underline"
+                    >
+                      Open Builder to review{" "}
+                      <ExternalLink className="h-3 w-3" />
+                    </a>
+                  </div>
+                </div>
+              </div>
+            ) : approval ? (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-[10px] leading-4 text-amber-950">
+                <div className="flex items-start gap-2">
+                  <Clock3 className="mt-0.5 h-4 w-4 shrink-0" />
+                  <div className="min-w-0 flex-1">
+                    <p className="font-semibold">
+                      Approval expires{" "}
+                      {formatApprovalExpiry(approval.expiresAt)}
+                    </p>
+                    <p className="mt-1">
+                      This replaces only the exact custom-code section shown
+                      above. It does not publish the page.
+                    </p>
+                    <button
+                      type="button"
+                      disabled={actionBusy !== null}
+                      onClick={() => void approveDraftSave()}
+                      className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-[#5d3fe3] px-3 py-1.5 font-semibold text-white hover:bg-[#4e32ca] disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {actionBusy === "execute" ? (
+                        <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <ShieldCheck className="h-3.5 w-3.5" />
+                      )}
+                      Approve and save Builder draft
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[#ded8f4] bg-[#faf8ff] p-3">
+                <p className="max-w-lg text-[9px] leading-4 text-[#5f5969]">
+                  Create a short-lived approval from the latest exact page and
+                  section before saving this code to Website Builder.
+                </p>
+                <button
+                  type="button"
+                  disabled={
+                    actionBusy !== null ||
+                    preview.targetState !== "current" ||
+                    !preview.authority.canSaveBuilderDraft
+                  }
+                  onClick={() => void reviewDraftSave()}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-[#6d4dff] bg-white px-3 py-1.5 text-[9px] font-semibold text-[#5132d2] hover:bg-[#f5f1ff] disabled:cursor-not-allowed disabled:border-[#d7d2df] disabled:text-[#9a95a0]"
+                >
+                  {actionBusy === "preview" ? (
+                    <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <ShieldCheck className="h-3.5 w-3.5" />
+                  )}
+                  Review Builder draft save
+                </button>
+              </div>
+            )}
+
+            {actionError ? (
+              <div className="flex gap-2 rounded-xl border border-rose-200 bg-rose-50 p-3 text-[10px] leading-4 text-rose-800">
+                <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
+                {actionError}
+              </div>
+            ) : null}
           </>
         ) : null}
 
         <div className="rounded-xl border border-[#e5e1eb] bg-[#f8f7fa] px-3 py-2 text-[9px] leading-4 text-[#65616b]">
-          This proposal is immutable and preview-only. Phase 7B cannot edit or
-          save the Website Builder draft, publish the page, access StoreMink
-          source code, run shell commands or deploy.
+          This proposal is immutable. Phase 7C can save its exact code only to
+          the private Website Builder draft after approval; it cannot publish
+          the page, access StoreMink source code, run shell commands or deploy.
         </div>
       </div>
     </section>
@@ -293,7 +491,10 @@ function SourcePanel({ title, source }: { title: string; source: string }) {
 async function requestPreview(
   draftId: string,
   signal: AbortSignal,
-): Promise<MinkStorefrontCodePreviewDto> {
+): Promise<{
+  preview: MinkStorefrontCodePreviewDto;
+  lastAction: MinkStorefrontCodeActionResult | null;
+}> {
   const response = await fetch(
     `/api/mink/drafts/${encodeURIComponent(draftId)}/storefront-code-preview`,
     { signal, cache: "no-store", headers: { Accept: "application/json" } },
@@ -304,7 +505,68 @@ async function requestPreview(
       readError(body) ?? "This private preview could not be loaded.",
     );
   }
-  return readPreview(body, draftId);
+  return {
+    preview: readPreview(body, draftId),
+    lastAction:
+      isRecord(body) &&
+      body.lastAction !== null &&
+      body.lastAction !== undefined
+        ? readActionResult(body.lastAction, draftId)
+        : null,
+  };
+}
+
+async function requestStorefrontAction(
+  draftId: string,
+  mutation:
+    | {
+        action: "preview";
+        expectedDraftVersion: number;
+        idempotencyKey: string;
+      }
+    | { action: "execute"; approvalId: string },
+): Promise<{
+  approval?: MinkStorefrontCodeActionApproval;
+  result?: MinkStorefrontCodeActionResult;
+}> {
+  let response: Response;
+  try {
+    response = await fetch(
+      `/api/mink/drafts/${encodeURIComponent(draftId)}/storefront-code-action`,
+      {
+        method: "POST",
+        cache: "no-store",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify(mutation),
+      },
+    );
+  } catch {
+    throw new StorefrontActionRequestError(
+      "StoreMink couldn't reach Mink AI. Check your connection and try again.",
+      "unknown",
+    );
+  }
+  const body = (await response.json().catch(() => null)) as unknown;
+  if (!response.ok) {
+    throw new StorefrontActionRequestError(
+      response.status >= 500
+        ? "StoreMink couldn't confirm the Builder draft save."
+        : (readError(body) ??
+            "The storefront draft action could not be completed."),
+      response.status >= 500 ? "unknown" : "rejected",
+    );
+  }
+  if (!isRecord(body)) throw new Error("The save response was malformed.");
+  if (body.approval !== undefined) {
+    return { approval: readActionApproval(body.approval, draftId) };
+  }
+  if (body.result !== undefined) {
+    return { result: readActionResult(body.result, draftId) };
+  }
+  throw new Error("The save response was incomplete.");
 }
 
 function readPreview(
@@ -323,6 +585,7 @@ function readPreview(
   );
   if (
     preview.id !== expectedId ||
+    preview.draftVersion !== 0 ||
     !boundedText(preview.title, 120) ||
     !boundedText(preview.destinationLabel, 180) ||
     typeof preview.destinationPath !== "string" ||
@@ -360,7 +623,7 @@ function readPreview(
     !isRecord(preview.authority) ||
     preview.authority.canPreview !== true ||
     preview.authority.canEditProposal !== false ||
-    preview.authority.canSaveBuilderDraft !== false ||
+    typeof preview.authority.canSaveBuilderDraft !== "boolean" ||
     preview.authority.canPublish !== false ||
     "error" in before ||
     "error" in proposed
@@ -379,6 +642,144 @@ function readError(value: unknown): string | null {
     ? value.error.slice(0, 300)
     : null;
 }
+
+function readActionResult(
+  value: unknown,
+  draftId: string,
+): MinkStorefrontCodeActionResult {
+  if (
+    !isRecord(value) ||
+    typeof value.repeated !== "boolean" ||
+    typeof value.auditId !== "string" ||
+    !UUID_PATTERN.test(value.auditId)
+  ) {
+    throw new Error("The storefront action result failed validation.");
+  }
+  return {
+    approval: readActionApproval(value.approval, draftId),
+    auditId: value.auditId,
+    repeated: value.repeated,
+  };
+}
+
+function readActionApproval(
+  value: unknown,
+  draftId: string,
+): MinkStorefrontCodeActionApproval {
+  if (!isRecord(value) || !isRecord(value.resource)) {
+    throw new Error("The storefront approval failed validation.");
+  }
+  const before = readActionValues(value.before);
+  const after = readActionValues(value.after);
+  if (
+    typeof value.id !== "string" ||
+    !UUID_PATTERN.test(value.id) ||
+    value.sourceApprovalId !== null ||
+    value.toolName !== "apply_storefront_code" ||
+    value.operation !== "apply" ||
+    !["pending", "executed", "conflicted", "expired", "cancelled"].includes(
+      String(value.status),
+    ) ||
+    value.draftId !== draftId ||
+    value.draftVersion !== 0 ||
+    value.resource.type !== "storefront_section" ||
+    typeof value.resource.id !== "string" ||
+    !UUID_PATTERN.test(value.resource.id) ||
+    !boundedText(value.resource.label, 200) ||
+    typeof value.resource.dashboardPath !== "string" ||
+    value.resource.dashboardPath !==
+      `/dashboard/builder?page=${encodeURIComponent(before.page_slug)}&section=${encodeURIComponent(before.section_id)}` ||
+    before.page_slug !== after.page_slug ||
+    before.page_title !== after.page_title ||
+    before.section_id !== after.section_id ||
+    !boundedText(value.expiresAt, 40) ||
+    Number.isNaN(Date.parse(value.expiresAt)) ||
+    (value.executedAt !== null &&
+      (typeof value.executedAt !== "string" ||
+        Number.isNaN(Date.parse(value.executedAt)))) ||
+    (value.status === "executed") !== (value.executedAt !== null)
+  ) {
+    throw new Error("The storefront approval failed validation.");
+  }
+  return {
+    ...(value as unknown as MinkStorefrontCodeActionApproval),
+    before,
+    after,
+  };
+}
+
+function readActionValues(value: unknown): MinkStorefrontCodeActionValues {
+  if (!isRecord(value)) {
+    throw new Error("The storefront code diff failed validation.");
+  }
+  const config = validateConfig(
+    "custom_code",
+    {
+      html: value.html,
+      css: value.css,
+      js: value.js,
+      height_mode: value.height_mode,
+      fixed_height: Number(value.fixed_height),
+    },
+    "draft",
+  );
+  const normalized =
+    "error" in config ? null : (config.config as CustomCodeConfig);
+  if (
+    "error" in config ||
+    !boundedText(value.page_slug, 60) ||
+    !boundedText(value.page_title, 120) ||
+    !boundedText(value.section_id, 128) ||
+    typeof value.section_digest !== "string" ||
+    !/^[a-f0-9]{64}$/.test(value.section_digest) ||
+    Object.keys(value).some(
+      (key) =>
+        ![
+          "page_slug",
+          "page_title",
+          "section_id",
+          "section_digest",
+          "html",
+          "css",
+          "js",
+          "height_mode",
+          "fixed_height",
+        ].includes(key),
+    ) ||
+    !normalized ||
+    normalized.html !== value.html ||
+    normalized.css !== value.css ||
+    normalized.js !== value.js ||
+    normalized.height_mode !== value.height_mode ||
+    String(normalized.fixed_height) !== value.fixed_height
+  ) {
+    throw new Error("The storefront code diff failed validation.");
+  }
+  return value as unknown as MinkStorefrontCodeActionValues;
+}
+
+const UNKNOWN_STOREFRONT_ACTION_OUTCOME =
+  "StoreMink couldn't confirm whether the Builder draft was saved, so nothing was assumed. Approve this same request again—repeating it is safe and reports what actually happened.";
+
+class StorefrontActionRequestError extends Error {
+  constructor(
+    message: string,
+    readonly outcome: "rejected" | "unknown",
+  ) {
+    super(message);
+    this.name = "StorefrontActionRequestError";
+  }
+}
+
+function formatApprovalExpiry(value: string) {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
+
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
