@@ -388,6 +388,16 @@ export async function createStore(
         storeId: store.id,
         firstName: firstName.slice(0, 80),
         lastName: lastName ? lastName.slice(0, 80) : null,
+        // ★★ THE VERIFIED NUMBER MUST LAND HERE, NOT ONLY ON THE INVOICE
+        // PROFILE. `createStore` runs only after phone OTP (see the
+        // phoneConfirmed gate above), and `admins.phone` is where every server
+        // reader looks for a billing contact — `resolveBillingEmail`, and
+        // therefore `startEnrolment`, which needs BOTH an email and a phone to
+        // register a Razorpay mandate. Writing it to store_billing_settings
+        // alone left `admins.phone` NULL on every wizard-created store, so
+        // Subscribe answered "We couldn't prepare autopay" before a single
+        // gateway call. Same value setVerifiedPhone stores.
+        phone: user.phone ?? null,
         // The owner set their own password during signup — the admins column
         // defaults force_password_reset=true (that's for INVITED staff who get
         // a temporary password), so override it here or the owner is bounced to

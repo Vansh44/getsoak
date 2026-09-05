@@ -7396,6 +7396,38 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       `toast.info` carrying the server's own wording (money may have moved —
       §26's rule), and `autopay: false` is stated plainly whenever no mandate was
       captured, because assuming otherwise becomes a downgrade next cycle.
+    - **★★ AND THAT BILLING-CONTACT GATE REFUSED EVERY MERCHANT ON THE PLATFORM**
+      (found in prod 2026-09-06). Razorpay's recurring endpoint needs BOTH an
+      email and a phone, so `ensureRzpCustomer` refuses without them — correctly.
+      But its only phone source was `admins.phone`, and **`createStore` never
+      wrote that column**: the wizard OTP-verifies a number, then put it in
+      `store_billing_settings.contact_phone` and nowhere else. So every
+      wizard-created store answered Subscribe with "We couldn't prepare autopay"
+      forever, **before a single Razorpay call was made** — nothing in the logs
+      from the gateway, nothing to see in the Razorpay dashboard, and the message
+      pointed at a phone number the merchant had already given us. Measured on
+      production: 2 of 3 superadmins had `phone IS NULL`, both with a perfectly
+      good verified number one table away. The platform could not sell anything.
+      - **★ FIXED AT BOTH ENDS, and only one of them fixes the stores that
+        already exist.** `createStore` now writes `user.phone` onto the admin row
+        (it runs only after the `phoneConfirmed` gate, so it is exactly what
+        `setVerifiedPhone` would store), and `resolveBillingEmail` falls back to
+        `store_billing_settings.contact_phone`. The signup write is the correct
+        record; the fallback is what unblocks everyone created before it.
+      - **★ THE FALLBACK IS VALIDATED, THE OWNER'S IS NOT.** `admins.phone` came
+        from a verified Identity Platform identity; the invoice contact is free
+        text typed on Taxes & invoices and may be a landline or a placeholder, so
+        it passes through `formatIndianMobile` (§35's one normaliser). A mandate
+        whose pre-debit notice reaches nobody is worse than a refusal.
+      - **★ NO BACKFILL, deliberately.** Copying a business contact number into
+        `admins.phone` would contradict that column's contract — `setVerifiedPhone`
+        accepts only a number the auth identity has verified — so the existing
+        rows are served by the fallback and stay honest about what was verified.
+      - **★ THE REFUSAL NOW NAMES ITS CAUSE.** `ensureRzpCustomer` returns
+        `missing-contact` or `gateway` instead of a bare null, because "add your
+        billing email and mobile under Settings → Taxes & invoices" is a minute's
+        work and a gateway outage is not — telling a merchant to go and re-edit a
+        phone number that is already correct wastes their time and hides ours.
     - **★★ `OpenInvoices` REMAINS FIRST-CLASS.** Automatic collection handles
       only eligible active mandates below both ceilings; no mandate, yearly/AFA,
       a revoked mandate or an incident rollback still needs manual payment. It

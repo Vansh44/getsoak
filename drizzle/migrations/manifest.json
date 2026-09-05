@@ -3115,6 +3115,33 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260906_0076_subscription_autopay_contact_help",
+      "description": "Document the billing email and mobile a subscription needs before autopay can be prepared",
+      "file": "sql/20260906_0076_subscription_autopay_contact_help.sql",
+      "checksum": "b6d18c90ab10b08e36725d47f55838a6693e63604a1a79b964cf341b0e03605c",
+      "transaction": true,
+      "requires": ["20260904_0075_mink_offer_audit_resource_type"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "the plan guide states the autopay billing contact requirement",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and slug = 'manage-your-storemink-plan-and-subscription' and body like '%<h2>What a paid plan needs before you can pay</h2>%' and body like '%ten-digit Indian mobile%' and body like '%No payment is taken when that message appears%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "the plan guide already states the autopay billing contact requirement",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and slug = 'manage-your-storemink-plan-and-subscription' and body like '%<h2>What a paid plan needs before you can pay</h2>%' and body like '%ten-digit Indian mobile%' and body like '%No payment is taken when that message appears%'",
+            "equals": "1"
+          }
+        ]
+      }
     }
   ]
 }
