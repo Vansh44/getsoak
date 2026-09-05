@@ -67,6 +67,37 @@ tokens were renamed to `--sm-*` and `WHOLESIP_STORE_ID` to `FALLBACK_STORE_ID`.
 > ordinary Echos merchant requests, separate tester expectations, clarification
 > conversations and a distinct technical security appendix.
 
+### Mink Phase 8A — Requested business briefs (2026-09-05)
+
+`lib/mink/business-brief-types.ts` defines complete-local-day daily/weekly
+ranges and four deterministic evidence rules. `business-brief-data.ts` reads
+dashboard-recognized sales, current per-location tracked SKU health, scoped
+return-record counts and current failed-payment status of orders created in
+the historical window. Returns are scoped by original order location, not
+receiving location. No PII, conversion-rate inference or gateway-attempt metric
+is collected. Stock elsewhere cannot hide a shortage at Shop or Delhi.
+
+`start_business_brief` in the permission-filtered read registry queues the
+`business_brief` template through `workflows.ts`: snapshot → analyse → finalise.
+It requires Analytics, Products, Inventory and Orders View, not drafting.
+Captured active location IDs (maximum 50), timezone and threshold survive worker
+restarts; each step rechecks authority and cancels on narrowing rather than
+reusing broader checkpoint data. New locations cannot enter an existing run.
+Source failure retries/fails instead of becoming healthy zeroes. Four bounded
+signals distinguish attention, no threshold triggered and insufficient data;
+the worker makes no Gemini calls and uses the existing lease, cancellation,
+retry, owner-scoped API and private notification paths.
+
+`app/dashboard/mink-business-brief.tsx` renders the result inside the existing
+workflow card, including period comparison, separate location table and
+measurement limitations. Migration
+`drizzle/migrations/sql/20260905_0081_mink_phase_8a_business_briefs.sql` extends
+the existing template constraint, adds a store/time index for historical
+return-record aggregation and publishes Help guidance; no new route,
+table or scheduled job is introduced. Runtime prompt versions are read-beta-v8
+and draft-action-beta-v19; registries read-beta-v8 and draft-beta-v14. Phase 8B
+recurring watches and automatic actions are not part of requested briefs.
+
 ## 3. Multi-tenancy architecture (the core concept)
 
 Every request belongs to exactly one store, resolved from the **Host header**.

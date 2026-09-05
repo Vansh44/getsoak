@@ -3458,6 +3458,53 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260905_0081_mink_phase_8a_business_briefs",
+      "description": "Add private on-demand business briefs with scoped evidence and fixed attention rules",
+      "file": "sql/20260905_0081_mink_phase_8a_business_briefs.sql",
+      "transaction": true,
+      "requires": ["20260905_0080_mink_builder_chat_help"],
+      "verify": {
+        "tables": ["mink_workflow_runs", "help_articles", "order_returns"],
+        "queries": [
+          {
+            "name": "Business brief workflow template enabled",
+            "sql": "select count(*)::text from pg_constraint where conrelid = 'public.mink_workflow_runs'::regclass and conname = 'mink_workflow_runs_template_check' and pg_get_constraintdef(oid) like '%business_brief%'",
+            "equals": "1"
+          },
+          {
+            "name": "Business brief scope and signal guidance published",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%<h2>Get a daily or weekly business brief</h2>%' and body like '%not a gateway-attempt failure rate%' and body like '%Recurring watches are a later phase.%'",
+            "equals": "1"
+          },
+          {
+            "name": "Business brief historical return index installed",
+            "sql": "select count(*)::text from pg_indexes where schemaname = 'public' and tablename = 'order_returns' and indexname = 'mink_brief_returns_store_created_idx' and indexdef like '%(store_id, created_at)%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "tables": ["mink_workflow_runs", "help_articles", "order_returns"],
+        "queries": [
+          {
+            "name": "Business brief workflow template enabled",
+            "sql": "select count(*)::text from pg_constraint where conrelid = 'public.mink_workflow_runs'::regclass and conname = 'mink_workflow_runs_template_check' and pg_get_constraintdef(oid) like '%business_brief%'",
+            "equals": "1"
+          },
+          {
+            "name": "Business brief scope and signal guidance published",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%<h2>Get a daily or weekly business brief</h2>%' and body like '%not a gateway-attempt failure rate%' and body like '%Recurring watches are a later phase.%'",
+            "equals": "1"
+          },
+          {
+            "name": "Business brief historical return index installed",
+            "sql": "select count(*)::text from pg_indexes where schemaname = 'public' and tablename = 'order_returns' and indexname = 'mink_brief_returns_store_created_idx' and indexdef like '%(store_id, created_at)%'",
+            "equals": "1"
+          }
+        ]
+      }
     }
   ]
 }

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MinkActorContext } from "../types";
 
 const mocks = vi.hoisted(() => ({
+  enqueueBrief: vi.fn(),
   readCatalog: vi.fn(),
   readByLocation: vi.fn(),
   resolveLocation: vi.fn(),
@@ -24,6 +25,7 @@ vi.mock("./location-scope", () => ({
   resolveMinkLocation: mocks.resolveLocation,
 }));
 vi.mock("../workflows", () => ({
+  enqueueBusinessBrief: mocks.enqueueBrief,
   enqueueWeeklyTradingReport: mocks.enqueueWorkflow,
   enqueueRevenueDeclineInvestigation: mocks.enqueueRevenueWorkflow,
   enqueueProductLaunchPreparation: mocks.enqueueLaunchWorkflow,
@@ -172,6 +174,70 @@ beforeEach(() => {
   });
 });
 
+describe("business brief tool", () => {
+  it.each([undefined, "daily", "weekly"])(
+    "queues %s with trusted actor context and a progress card",
+    async (period) => {
+      mocks.enqueueBrief.mockResolvedValue({
+        id: "brief-1",
+        status: "queued",
+        currentStep: 0,
+        totalSteps: 3,
+      });
+      const result = await minkReadToolRegistry.execute(ACTOR, {
+        name: "start_business_brief",
+        args: { period, location_name: "Delhi" },
+      });
+      expect(mocks.enqueueBrief).toHaveBeenCalledWith(ACTOR, {
+        period: period ?? "daily",
+        locationName: "Delhi",
+      });
+      expect(result.artifact).toMatchObject({
+        type: "workflow",
+        template: "business_brief",
+        runId: "brief-1",
+      });
+    },
+  );
+  it.each([
+    { period: "hourly" },
+    { period: 7 },
+    { store_id: "other" },
+    { schedule: "every day" },
+  ])("rejects unsupported input %j", async (args) => {
+    const result = await minkReadToolRegistry.execute(ACTOR, {
+      name: "start_business_brief",
+      args,
+    });
+    expect(result.response).toHaveProperty("error");
+    expect(mocks.enqueueBrief).not.toHaveBeenCalled();
+  });
+  it.each(["analytics", "products", "inventory", "orders"] as const)(
+    "requires %s View at discovery and execution",
+    async (missing) => {
+      const permissions: MinkActorContext["permissions"] = {
+        analytics: ["view"],
+        products: ["view"],
+        inventory: ["view"],
+        orders: ["view"],
+      };
+      permissions[missing] = [];
+      const actor = { ...ACTOR, isSuperadmin: false, permissions };
+      expect(
+        minkReadToolRegistry.declarationsFor(actor).map((tool) => tool.name),
+      ).not.toContain("start_business_brief");
+      const result = await minkReadToolRegistry.execute(actor, {
+        name: "start_business_brief",
+        args: {},
+      });
+      expect(result.response).toMatchObject({
+        error: { code: "permission_denied" },
+      });
+      expect(mocks.enqueueBrief).not.toHaveBeenCalled();
+    },
+  );
+});
+
 describe("Mink read-tool declarations", () => {
   it("never lets the model provide a tenant or actor identifier", () => {
     const declarations = minkReadToolRegistry.declarationsFor(ACTOR);
@@ -186,6 +252,7 @@ describe("Mink read-tool declarations", () => {
       "search_products",
       "get_sales_summary",
       "list_low_stock",
+      "start_business_brief",
       "start_weekly_trading_report",
       "start_revenue_decline_investigation",
       "start_product_launch_preparation",
