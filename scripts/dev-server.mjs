@@ -153,7 +153,7 @@ if (heapMb > 0) {
     `[dev] ${memoryGb.toFixed(0)} GB RAM detected; capping V8's old space at ${heapMb} MB.`,
   );
   console.log(
-    "[dev] Note: this bounds V8 only — Turbopack's native memory is outside it, so total",
+    "[dev] Note: this bounds V8 only — native memory and buffers are outside it, so total",
   );
   console.log(
     "[dev] RSS still grows through a session. Restart the server when it feels sluggish.",
@@ -168,7 +168,11 @@ const bundlerArgs = nextArgs.some((arg) =>
   ["--webpack", "--turbopack", "--turbo"].includes(arg),
 )
   ? []
-  : ["--turbopack"];
+  : [memoryGb <= 12 ? "--webpack" : "--turbopack"];
+
+console.log(
+  `[dev] Bundler: ${[...bundlerArgs, ...nextArgs].includes("--webpack") ? "Webpack" : "Turbopack"}; preserving compilation caches.`,
+);
 
 const child = spawn(
   process.execPath,
