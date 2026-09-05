@@ -56,6 +56,8 @@ is large enough to need its own decisions doc BEFORE any of it is built.
 | —      | Mink location-aware SKU catalogue health + structured answer UI   | M    | ✅ done |
 | —      | Mink ambiguous-stock clarification + per-location comparison      | M    | ✅ done |
 | —      | Mink durable workflows 6A–6E, including delayed pickup review     | L    | ✅ done |
+| —      | Mink read-only Website Builder context + sandbox contract (7A)    | M    | ✅ done |
+| —      | Mink private storefront code proposal + isolated preview (7B)     | M    | ✅ done |
 | —      | Locations fulfilment navigation and aligned routing workspace     | S    | ✅ done |
 | **P1** | **Release verification and high-risk action hardening**           | XL   | ◐ part  |
 | **0**  | **Platform → merchant billing rebuild**                           | XL   | ◐ part  |
@@ -1960,6 +1962,20 @@ provider-sized batches, and retrieval limits each article to its best three
 semantic sections before cross-article fusion. The next retrieval step is an
 operator-owned golden query set with measured recall/precision before changing
 the default similarity threshold or introducing any approximate vector index.
+
+Mink storefront coding Phase 7D is now implemented behind a second independent,
+default-off operator gate. After the signed-in proposal owner completes the
+Phase 7C draft save, the card runs static checks plus opaque-origin, no-network
+browser checks at exact 1,280 px desktop and 390 px mobile widths. A new
+five-minute approval binds that evidence, the completed save, complete private
+draft/current-live snapshots and the exact page version. One optimistic,
+idempotent transaction copies only the checked snapshot to
+`published_sections`, updates publication state/time and records an append-only
+outcome; no model tool can click or execute it. A separate five-minute rollback
+approval restores the exact previous published snapshot only while the live
+page is unchanged and never rewinds the private Builder draft. Phase 7 exit
+validation is next; media generation and placement require their own future
+provenance, moderation, storage and approval boundary.
 
 ### Returns, exchanges, BORIS, credit notes
 

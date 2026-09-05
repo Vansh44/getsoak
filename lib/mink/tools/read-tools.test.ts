@@ -10,6 +10,11 @@ const mocks = vi.hoisted(() => ({
   enqueueLaunchWorkflow: vi.fn(),
   enqueueSlowInventoryWorkflow: vi.fn(),
   enqueueDelayedPickupWorkflow: vi.fn(),
+  readStorefrontPages: vi.fn(),
+  readStorefrontPage: vi.fn(),
+  readStorefrontSection: vi.fn(),
+  readStorefrontDesign: vi.fn(),
+  proposeStorefrontCode: vi.fn(),
 }));
 vi.mock("../catalog-health-read", () => ({
   readMinkCatalogHealth: mocks.readCatalog,
@@ -24,6 +29,15 @@ vi.mock("../workflows", () => ({
   enqueueProductLaunchPreparation: mocks.enqueueLaunchWorkflow,
   enqueueSlowInventoryPromotion: mocks.enqueueSlowInventoryWorkflow,
   enqueueDelayedPickupReview: mocks.enqueueDelayedPickupWorkflow,
+}));
+vi.mock("../storefront-context-read", () => ({
+  readMinkStorefrontPages: mocks.readStorefrontPages,
+  readMinkStorefrontPageContext: mocks.readStorefrontPage,
+  readMinkStorefrontSectionContext: mocks.readStorefrontSection,
+  readMinkStorefrontDesignContext: mocks.readStorefrontDesign,
+}));
+vi.mock("../storefront-code-proposals", () => ({
+  createMinkStorefrontCodeProposal: mocks.proposeStorefrontCode,
 }));
 
 import { minkReadToolRegistry } from "./read-tools";
@@ -102,6 +116,60 @@ beforeEach(() => {
     currentStep: 0,
     totalSteps: 3,
   });
+  mocks.readStorefrontPages.mockResolvedValue({
+    pages: [
+      {
+        pageSlug: "home",
+        title: "Home",
+        status: "published",
+        draftSectionCount: 3,
+        hasUnpublishedChanges: true,
+        requiresRepair: false,
+        dashboardPath: "/dashboard/builder?page=home",
+      },
+    ],
+    dataAsOf: "2026-09-04T10:00:00.000Z",
+    dashboardPath: "/dashboard/builder",
+  });
+  mocks.readStorefrontPage.mockResolvedValue({
+    page: { pageSlug: "home", title: "Home", hasUnpublishedChanges: true },
+    sections: [
+      {
+        id: "section-1",
+        position: 1,
+        type: "hero",
+        enabled: true,
+        summary: "Hero · Welcome",
+      },
+    ],
+    dashboardPath: "/dashboard/builder?page=home",
+  });
+  mocks.readStorefrontSection.mockResolvedValue({
+    pageSlug: "home",
+    section: {
+      id: "section-1",
+      position: 1,
+      type: "hero",
+      enabled: true,
+      summary: "Hero · Welcome",
+    },
+    dashboardPath: "/dashboard/builder?page=home&section=section-1",
+  });
+  mocks.readStorefrontDesign.mockResolvedValue({
+    brand: { name: "Echos", primaryColor: "#6d4aff" },
+    theme: { id: "studio", name: "Studio", version: "0.1.0" },
+    chrome: { chromeVersion: "2026-09-04T10:00:00Z" },
+    capabilities: { customCodeEnabled: true },
+    dashboardPath: "/dashboard/builder",
+  });
+  mocks.proposeStorefrontCode.mockResolvedValue({
+    type: "storefront_code_proposal",
+    draftId: "66666666-6666-4666-8666-666666666666",
+    title: "Storefront code for Home",
+    destinationLabel: "Home · custom code",
+    destinationPath: "/dashboard/builder?page=home&section=section-1",
+    status: "private_preview",
+  });
 });
 
 describe("Mink read-tool declarations", () => {
@@ -110,6 +178,10 @@ describe("Mink read-tool declarations", () => {
 
     expect(declarations.map((tool) => tool.name)).toEqual([
       "get_store_profile",
+      "list_storefront_pages",
+      "get_storefront_page_context",
+      "get_storefront_section_context",
+      "get_storefront_design_context",
       "get_catalog_summary",
       "search_products",
       "get_sales_summary",
@@ -161,6 +233,12 @@ describe("Mink read-tool declarations", () => {
     expect(declared({ dashboard: ["view"] })).toEqual([
       "get_store_profile",
       "search_help_centre",
+    ]);
+    expect(declared({ builder: ["view"] })).toEqual([
+      "list_storefront_pages",
+      "get_storefront_page_context",
+      "get_storefront_section_context",
+      "get_storefront_design_context",
     ]);
     expect(declared({ dashboard: ["view"], products: ["view"] })).toEqual([
       "get_store_profile",
@@ -245,6 +323,55 @@ describe("Mink read-tool declarations", () => {
         })
         .map((tool) => tool.name),
     ).not.toContain("start_slow_inventory_promotion");
+  });
+
+  it("forwards only exact bounded builder selectors and returns storefront artifacts", async () => {
+    const page = await minkReadToolRegistry.execute(ACTOR, {
+      id: "call-page",
+      name: "get_storefront_page_context",
+      args: { page_slug: "home" },
+    });
+    expect(mocks.readStorefrontPage).toHaveBeenCalledWith(ACTOR, {
+      pageSlug: "home",
+    });
+    expect(page.artifact).toMatchObject({
+      type: "records",
+      recordType: "storefront",
+      records: [{ id: "section-1" }],
+    });
+
+    const section = await minkReadToolRegistry.execute(ACTOR, {
+      id: "call-section",
+      name: "get_storefront_section_context",
+      args: {
+        page_slug: "home",
+        section_id: "section-1",
+        code_field: "css",
+        code_offset: 8_000,
+      },
+    });
+    expect(mocks.readStorefrontSection).toHaveBeenCalledWith(ACTOR, {
+      pageSlug: "home",
+      sectionId: "section-1",
+      codeField: "css",
+      codeOffset: 8_000,
+    });
+    expect(section.artifact).toMatchObject({
+      recordType: "storefront",
+      records: [{ id: "section-1" }],
+    });
+
+    const declaration = minkReadToolRegistry
+      .declarationsFor(ACTOR)
+      .find((tool) => tool.name === "get_storefront_section_context");
+    expect(declaration?.parametersJsonSchema).toMatchObject({
+      required: ["page_slug", "section_id"],
+      additionalProperties: false,
+      properties: {
+        code_field: { enum: ["html", "css", "js"] },
+        code_offset: { minimum: 0, maximum: 65_536 },
+      },
+    });
   });
 
   it("queues bounded Phase 6B and 6C workflows through permission-gated tools", async () => {
@@ -680,6 +807,64 @@ describe("Mink read-tool declarations", () => {
     expect(bulkPriceItems).not.toHaveProperty("variant_id");
     expect(bulkPriceItems).toHaveProperty("price_snapshot");
     expect(bulkPriceItems).toHaveProperty("special_price_mode");
+  });
+
+  it("exposes and executes Phase 7B code proposals only with drafting and Builder Manage", async () => {
+    const manageActor: MinkActorContext = {
+      ...ACTOR,
+      isSuperadmin: false,
+      draftingEnabled: true,
+      permissions: { builder: ["view", "manage"] },
+    };
+    const viewActor: MinkActorContext = {
+      ...manageActor,
+      permissions: { builder: ["view"] },
+    };
+    expect(
+      minkReadToolRegistry
+        .declarationsFor(manageActor)
+        .map((tool) => tool.name),
+    ).toContain("propose_storefront_custom_code");
+    expect(
+      minkReadToolRegistry.declarationsFor(viewActor).map((tool) => tool.name),
+    ).not.toContain("propose_storefront_custom_code");
+    expect(
+      minkReadToolRegistry
+        .declarationsFor({ ...manageActor, draftingEnabled: false })
+        .map((tool) => tool.name),
+    ).not.toContain("propose_storefront_custom_code");
+
+    const result = await minkReadToolRegistry.execute(manageActor, {
+      id: "call-code",
+      name: "propose_storefront_custom_code",
+      args: {
+        page_slug: "home",
+        section_id: "section-1",
+        expected_page_version: "2026-09-04T10:20:30.123456+00:00",
+        expected_section_digest: "a".repeat(64),
+        html: "<section>Preview</section>",
+        css: "section { padding: 2rem; }",
+        js: "",
+        height_mode: "auto",
+        fixed_height: 480,
+        explanation: "A responsive private preview.",
+      },
+    });
+    expect(mocks.proposeStorefrontCode).toHaveBeenCalledWith({
+      actor: manageActor,
+      patch: expect.objectContaining({
+        operation: "replace_custom_code",
+        target: expect.objectContaining({
+          pageSlug: "home",
+          sectionId: "section-1",
+        }),
+      }),
+      explanation: "A responsive private preview.",
+    });
+    expect(result.artifact).toMatchObject({
+      type: "storefront_code_proposal",
+      status: "private_preview",
+    });
   });
 
   it("rejects direct calls to every hidden business tool before data access", async () => {

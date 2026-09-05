@@ -4833,7 +4833,7 @@ export const minkDrafts = pgTable(
     }).onDelete("cascade"),
     check(
       "mink_drafts_kind_check",
-      sql`kind = ANY (ARRAY['product_description'::text, 'product_seo'::text, 'blog'::text, 'coupon_email'::text, 'customer_message'::text, 'product_create'::text, 'coupon_create'::text, 'coupon_update'::text, 'customer_group_create'::text, 'customer_group_update'::text, 'inventory_adjustment'::text, 'bulk_inventory_adjustment'::text, 'order_status_transition'::text, 'bulk_price_update'::text])`,
+      sql`kind = ANY (ARRAY['product_description'::text, 'product_seo'::text, 'blog'::text, 'coupon_email'::text, 'customer_message'::text, 'product_create'::text, 'coupon_create'::text, 'coupon_update'::text, 'customer_group_create'::text, 'customer_group_update'::text, 'inventory_adjustment'::text, 'bulk_inventory_adjustment'::text, 'order_status_transition'::text, 'bulk_price_update'::text, 'offer_create'::text, 'offer_update'::text, 'offer_activate'::text, 'storefront_custom_code'::text])`,
     ),
     check(
       "mink_drafts_status_check",
@@ -4858,6 +4858,10 @@ export const minkDrafts = pgTable(
     check(
       "mink_drafts_bulk_price_target_check",
       sql`kind <> 'bulk_price_update' OR (destination_type = 'price_bulk' AND destination_id IS NULL AND location_id IS NULL AND variant_id IS NULL AND jsonb_typeof(content_json -> 'lines_json') = 'string')`,
+    ),
+    check(
+      "mink_drafts_storefront_code_target_check",
+      sql`kind <> 'storefront_custom_code' OR (destination_type = 'storefront_section' AND destination_id IS NULL AND location_id IS NULL AND variant_id IS NULL AND jsonb_typeof(content_json -> 'page_slug') = 'string' AND jsonb_typeof(content_json -> 'section_id') = 'string' AND jsonb_typeof(content_json -> 'expected_page_version') = 'string' AND jsonb_typeof(content_json -> 'expected_section_digest') = 'string' AND jsonb_typeof(content_json -> 'patch_digest') = 'string' AND jsonb_typeof(content_json -> 'html') = 'string' AND jsonb_typeof(content_json -> 'css') = 'string' AND jsonb_typeof(content_json -> 'js') = 'string' AND jsonb_typeof(content_json -> 'height_mode') = 'string' AND jsonb_typeof(content_json -> 'fixed_height') = 'string' AND jsonb_typeof(content_json -> 'explanation') = 'string')`,
     ),
     check(
       "mink_drafts_title_check",
@@ -4997,7 +5001,7 @@ export const minkActionToolAccess = pgTable(
     }).onDelete("cascade"),
     check(
       "mink_action_tool_access_name_check",
-      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text, 'create_product'::text, 'create_coupon'::text, 'update_coupon'::text, 'create_customer_group'::text, 'update_customer_group'::text, 'adjust_inventory'::text, 'bulk_adjust_inventory'::text, 'transition_order_status'::text, 'publish_blog'::text, 'send_campaign'::text, 'bulk_update_prices'::text])`,
+      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text, 'create_product'::text, 'create_coupon'::text, 'update_coupon'::text, 'create_customer_group'::text, 'update_customer_group'::text, 'adjust_inventory'::text, 'bulk_adjust_inventory'::text, 'transition_order_status'::text, 'publish_blog'::text, 'send_campaign'::text, 'bulk_update_prices'::text, 'create_offer'::text, 'update_offer'::text, 'activate_offer'::text, 'apply_storefront_code'::text, 'publish_storefront_code'::text])`,
     ),
     check(
       "mink_action_tool_access_enablement_check",
@@ -5310,6 +5314,12 @@ export const minkActionApprovals = pgTable(
     index("mink_action_approvals_bulk_price_idx")
       .on(table.storeId, table.adminId, table.status, table.createdAt.desc())
       .where(sql`${table.toolName} = 'bulk_update_prices'`),
+    index("mink_action_approvals_storefront_code_idx")
+      .on(table.storeId, table.resourceId, table.status, table.createdAt.desc())
+      .where(sql`${table.toolName} = 'apply_storefront_code'`),
+    index("mink_action_approvals_storefront_publish_idx")
+      .on(table.storeId, table.resourceId, table.status, table.createdAt.desc())
+      .where(sql`${table.toolName} = 'publish_storefront_code'`),
     foreignKey({
       columns: [table.storeId],
       foreignColumns: [stores.id],
@@ -5332,11 +5342,11 @@ export const minkActionApprovals = pgTable(
     }).onDelete("cascade"),
     check(
       "mink_action_approvals_tool_check",
-      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text, 'create_product'::text, 'create_coupon'::text, 'update_coupon'::text, 'create_customer_group'::text, 'update_customer_group'::text, 'adjust_inventory'::text, 'bulk_adjust_inventory'::text, 'transition_order_status'::text, 'publish_blog'::text, 'send_campaign'::text, 'bulk_update_prices'::text])`,
+      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text, 'create_product'::text, 'create_coupon'::text, 'update_coupon'::text, 'create_customer_group'::text, 'update_customer_group'::text, 'adjust_inventory'::text, 'bulk_adjust_inventory'::text, 'transition_order_status'::text, 'publish_blog'::text, 'send_campaign'::text, 'bulk_update_prices'::text, 'create_offer'::text, 'update_offer'::text, 'activate_offer'::text, 'apply_storefront_code'::text, 'publish_storefront_code'::text])`,
     ),
     check(
       "mink_action_approvals_resource_type_check",
-      sql`resource_type = ANY (ARRAY['product'::text, 'coupon'::text, 'customer_group'::text, 'inventory'::text, 'inventory_bulk'::text, 'order'::text, 'blog'::text, 'campaign'::text, 'price_bulk'::text])`,
+      sql`resource_type = ANY (ARRAY['product'::text, 'coupon'::text, 'customer_group'::text, 'inventory'::text, 'inventory_bulk'::text, 'order'::text, 'blog'::text, 'campaign'::text, 'price_bulk'::text, 'offer'::text, 'storefront_section'::text, 'storefront_page'::text])`,
     ),
     check(
       "mink_action_approvals_operation_check",
@@ -5346,7 +5356,10 @@ export const minkActionApprovals = pgTable(
       "mink_action_approvals_status_check",
       sql`status = ANY (ARRAY['pending'::text, 'executed'::text, 'conflicted'::text, 'expired'::text, 'cancelled'::text])`,
     ),
-    check("mink_action_approvals_draft_version_check", sql`draft_version > 0`),
+    check(
+      "mink_action_approvals_draft_version_check",
+      sql`draft_version > 0 OR (tool_name IN ('apply_storefront_code', 'publish_storefront_code') AND draft_version = 0)`,
+    ),
     check(
       "mink_action_approvals_payload_check",
       sql`jsonb_typeof(before_json) = 'object' AND jsonb_typeof(after_json) = 'object'`,
@@ -5382,6 +5395,22 @@ export const minkActionApprovals = pgTable(
     check(
       "mink_action_approvals_bulk_price_target_check",
       sql`tool_name <> 'bulk_update_prices' OR (resource_type = 'price_bulk' AND resource_id IS NULL AND product_id IS NULL AND location_id IS NULL AND variant_id IS NULL AND result_id IS NULL AND operation = 'apply' AND source_approval_id IS NULL AND jsonb_typeof(after_json -> 'lines') = 'array' AND jsonb_array_length(after_json -> 'lines') BETWEEN 1 AND 20)`,
+    ),
+    check(
+      "mink_action_approvals_offer_budget_check",
+      sql`tool_name NOT IN ('create_offer', 'update_offer', 'activate_offer') OR operation = 'rollback' OR (coalesce(after_json ->> 'budget', '') ~ '^[0-9]+(\.[0-9]{1,2})?$' AND (after_json ->> 'budget')::numeric > 0)`,
+    ),
+    check(
+      "mink_action_approvals_offer_target_check",
+      sql`tool_name NOT IN ('create_offer', 'update_offer', 'activate_offer') OR (resource_type = 'offer' AND product_id IS NULL AND location_id IS NULL AND variant_id IS NULL)`,
+    ),
+    check(
+      "mink_action_approvals_storefront_code_target_check",
+      sql`tool_name <> 'apply_storefront_code' OR (resource_type = 'storefront_section' AND resource_id IS NOT NULL AND resource_version IS NOT NULL AND product_id IS NULL AND location_id IS NULL AND variant_id IS NULL AND operation = 'apply' AND source_approval_id IS NULL AND draft_version = 0 AND jsonb_typeof(before_json -> 'page_slug') = 'string' AND jsonb_typeof(before_json -> 'section_id') = 'string' AND jsonb_typeof(before_json -> 'section_digest') = 'string' AND jsonb_typeof(after_json -> 'section_digest') = 'string' AND ((status = 'executed' AND result_id = resource_id AND result_version IS NOT NULL) OR (status <> 'executed' AND result_id IS NULL AND result_version IS NULL)))`,
+    ),
+    check(
+      "mink_action_approvals_storefront_publish_target_check",
+      sql`tool_name <> 'publish_storefront_code' OR (resource_type = 'storefront_page' AND resource_id IS NOT NULL AND resource_version IS NOT NULL AND product_id IS NULL AND location_id IS NULL AND variant_id IS NULL AND source_approval_id IS NOT NULL AND draft_version = 0 AND jsonb_typeof(before_json -> 'sections') = 'array' AND jsonb_typeof(after_json -> 'sections') = 'array' AND jsonb_typeof(before_json -> 'sections_digest') = 'string' AND jsonb_typeof(after_json -> 'sections_digest') = 'string' AND jsonb_typeof(before_json -> 'target_section_digest') = 'string' AND jsonb_typeof(after_json -> 'target_section_digest') = 'string' AND (operation = 'rollback' OR jsonb_typeof(after_json -> 'browser_validation') = 'object') AND ((status = 'executed' AND result_id = resource_id AND result_version IS NOT NULL) OR (status <> 'executed' AND result_id IS NULL AND result_version IS NULL)))`,
     ),
   ],
 );
@@ -5461,6 +5490,12 @@ export const minkActionAudit = pgTable(
     index("mink_action_audit_bulk_price_idx")
       .on(table.storeId, table.createdAt.desc())
       .where(sql`${table.toolName} = 'bulk_update_prices'`),
+    index("mink_action_audit_storefront_code_idx")
+      .on(table.storeId, table.resourceId, table.createdAt.desc())
+      .where(sql`${table.toolName} = 'apply_storefront_code'`),
+    index("mink_action_audit_storefront_publish_idx")
+      .on(table.storeId, table.resourceId, table.createdAt.desc())
+      .where(sql`${table.toolName} = 'publish_storefront_code'`),
     foreignKey({
       columns: [table.approvalId, table.storeId],
       foreignColumns: [minkActionApprovals.id, minkActionApprovals.storeId],
@@ -5468,11 +5503,11 @@ export const minkActionAudit = pgTable(
     }).onDelete("restrict"),
     check(
       "mink_action_audit_tool_check",
-      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text, 'create_product'::text, 'create_coupon'::text, 'update_coupon'::text, 'create_customer_group'::text, 'update_customer_group'::text, 'adjust_inventory'::text, 'bulk_adjust_inventory'::text, 'transition_order_status'::text, 'publish_blog'::text, 'send_campaign'::text, 'bulk_update_prices'::text])`,
+      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text, 'create_product'::text, 'create_coupon'::text, 'update_coupon'::text, 'create_customer_group'::text, 'update_customer_group'::text, 'adjust_inventory'::text, 'bulk_adjust_inventory'::text, 'transition_order_status'::text, 'publish_blog'::text, 'send_campaign'::text, 'bulk_update_prices'::text, 'create_offer'::text, 'update_offer'::text, 'activate_offer'::text, 'apply_storefront_code'::text, 'publish_storefront_code'::text])`,
     ),
     check(
       "mink_action_audit_resource_type_check",
-      sql`resource_type = ANY (ARRAY['product'::text, 'coupon'::text, 'customer_group'::text, 'inventory'::text, 'inventory_bulk'::text, 'order'::text, 'blog'::text, 'campaign'::text, 'price_bulk'::text])`,
+      sql`resource_type = ANY (ARRAY['product'::text, 'coupon'::text, 'customer_group'::text, 'inventory'::text, 'inventory_bulk'::text, 'order'::text, 'blog'::text, 'campaign'::text, 'price_bulk'::text, 'offer'::text, 'storefront_section'::text, 'storefront_page'::text])`,
     ),
     check(
       "mink_action_audit_operation_check",
@@ -5510,6 +5545,14 @@ export const minkActionAudit = pgTable(
     check(
       "mink_action_audit_bulk_price_target_check",
       sql`tool_name <> 'bulk_update_prices' OR (resource_type = 'price_bulk' AND resource_id IS NULL AND product_id IS NULL AND location_id IS NULL AND variant_id IS NULL AND result_id IS NULL AND operation = 'apply' AND jsonb_typeof(after_json -> 'lines') = 'array' AND jsonb_array_length(after_json -> 'lines') BETWEEN 1 AND 20)`,
+    ),
+    check(
+      "mink_action_audit_storefront_code_target_check",
+      sql`tool_name <> 'apply_storefront_code' OR (resource_type = 'storefront_section' AND resource_id IS NOT NULL AND resource_version_before IS NOT NULL AND product_id IS NULL AND location_id IS NULL AND variant_id IS NULL AND operation = 'apply' AND jsonb_typeof(before_json -> 'page_slug') = 'string' AND jsonb_typeof(before_json -> 'section_id') = 'string' AND jsonb_typeof(before_json -> 'section_digest') = 'string' AND jsonb_typeof(after_json -> 'section_digest') = 'string' AND ((outcome = 'executed' AND result_id = resource_id AND resource_version_after IS NOT NULL) OR (outcome <> 'executed' AND result_id IS NULL)))`,
+    ),
+    check(
+      "mink_action_audit_storefront_publish_target_check",
+      sql`tool_name <> 'publish_storefront_code' OR (resource_type = 'storefront_page' AND resource_id IS NOT NULL AND resource_version_before IS NOT NULL AND product_id IS NULL AND location_id IS NULL AND variant_id IS NULL AND jsonb_typeof(before_json -> 'sections') = 'array' AND jsonb_typeof(after_json -> 'sections') = 'array' AND jsonb_typeof(before_json -> 'sections_digest') = 'string' AND jsonb_typeof(after_json -> 'sections_digest') = 'string' AND ((outcome = 'executed' AND result_id = resource_id AND resource_version_after IS NOT NULL) OR (outcome <> 'executed' AND result_id IS NULL)))`,
     ),
   ],
 );
