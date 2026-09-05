@@ -196,6 +196,8 @@ wholesip/
 ├── proxy.ts                   # Edge middleware: host routing + auth gates (see §3)
 ├── next.config.ts             # output:"standalone" (Cloud Run), image formats, runtime
 │                              # Markdown prompt tracing, optimizePackageImports
+│                              # Phase-aware function export; next-redirects.test.ts
+│                              # resolves it for dev, production build and server tests.
 ├── Dockerfile / .dockerignore / cloudbuild.yaml  # ★ Cloud Run container (GCP Phase 4 —
 │                              # see docs/gcp-migration-phase4-cloud-run.md). Multi-stage
 │                              # standalone build; NEXT_PUBLIC_* are build args, secrets
