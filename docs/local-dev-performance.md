@@ -265,7 +265,100 @@ Measured, so it does not get re-litigated:
 
 ---
 
-## 4. If you have ten minutes and dev feels slow
+## 4. ★★ THE TURBOPACK DEV FILESYSTEM CACHE — a 2.5-minute stall, on by default
+
+Measured **2026-09-06**, same M2 / 8 GB. This is a **third** independent cause,
+separate from the network floor (§2) and the memory pressure (§3), and it is the
+one that produces the alarming outliers people actually report.
+
+### What was observed
+
+`experimental.turbopackFileSystemCacheForDev` became **enabled by default in
+Next 16.1** (this repo is on 16.2.12 — see
+`node_modules/next/dist/docs/01-app/03-api-reference/05-config/01-next-config-js/turbopackFileSystemCache.md`).
+It persists compiler artifacts under `.next/dev/cache`, and periodically writes
+and **compacts** that database. From one ordinary session:
+
+```
+✓ Finished writing to filesystem cache in 2.5min
+✓ Finished writing to filesystem cache in 13.2s
+✓ Finished filesystem cache database compaction in 12.8s
+⚠ Slow filesystem detected. The benchmark took 794ms.
+```
+
+`.next/dev/cache` had reached **2.88 GB** (of a 3.15 GB `.next/dev`).
+
+### ★★ Read the request split, not the total
+
+While the first of those writes ran:
+
+```
+POST /api/auth/session 200 in 102s  (next.js: 101s, application-code: 1564ms)
+GET  /dashboard/plans  200 in 17.8s (next.js: 15.9s, application-code: 1912ms)
+```
+
+**1.5 s was the route's own work; 101 s was the framework.** That split is the
+whole diagnosis. A 102-second request instinctively reads as a hung query — and
+this project has a genuine 46 ms-per-round-trip database story (§2) that makes
+that lead very tempting — but the application code was never the problem. The
+server was blocked behind its own cache write.
+
+**Always read `application-code:` before blaming a slow request on the database.**
+
+### Why it hurts _here_ and not everywhere
+
+The cost is disk IO. On an 8 GB machine the SSD is **already** saturated by
+macOS paging — 9.4 GB of swap in that same session (§3) — so the cache write and
+the swap file compete for one device, and the cache amplifies the very thrash
+that makes the whole machine feel bad. Next's own "Slow filesystem detected"
+warning is that contention being observed from the inside; the disk is not slow,
+it is busy.
+
+On a machine with RAM to spare there is no swap to compete with and the cache is
+a straight win. So this is a **machine-class** decision, not a blanket disable.
+
+### What the runner does now
+
+`scripts/dev-server.mjs` turns the cache **off on ≤12 GB machines** — the same
+boundary as the V8 heap cap, deliberately one notion of "small machine" rather
+than two thresholds free to drift apart — and reclaims any `.next/dev/cache`
+left behind. It passes the decision to `next.config.ts` as `NEXT_DEV_FS_CACHE`,
+which is the only place the flag can actually be set.
+
+```bash
+npm run dev                    # machine-class default
+npm run dev -- --fs-cache      # force ON  (or DEV_FS_CACHE=1)
+npm run dev -- --no-fs-cache   # force OFF (or DEV_FS_CACHE=0)
+```
+
+Running `npx next dev` directly sets no variable and keeps Next's own default,
+so the runner **adds** behaviour rather than quietly redefining the framework's.
+
+### The trade, and the measurement
+
+Turning it off costs cold compiles after a **server restart**. It does not touch
+edit-refresh: Turbopack still caches in memory for the life of the process, so
+§1's double-digit-millisecond recompiles are unaffected.
+
+Same machine, same routes, cache on (warm, 2.88 GB) vs off:
+
+| Request       | Cache ON, warm | Cache OFF   | Framework time |
+| ------------- | -------------- | ----------- | -------------- |
+| `GET /`       | 20.4 s         | **5.7 s**   | 12.5 s → 3.0 s |
+| `GET /signup` | 10.0 s         | **0.85 s**  | 9.8 s → 0.76 s |
+| `.next/dev`   | 3.15 GB        | **0.27 GB** | —              |
+
+No cache write, no compaction and no "Slow filesystem detected" in the run with
+it off.
+
+⚠ **This table is a low-memory result and does not generalise.** It says the
+cache loses on a machine that is swapping; it says nothing about a 32 GB one,
+where the expected answer is the opposite. Re-measure with `--fs-cache` before
+concluding anything about different hardware.
+
+---
+
+## 5. If you have ten minutes and dev feels slow
 
 **Check swap first** — `sysctl vm.swapusage`. The runner now prints a warning
 at startup when it is ≥60% full, because that single number decides whether any
@@ -283,8 +376,11 @@ of the rest of this list will help.
 4. `npm run dev:reset` and restart the dev server. Reclaims the generated dev
    cache without deleting production build output. Restarting alone is worth it
    — RSS only ever grows within a session.
-5. Turn off any VPN while developing — it taxes all 46 ms of every query.
-6. `killall NotificationCenter` — a known macOS leak; it was holding 1.1 GB.
+5. **If a single request logs tens of seconds, read its `next.js:` vs
+   `application-code:` split before suspecting the database.** A large
+   framework number with a small application number is §4, not §2.
+6. Turn off any VPN while developing — it taxes all 46 ms of every query.
+7. `killall NotificationCenter` — a known macOS leak; it was holding 1.1 GB.
    It restarts itself immediately and nothing is lost.
 
 **The structural point:** an 8 GB machine running a browser, an Electron editor

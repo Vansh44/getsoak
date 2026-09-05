@@ -218,14 +218,20 @@ export async function startEnrolment(input: {
         "This billing option is above Razorpay's autopay limit. Choose a shorter billing period. No payment was taken.",
     };
   }
-  const customerId = await ensureRzpCustomer(creds, input.storeId);
-  if (!customerId) {
+  const customer = await ensureRzpCustomer(creds, input.storeId);
+  if (!customer.ok) {
+    // ★ TWO CAUSES, TWO SENTENCES. "Missing contact" is fixable by the merchant
+    // in a minute; a gateway error is not, and telling them to go and edit a
+    // phone number that is already correct wastes their time and ours.
     return {
       ok: false,
       error:
-        "We couldn't prepare autopay. Check your billing email and phone, then try again. No payment was taken.",
+        customer.reason === "missing-contact"
+          ? "We couldn't prepare autopay: this store has no billing email and mobile number on file. Add both under Settings \u2192 Taxes & invoices, then try again. No payment was taken."
+          : "We couldn't prepare autopay right now. Please try again in a moment. No payment was taken.",
     };
   }
+  const customerId = customer.id;
 
   const cycle = cycleFrom(now, input.period, FIRST_CYCLE);
 
@@ -808,15 +814,36 @@ async function activateSubscription(input: {
  * caller stops before Razorpay opens; it must never silently sell an autopay
  * subscription as a one-time payment.
  */
+type RzpCustomerResult =
+  | { ok: true; id: string }
+  | { ok: false; reason: "missing-contact" | "gateway" };
+
+/**
+ * The Razorpay customer a mandate hangs off.
+ *
+ * ★★ THE CONTACT IS THE COMMON FAILURE, AND IT WAS UNIVERSAL. The subsequent
+ * recurring endpoint requires BOTH an email and a phone, so a store with only
+ * one cannot be enrolled — and `resolveBillingEmail` read the phone from
+ * `admins.phone`, which the signup wizard never populated. Every merchant
+ * created by the wizard therefore hit this and could not subscribe at all. Both
+ * halves are fixed (the wizard now writes it, and the resolver falls back to the
+ * invoice contact phone); the refusal stays, because offering a mandate with an
+ * email alone would tell the merchant autopay is set up and then fail every
+ * renewal locally, before Razorpay is even called.
+ */
 async function ensureRzpCustomer(
   creds: { keyId: string; keySecret: string },
   storeId: string,
-): Promise<string | null> {
+): Promise<RzpCustomerResult> {
   const to = await resolveBillingEmail(storeId).catch(() => null);
-  // The subsequent recurring endpoint requires BOTH. Offering a mandate with
-  // email only would make enrolment say autopay is ready and every renewal fail
-  // locally before Razorpay is called.
-  if (!to?.email || !to.phone) return null;
+  if (!to?.email || !to.phone) {
+    logWarn("billing.enrol.customer_contact_missing", {
+      storeId,
+      hasEmail: Boolean(to?.email),
+      hasPhone: Boolean(to?.phone),
+    });
+    return { ok: false, reason: "missing-contact" };
+  }
   const res = await rzpCreateCustomer(creds, {
     name: to.storeName,
     email: to.email,
@@ -824,9 +851,10 @@ async function ensureRzpCustomer(
   });
   if (!res.ok) {
     logError("billing.enrol.customer", new Error(res.error), { storeId });
-    return null;
+    return { ok: false, reason: "gateway" };
   }
-  return res.data.id ?? null;
+  const id = res.data.id;
+  return id ? { ok: true, id } : { ok: false, reason: "gateway" };
 }
 
 /**

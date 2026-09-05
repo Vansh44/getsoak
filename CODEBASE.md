@@ -1559,7 +1559,26 @@ wholesip/
 │   │                          # is Rust, so its module graph and source maps are native
 │   │                          # allocations outside it. Measured on M2/8 GB: 90 MB at
 │   │                          # boot → 1.77 GB after eight routes, cap never binding.
-│   │                          # Restarting the server is what reclaims memory, not the cap
+│   │                          # Restarting the server is what reclaims memory, not the cap.
+│   │                          # ★★ It also DISABLES Turbopack's dev filesystem cache on
+│   │                          # ≤12 GB machines (the heap cap's boundary — one notion of
+│   │                          # "small machine", not two that can drift), passing the
+│   │                          # decision to next.config.ts as NEXT_DEV_FS_CACHE and
+│   │                          # reclaiming any .next/dev/cache left behind.
+│   │                          # `turbopackFileSystemCacheForDev` became a DEFAULT in Next
+│   │                          # 16.1, and its periodic write + compaction of a multi-GB
+│   │                          # database contends with macOS paging for one SSD. Measured
+│   │                          # 2026-09-06 on M2/8 GB with a 2.88 GB cache: a 2.5-MINUTE
+│   │                          # cache write, during which `POST /api/auth/session` logged
+│   │                          # `102s (next.js: 101s, application-code: 1564ms)`.
+│   │                          # ⚠ READ THAT SPLIT: 101 s of framework, 1.5 s of app code —
+│   │                          # so it is NOT the ~46 ms Mumbai round trip, which is the
+│   │                          # tempting and wrong lead. Off: GET / 20.4s→5.7s, /signup
+│   │                          # 10.0s→0.85s, .next/dev 3.15 GB→0.27 GB, no stall lines.
+│   │                          # Edit-refresh is untouched (Turbopack still caches in
+│   │                          # memory); only cold compiles after a RESTART cost more.
+│   │                          # `--fs-cache`/`--no-fs-cache` (or DEV_FS_CACHE=1/0) override;
+│   │                          # `npx next dev` sets nothing and keeps Next's own default
 │   ├── db-migrate.mjs         # ★ status/baseline/apply/verify + recovery-only audit/adopt
 │   │                          # runner: physical DB guard, advisory lock, one transaction
 │   │                          # per migration, checksum drift/unknown-row refusal, and
@@ -7396,6 +7415,38 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       `toast.info` carrying the server's own wording (money may have moved —
       §26's rule), and `autopay: false` is stated plainly whenever no mandate was
       captured, because assuming otherwise becomes a downgrade next cycle.
+    - **★★ AND THAT BILLING-CONTACT GATE REFUSED EVERY MERCHANT ON THE PLATFORM**
+      (found in prod 2026-09-06). Razorpay's recurring endpoint needs BOTH an
+      email and a phone, so `ensureRzpCustomer` refuses without them — correctly.
+      But its only phone source was `admins.phone`, and **`createStore` never
+      wrote that column**: the wizard OTP-verifies a number, then put it in
+      `store_billing_settings.contact_phone` and nowhere else. So every
+      wizard-created store answered Subscribe with "We couldn't prepare autopay"
+      forever, **before a single Razorpay call was made** — nothing in the logs
+      from the gateway, nothing to see in the Razorpay dashboard, and the message
+      pointed at a phone number the merchant had already given us. Measured on
+      production: 2 of 3 superadmins had `phone IS NULL`, both with a perfectly
+      good verified number one table away. The platform could not sell anything.
+      - **★ FIXED AT BOTH ENDS, and only one of them fixes the stores that
+        already exist.** `createStore` now writes `user.phone` onto the admin row
+        (it runs only after the `phoneConfirmed` gate, so it is exactly what
+        `setVerifiedPhone` would store), and `resolveBillingEmail` falls back to
+        `store_billing_settings.contact_phone`. The signup write is the correct
+        record; the fallback is what unblocks everyone created before it.
+      - **★ THE FALLBACK IS VALIDATED, THE OWNER'S IS NOT.** `admins.phone` came
+        from a verified Identity Platform identity; the invoice contact is free
+        text typed on Taxes & invoices and may be a landline or a placeholder, so
+        it passes through `formatIndianMobile` (§35's one normaliser). A mandate
+        whose pre-debit notice reaches nobody is worse than a refusal.
+      - **★ NO BACKFILL, deliberately.** Copying a business contact number into
+        `admins.phone` would contradict that column's contract — `setVerifiedPhone`
+        accepts only a number the auth identity has verified — so the existing
+        rows are served by the fallback and stay honest about what was verified.
+      - **★ THE REFUSAL NOW NAMES ITS CAUSE.** `ensureRzpCustomer` returns
+        `missing-contact` or `gateway` instead of a bare null, because "add your
+        billing email and mobile under Settings → Taxes & invoices" is a minute's
+        work and a gateway outage is not — telling a merchant to go and re-edit a
+        phone number that is already correct wastes their time and hides ours.
     - **★★ `OpenInvoices` REMAINS FIRST-CLASS.** Automatic collection handles
       only eligible active mandates below both ceilings; no mandate, yearly/AFA,
       a revoked mandate or an incident rollback still needs manual payment. It
@@ -9026,6 +9077,14 @@ way — an entry there is a deliberate act, not a way to silence the guard.
 > still climbs through a session; restart the server rather than trusting the cap.
 > The runner also warns when swap is already ≥60% full at startup, because on an
 > 8 GB machine that, not compilation, is what the slowdown actually is.
+> **The third cost is DISK, and it is the one that produces the alarming
+> outliers.** Turbopack's dev filesystem cache is on by default from Next 16.1;
+> its periodic write and compaction of a multi-GB `.next/dev/cache` competes with
+> the swap file for the same SSD, and was measured blocking a request for
+> **101 seconds of framework time against 1.5 s of application code**. The runner
+> therefore turns it off on ≤12 GB machines (`--fs-cache` forces it back on).
+> ★ When a request looks slow, read its `next.js:` vs `application-code:` split
+> before suspecting the database — that one number separates §4 from §2.
 
 ```bash
 npm run dev         # resource-aware next dev --turbopack: 2 GB heap on ≤12 GB RAM,
@@ -9033,6 +9092,8 @@ npm run dev         # resource-aware next dev --turbopack: 2 GB heap on ≤12 GB
 npm run dev:lean    # force the 2 GB heap regardless of detected machine memory
 npm run dev:full    # explicitly disable the heap cap (for high-memory machines/debugging)
 npm run dev:reset   # delete generated .next/dev only; next launch recompiles cold once
+npm run dev -- --fs-cache     # force Turbopack's dev filesystem cache ON  (DEV_FS_CACHE=1)
+npm run dev -- --no-fs-cache  # force it OFF (DEV_FS_CACHE=0); default is OFF on ≤12 GB RAM
 npm run dev:all     # ↑ dev + the Cloud SQL Auth Proxy together (concurrently) — one command
 npm run dev:all:lean # ↑ force the 2 GB heap + proxy (normally identical on this 8 GB Mac)
 npm run dev:all:full # ↑ uncapped dev + proxy
