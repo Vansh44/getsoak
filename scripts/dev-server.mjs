@@ -7,6 +7,10 @@ import { fileURLToPath } from "node:url";
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(scriptDir, "..");
 const devCacheDir = path.join(projectRoot, ".next", "dev");
+// Turbopack's persistent dev cache lives in a subtree of the above. It is
+// reclaimed on its own whenever the filesystem cache is switched off, which is
+// why it needs a name separate from the whole generated directory.
+const devFsCacheDir = path.join(devCacheDir, "cache");
 // `next build`'s webpack cache. Turbopack dev NEVER reads it, so on a machine
 // that only ever runs `npm run dev` it is pure dead disk that grows to gigabytes
 // and is never reclaimed by anything. Measured 2026-08-24: 1.5 GB, last written
@@ -23,6 +27,7 @@ const nextBin = path.join(
   "next",
 );
 const MB = 1024 * 1024;
+const memoryGb = totalmem() / 1024 ** 3;
 
 function numericArg(prefix) {
   const raw = process.argv.slice(2).find((arg) => arg.startsWith(prefix));
@@ -68,11 +73,88 @@ if (process.argv.includes("--reset-cache")) {
   process.exit(0);
 }
 
-const cacheLimitMb = Number(process.env.DEV_CACHE_MAX_MB ?? 3072);
-if (Number.isFinite(cacheLimitMb) && cacheLimitMb > 0) {
-  const cacheBytes = await directoryBytes(devCacheDir);
-  if (cacheBytes > cacheLimitMb * MB) {
-    await resetDevCache(`cache exceeded ${cacheLimitMb} MB`);
+// ★★ TURBOPACK'S DEV FILESYSTEM CACHE IS A DEFAULT NOW, AND ON A SMALL MACHINE
+// IT IS THE LARGEST SINGLE STALL — not a background nicety.
+//
+// `experimental.turbopackFileSystemCacheForDev` became ENABLED BY DEFAULT in
+// Next 16.1 (see node_modules/next/dist/docs/.../turbopackFileSystemCache.md).
+// It writes and periodically COMPACTS a cache database under `.next/dev/cache`,
+// and those writes are not free and not fully in the background.
+//
+// MEASURED 2026-09-06 on this repo (M2 / 8 GB, `.next/dev` at 3.15 GB):
+//
+//   ✓ Finished writing to filesystem cache in 2.5min
+//   ✓ Finished writing to filesystem cache in 13.2s
+//   ✓ Finished filesystem cache database compaction in 12.8s
+//   ⚠ Slow filesystem detected. The benchmark took 794ms.
+//
+// While the first of those ran, one ordinary request measured:
+//
+//   POST /api/auth/session 200 in 102s (next.js: 101s, application-code: 1564ms)
+//
+// ★ READ THAT SPLIT CAREFULLY: 1.5 s was the route's own work and 101 s was the
+// framework. So this is NOT the Mumbai round trip documented in
+// docs/local-dev-performance.md §2, and it is NOT slow application code — it is
+// the dev server blocked behind its own cache write. Chasing it as a query
+// problem is the wrong lead, which is exactly why it is written down here.
+//
+// WHY IT HURTS HERE SPECIFICALLY: the cost is disk IO, and on an 8 GB machine
+// the SSD is ALREADY saturated by macOS paging (~9.4 GB of swap in that same
+// session). The cache and the swap file compete for one device, so the cache's
+// write amplifies the very thrash that makes the machine feel bad everywhere.
+// On a machine with RAM to spare there is no swap to compete with and the cache
+// is a straight win — hence a machine-class rule rather than a blanket disable.
+//
+// THE TRADE, STATED HONESTLY: turning it off costs cold compiles after every
+// server restart (Turbopack still caches IN MEMORY for the life of the process,
+// so edit-refresh stays in the double-digit milliseconds §1 measured). It buys
+// back a cache that cannot stall a request and cannot grow to gigabytes.
+//
+// This mirrors the heap rule below on the same ≤12 GB boundary deliberately —
+// one notion of "small machine", not two that can drift apart.
+const FS_CACHE_MIN_MEMORY_GB = 12;
+
+function resolveFsCache() {
+  if (process.argv.includes("--no-fs-cache"))
+    return { enabled: false, reason: "--no-fs-cache" };
+  if (process.argv.includes("--fs-cache"))
+    return { enabled: true, reason: "--fs-cache" };
+
+  const override = process.env.DEV_FS_CACHE;
+  if (override === "0" || override === "false")
+    return { enabled: false, reason: "DEV_FS_CACHE=0" };
+  if (override === "1" || override === "true")
+    return { enabled: true, reason: "DEV_FS_CACHE=1" };
+
+  const small = memoryGb <= FS_CACHE_MIN_MEMORY_GB;
+  return {
+    enabled: !small,
+    reason: `${memoryGb.toFixed(0)} GB RAM`,
+  };
+}
+
+const fsCache = resolveFsCache();
+
+if (fsCache.enabled) {
+  const cacheLimitMb = Number(process.env.DEV_CACHE_MAX_MB ?? 3072);
+  if (Number.isFinite(cacheLimitMb) && cacheLimitMb > 0) {
+    const cacheBytes = await directoryBytes(devCacheDir);
+    if (cacheBytes > cacheLimitMb * MB) {
+      await resetDevCache(`cache exceeded ${cacheLimitMb} MB`);
+    }
+  }
+} else {
+  // Nothing will read this again while the cache is off, so it is dead disk on
+  // the volume macOS is growing its swap file on — the same reclaim, and the
+  // same reasoning, as .next/cache below. Only the cache subtree goes: the rest
+  // of .next/dev is this session's compiled output, and removing it would turn
+  // a config change into a gratuitous full rebuild.
+  const staleBytes = await directoryBytes(devFsCacheDir);
+  if (staleBytes > 0) {
+    console.log(
+      `[dev] reclaiming ${(staleBytes / MB / 1024).toFixed(1)} GB of .next/dev/cache (Turbopack filesystem cache, disabled below).`,
+    );
+    await rm(devFsCacheDir, { recursive: true, force: true });
   }
 }
 
@@ -130,7 +212,6 @@ async function ensureNoIndexMarkers() {
 
 await ensureNoIndexMarkers();
 
-const memoryGb = totalmem() / 1024 ** 3;
 const explicitHeapMb = numericArg("--heap-mb=");
 const heapMb =
   explicitHeapMb ?? (memoryGb <= 12 ? 2048 : memoryGb <= 20 ? 3072 : 0);
@@ -147,9 +228,21 @@ const nodeOptions = [
 const childEnv = { ...process.env };
 if (nodeOptions) childEnv.NODE_OPTIONS = nodeOptions;
 else delete childEnv.NODE_OPTIONS;
+// next.config.ts is the only place that can actually set the flag, and it is
+// evaluated inside the Next process — so the decision travels as an env var
+// rather than being computed twice. Deliberately NOT set when someone runs
+// `npx next dev` directly: that path then keeps Next's own default, so this
+// runner adds behaviour instead of quietly redefining what the framework does.
+childEnv.NEXT_DEV_FS_CACHE = fsCache.enabled ? "1" : "0";
 const nextArgs = process.argv
   .slice(2)
-  .filter((arg) => !arg.startsWith("--heap-mb=") && arg !== "--reset-cache");
+  .filter(
+    (arg) =>
+      !arg.startsWith("--heap-mb=") &&
+      arg !== "--reset-cache" &&
+      arg !== "--fs-cache" &&
+      arg !== "--no-fs-cache",
+  );
 
 // ★★ THE HEAP CAP IS NOT A CAP ON THE DEV SERVER'S MEMORY, and reading it as
 // one is how "why is my Mac slow?" goes unanswered for weeks.
@@ -218,6 +311,21 @@ if (heapMb > 0) {
   console.log(
     `[dev] ${memoryGb.toFixed(0)} GB RAM detected; using an uncapped Next.js heap.`,
   );
+}
+
+if (fsCache.enabled) {
+  console.log(
+    `[dev] Turbopack filesystem cache: ON (${fsCache.reason}). Faster cold starts; ` +
+      `.next/dev is rotated past ${Number(process.env.DEV_CACHE_MAX_MB ?? 3072)} MB.`,
+  );
+} else {
+  console.log(
+    `[dev] Turbopack filesystem cache: OFF (${fsCache.reason}) — it stalls requests on a swapping machine.`,
+  );
+  console.log(
+    "[dev] Cold compiles after a restart cost a few seconds more; edit-refresh is unaffected.",
+  );
+  console.log("[dev] Force it back on with: npm run dev -- --fs-cache");
 }
 
 const child = spawn(

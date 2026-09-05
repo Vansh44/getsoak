@@ -35,6 +35,29 @@ const nextConfig: NextConfig = {
     dangerouslyAllowLocalIP: process.env.NODE_ENV === "development",
   },
   experimental: {
+    // ★★ TURBOPACK'S DEV FILESYSTEM CACHE, SWITCHED BY THE DEV RUNNER.
+    //
+    // `turbopackFileSystemCacheForDev` became enabled BY DEFAULT in Next 16.1.
+    // It is a straight win on a machine with RAM to spare and a serious problem
+    // on one that is swapping, because its periodic write and compaction of
+    // `.next/dev/cache` contends with macOS paging for the same SSD. Measured
+    // on an 8 GB Mac (2026-09-06): a 2.5-MINUTE cache write, during which an
+    // ordinary request logged `102s (next.js: 101s, application-code: 1564ms)`.
+    // The full measurement and the reasoning live in scripts/dev-server.mjs.
+    //
+    // ★ THE DECISION IS NOT MADE HERE. scripts/dev-server.mjs owns it (it is the
+    // one place that already classifies the machine, for the V8 heap cap) and
+    // passes it in. Recomputing the rule here would be a second copy of a
+    // threshold, free to drift from the first — the trap CODEBASE.md §14 records
+    // for the SQL identifier formatters.
+    //
+    // ⚠ Only an explicit "0" disables it. An UNSET variable means "nobody
+    // decided" — `npx next dev` run directly, `next build`, `next typegen` —
+    // and must therefore leave Next's own default alone, so the key is omitted
+    // entirely rather than pinned to a value this file has guessed.
+    ...(process.env.NEXT_DEV_FS_CACHE === "0"
+      ? { turbopackFileSystemCacheForDev: false }
+      : {}),
     // Tree-shake barrel imports to per-export modules. lucide-react is already
     // optimized by default; these heavy ones are not. (They're also lazily
     // loaded via next/dynamic, so this trims what lands in their split chunks.)
