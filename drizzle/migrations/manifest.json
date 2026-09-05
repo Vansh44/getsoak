@@ -3431,6 +3431,33 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260905_0080_mink_builder_chat_help",
+      "description": "Document visible Builder chat, natural merchant prompts and unchanged approval boundaries",
+      "file": "sql/20260905_0080_mink_builder_chat_help.sql",
+      "transaction": true,
+      "requires": ["20260904_0079_mink_phase_7d_storefront_publication"],
+      "verify": {
+        "tables": ["help_articles"],
+        "queries": [
+          {
+            "name": "Mink Builder panel and natural-language Help guidance is published",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%<h2>Use Mink while editing your website</h2>%' and body like '%including on wide desktop screens%' and body like '%not unsaved changes in your editor%' and body like '%Opening the chat grants no additional access.%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "tables": ["help_articles"],
+        "queries": [
+          {
+            "name": "Mink Builder panel and natural-language Help guidance is published",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%<h2>Use Mink while editing your website</h2>%' and body like '%including on wide desktop screens%' and body like '%not unsaved changes in your editor%' and body like '%Opening the chat grants no additional access.%'",
+            "equals": "1"
+          }
+        ]
+      }
     }
   ]
 }

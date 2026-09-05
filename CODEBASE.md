@@ -56,6 +56,17 @@ tokens were renamed to `--sm-*` and `WHOLESIP_STORE_ID` to `FALLBACK_STORE_ID`.
 > rollback, repository, shell or deployment authority. Human review, checks and
 > execution use no model call and no second credit charge.
 
+> **Builder chat visibility (2026-09-05):** `app/dashboard/dashboard.css`
+> floats the shared `.dash-chat` panel above the fixed `.sm-builder` canvas
+> on screens at least 640 px wide. Ordinary dashboard panels keep their
+> existing layout; phones still use the full-screen chat. Builder remains
+> mounted while chat opens, closes, resizes or maximizes, preserving editor
+> state without granting new context or mutation authority. Migration
+> `drizzle/migrations/sql/20260905_0080_mink_builder_chat_help.sql` documents
+> the flow and saved-data limitation. `docs/mink-ai-test-prompts.md` uses
+> ordinary Echos merchant requests, separate tester expectations, clarification
+> conversations and a distinct technical security appendix.
+
 ## 3. Multi-tenancy architecture (the core concept)
 
 Every request belongs to exactly one store, resolved from the **Host header**.

@@ -1977,6 +1977,13 @@ page is unchanged and never rewinds the private Builder draft. Phase 7 exit
 validation is next; media generation and placement require their own future
 provenance, moderation, storage and approval boundary.
 
+The Builder chat visibility gap is fixed: on desktop the shared Mink panel
+floats above the fixed editor rather than opening behind it; phone full-screen
+chat and maximization are unchanged. No editor remount or new model authority
+is introduced. Migration `20260905_0080_mink_builder_chat_help` documents this
+flow. Echos acceptance prompts now use ordinary merchant wording and short
+follow-ups, with technical attack probes in a separate appendix.
+
 ### Returns, exchanges, BORIS, credit notes
 
 Spec: `docs/returns-exchanges-plan.md`. The twelve `returns.*` settings,
