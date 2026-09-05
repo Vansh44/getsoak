@@ -253,10 +253,18 @@ function validateFormLabels(html: string, issues: string[]) {
   }
 }
 
+// ★ Read the `id` ATTRIBUTE, never any attribute whose name ends in `id`.
+// A bare /\bid\s*=/ scan also matches `data-id=` (`\b` sits between the
+// hyphen and the `i`), so two `data-id="card"` elements were reported as
+// duplicate element IDs and refused publication outright — while the in-frame
+// check, which walks `querySelectorAll("[id]")`, correctly saw none. The two
+// checks must agree, and the DOM one is right. `readAttribute` anchors on
+// start-of-attributes or whitespace, which is what excludes `data-id`.
 function validateIds(html: string, issues: string[]) {
   const seen = new Set<string>();
-  for (const match of html.matchAll(/\bid\s*=\s*["']([^"']+)["']/gi)) {
-    const id = match[1];
+  for (const tag of html.matchAll(/<[a-z][a-z0-9-]*\b([^>]*)>/gi)) {
+    const id = readAttribute(tag[1] ?? "", "id");
+    if (!id) continue;
     if (seen.has(id)) {
       issues.push("Element IDs must be unique.");
       return;

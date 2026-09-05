@@ -11,7 +11,23 @@ const state = vi.hoisted(() => ({
   inserts: [] as Array<{ table: string; values: any }>,
   updates: [] as Array<{ table: string; values: any }>,
   updateReturns: {} as Record<string, any[][]>,
+  /** Tables locked with `for update`, in acquisition order. */
+  locked: [] as string[],
 }));
+
+/**
+ * Recover the literal text of a Drizzle `sql` template so a test can assert
+ * WHICH row a raw `for update` statement locked. Only the string chunks are
+ * needed — the interpolated ids are irrelevant to lock ordering.
+ */
+function lockedTable(query: any): string | null {
+  const text = ((query?.queryChunks ?? []) as any[])
+    .map((chunk) => (Array.isArray(chunk?.value) ? chunk.value.join("") : ""))
+    .join(" ")
+    .replace(/\s+/g, " ");
+  if (!/for update/i.test(text)) return null;
+  return /from\s+public\.([a-z_]+)/i.exec(text)?.[1] ?? "unknown";
+}
 
 function take(queue: any[][] | undefined) {
   if (!queue?.length) return [];
@@ -66,7 +82,11 @@ function chain(
 }
 
 const db = {
-  execute: async () => state.executeRows.shift() ?? { rows: [] },
+  execute: async (query: any) => {
+    const table = lockedTable(query);
+    if (table) state.locked.push(table);
+    return state.executeRows.shift() ?? { rows: [] };
+  },
   select: () => chain(),
   insert: (table: any) => chain(getTableName(table), "insert"),
   update: (table: any) => chain(getTableName(table), "update"),
@@ -243,6 +263,7 @@ function approvalRow(
 beforeEach(() => {
   state.selects = {};
   state.executeRows = [];
+  state.locked = [];
   state.inserts = [];
   state.updates = [];
   state.updateReturns = {};
@@ -378,6 +399,44 @@ describe("Mink Phase 7C storefront draft actions", () => {
     expect(
       state.inserts.filter((entry) => entry.table === "mink_action_audit"),
     ).toHaveLength(1);
+  });
+
+  // ★★ THE CANONICAL LOCK ORDER, AND THE REASON IT IS PINNED HERE.
+  // Every Mink action phase takes its own approval row, then tool access, then
+  // the draft, then the resource. Phase 7D's publication preview must lock THIS
+  // approval as its source, so if either side reverses the approval/draft pair,
+  // approving a save while a second tab reviews publication deadlocks and
+  // Postgres aborts one of them. Nothing about the returned values changes when
+  // the order is wrong, so only an ordering assertion can catch it.
+  it("locks its approval before the draft, keeping one global order", async () => {
+    state.selects.mink_action_approvals = [[approvalRow()]];
+    state.selects.mink_drafts = [[draft()]];
+    state.selects.store_pages = [[page()]];
+    state.executeRows = [
+      { rows: [] },
+      { rows: [{ enabled: true }] },
+      { rows: [] },
+      { rows: [] },
+    ];
+    state.updateReturns.store_pages = [
+      [{ id: PAGE_ID, updatedAt: NEXT_VERSION }],
+    ];
+    state.updateReturns.mink_action_approvals = [[{ id: APPROVAL_ID }]];
+
+    const { executeMinkStorefrontCodeAction } =
+      await import("./storefront-code-actions");
+    await executeMinkStorefrontCodeAction({
+      actor: actor(),
+      draftId: DRAFT_ID,
+      approvalId: APPROVAL_ID,
+    });
+
+    expect(state.locked).toEqual([
+      "mink_action_approvals",
+      "mink_action_tool_access",
+      "mink_drafts",
+      "store_pages",
+    ]);
   });
 
   it("replays an executed approval without another page write or audit", async () => {

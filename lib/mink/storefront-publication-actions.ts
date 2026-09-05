@@ -145,12 +145,26 @@ export async function previewMinkStorefrontPublication(input: {
   assertAuthority(input.actor);
   return withService(async (db) => {
     await assertToolEnabled(db, input.actor.storeId);
+    // ★★ CANONICAL LOCK ORDER: approval row -> tool access -> draft -> page.
+    //
+    // Every other Mink action phase is deadlock-free because of one invariant:
+    // no path locks a draft and THEN waits on an existing approval row. Their
+    // previews lock only the draft (the approval they create is a fresh row
+    // nothing can be holding), and their executes take their own approval
+    // first. Phase 7D is the first preview that must lock a PRE-EXISTING
+    // approval — the completed Phase 7C save — so acquiring the draft first
+    // inverted that order against `executeMinkStorefrontCodeAction`, which
+    // locks its approval and then the draft. Approving a Builder draft save
+    // while a second tab reviewed publication for the same proposal could then
+    // deadlock: Postgres aborts one side and the route reports a bare 503.
+    // The reads below keep their original sequence, so error precedence is
+    // unchanged; only acquisition order moves.
+    await lockApproval(db, input.actor, input.sourceApprovalId);
     await lockDraft(db, input.actor, input.draftId);
     const draft = await readDraft(db, input.actor, input.draftId);
     const proposal = validateStoredStorefrontProposal(draft.content);
     const storedBefore = readStoredStorefrontCodeConfig(draft.before, "before");
 
-    await lockApproval(db, input.actor, input.sourceApprovalId);
     const source = await readDraftSaveApproval(
       db,
       input.actor,
@@ -320,13 +334,15 @@ export async function executeMinkStorefrontPublication(input: {
       throw invalidApproval();
     }
 
-    // Keep the same lock order as the preview paths. Publication execution can
-    // otherwise hold the page lock while a concurrent preview holds the source
-    // draft/approval lock, leaving both transactions waiting on each other.
+    // Same canonical order as the preview paths above and as every other
+    // action phase: approval rows, then the draft, then the page. Taking the
+    // draft before the source approval here would deadlock against
+    // `executeMinkStorefrontCodeAction`, which holds that approval while it
+    // waits for the same draft.
+    await lockApproval(db, input.actor, approval.sourceApprovalId);
     if (approval.operation === "apply") {
       await lockDraft(db, input.actor, approval.draftId);
     }
-    await lockApproval(db, input.actor, approval.sourceApprovalId);
     await lockPage(db, input.actor, approval.resourceId);
     const page = await readPage(
       db,
@@ -654,11 +670,29 @@ async function readDraft(db: Db, actor: MinkActorContext, draftId: string) {
       "This immutable storefront proposal is not available for publication.",
     );
   }
-  return {
-    ...draft,
-    before: normalizeMinkDraftContent("storefront_custom_code", draft.before),
-    content: normalizeMinkDraftContent("storefront_custom_code", draft.content),
-  };
+  try {
+    return {
+      ...draft,
+      // `before` is a copy of the merchant's existing section, so it is held
+      // to its shape only — never to the generated-patch size ceiling.
+      before: normalizeMinkDraftContent(
+        "storefront_custom_code",
+        draft.before,
+        { historicalSnapshot: true },
+      ),
+      content: normalizeMinkDraftContent(
+        "storefront_custom_code",
+        draft.content,
+      ),
+    };
+  } catch (error) {
+    // A stored payload we cannot parse is a conflict to report, not an
+    // unexplained 503 from the route's generic catch.
+    throw conflict(
+      "mink_storefront_publication_draft_invalid",
+      error instanceof Error ? error.message : "Invalid storefront proposal.",
+    );
+  }
 }
 
 async function readPage(

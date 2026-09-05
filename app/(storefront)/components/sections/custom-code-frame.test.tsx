@@ -64,5 +64,10 @@ describe("CustomCodeFrame Phase 7B isolation", () => {
     expect(frame.getAttribute("srcdoc")).not.toContain(
       "Content-Security-Policy",
     );
+    // ★ A srcdoc document inherits this attribute, so setting it here strips
+    // `Referer` from a live section's third-party requests — which is how a
+    // referrer-restricted Google Maps or reCAPTCHA key inside an existing
+    // merchant section silently breaks. It belongs to strict previews only.
+    expect(frame).not.toHaveAttribute("referrerpolicy");
   });
 });
