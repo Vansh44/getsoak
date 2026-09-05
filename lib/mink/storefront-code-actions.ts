@@ -469,7 +469,13 @@ async function readDraft(db: Db, actor: MinkActorContext, draftId: string) {
   try {
     return {
       ...draft,
-      before: normalizeMinkDraftContent("storefront_custom_code", draft.before),
+      // `before` is a copy of the merchant's existing section, so it is held
+      // to its shape only — never to the generated-patch size ceiling.
+      before: normalizeMinkDraftContent(
+        "storefront_custom_code",
+        draft.before,
+        { historicalSnapshot: true },
+      ),
       content: normalizeMinkDraftContent(
         "storefront_custom_code",
         draft.content,

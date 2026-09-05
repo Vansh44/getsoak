@@ -5079,7 +5079,7 @@ export const minkWorkflowRuns = pgTable(
     }).onDelete("cascade"),
     check(
       "mink_workflow_runs_template_check",
-      sql`template = ANY (ARRAY['weekly_trading_report'::text, 'revenue_decline_investigation'::text, 'product_launch_preparation'::text, 'slow_inventory_promotion'::text, 'delayed_pickup_review'::text])`,
+      sql`template = ANY (ARRAY['weekly_trading_report'::text, 'revenue_decline_investigation'::text, 'product_launch_preparation'::text, 'slow_inventory_promotion'::text, 'delayed_pickup_review'::text, 'business_brief'::text])`,
     ),
     check(
       "mink_workflow_runs_status_check",
@@ -7060,64 +7060,73 @@ export const planPrices = pgTable("plan_prices", {
 // Two tables because they are two facts: a return can be refunded across
 // several tenders, and a refund can happen with no return (a cancellation).
 
-export const orderReturns = pgTable("order_returns", {
-  id: uuid().defaultRandom().primaryKey().notNull(),
-  storeId: uuid("store_id").notNull(),
-  orderId: uuid("order_id").notNull(),
-  /** Where the goods came back TO — not necessarily where they were sold. */
-  locationId: uuid("location_id"),
-  shiftId: uuid("shift_id"),
-  amount: numeric({ precision: 12, scale: 2, mode: "number" }).notNull(),
-  tax: numeric({ precision: 12, scale: 2, mode: "number" }).notNull(),
-  total: numeric({ precision: 12, scale: 2, mode: "number" }).notNull(),
-  /** The customer's own words. `reasonCode` is the one that decides fees. */
-  reason: text(),
-  actor: text(),
-  createdAt: timestamp("created_at", {
-    withTimezone: true,
-    mode: "string",
-  }).defaultNow(),
-  // ── Request lifecycle (returns_02_requests.sql) ─────────────────────────
-  /** requested → approved → received → completed, or rejected/cancelled.
-   *  DEFAULTS to 'completed': every pre-existing row is a finished till
-   *  return, and pos-return-actions still doesn't set it. */
-  status: text().notNull().default("completed"),
-  /** 'pos' (rung at a counter) | 'online' (asked from the order page). */
-  channel: text().notNull().default("pos"),
-  requestedBy: text("requested_by"),
-  /** A key from lib/returns/reasons.ts — decides fees and who pays postage. */
-  reasonCode: text("reason_code"),
-  photos: jsonb().notNull().default([]),
-  /** Snapshotted at decision time, never recomputed. */
-  restockingFee: numeric("restocking_fee", {
-    precision: 12,
-    scale: 2,
-    mode: "number",
-  })
-    .notNull()
-    .default(0),
-  returnShippingFee: numeric("return_shipping_fee", {
-    precision: 12,
-    scale: 2,
-    mode: "number",
-  })
-    .notNull()
-    .default(0),
-  reviewedBy: text("reviewed_by"),
-  reviewedAt: timestamp("reviewed_at", {
-    withTimezone: true,
-    mode: "string",
-  }),
-  /** Shown to the CUSTOMER, so a rejection is never a silent no. */
-  reviewNote: text("review_note"),
-  receivedAt: timestamp("received_at", {
-    withTimezone: true,
-    mode: "string",
-  }),
-  /** The replacement order (returns_03_exchanges.sql). An exchange is a return
-   *  PLUS a new order, never a third entity. NULL until the goods arrive. */
-  exchangeOrderId: uuid("exchange_order_id"),
-});
+export const orderReturns = pgTable(
+  "order_returns",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    orderId: uuid("order_id").notNull(),
+    /** Where the goods came back TO — not necessarily where they were sold. */
+    locationId: uuid("location_id"),
+    shiftId: uuid("shift_id"),
+    amount: numeric({ precision: 12, scale: 2, mode: "number" }).notNull(),
+    tax: numeric({ precision: 12, scale: 2, mode: "number" }).notNull(),
+    total: numeric({ precision: 12, scale: 2, mode: "number" }).notNull(),
+    /** The customer's own words. `reasonCode` is the one that decides fees. */
+    reason: text(),
+    actor: text(),
+    createdAt: timestamp("created_at", {
+      withTimezone: true,
+      mode: "string",
+    }).defaultNow(),
+    // ── Request lifecycle (returns_02_requests.sql) ─────────────────────────
+    /** requested → approved → received → completed, or rejected/cancelled.
+     *  DEFAULTS to 'completed': every pre-existing row is a finished till
+     *  return, and pos-return-actions still doesn't set it. */
+    status: text().notNull().default("completed"),
+    /** 'pos' (rung at a counter) | 'online' (asked from the order page). */
+    channel: text().notNull().default("pos"),
+    requestedBy: text("requested_by"),
+    /** A key from lib/returns/reasons.ts — decides fees and who pays postage. */
+    reasonCode: text("reason_code"),
+    photos: jsonb().notNull().default([]),
+    /** Snapshotted at decision time, never recomputed. */
+    restockingFee: numeric("restocking_fee", {
+      precision: 12,
+      scale: 2,
+      mode: "number",
+    })
+      .notNull()
+      .default(0),
+    returnShippingFee: numeric("return_shipping_fee", {
+      precision: 12,
+      scale: 2,
+      mode: "number",
+    })
+      .notNull()
+      .default(0),
+    reviewedBy: text("reviewed_by"),
+    reviewedAt: timestamp("reviewed_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    /** Shown to the CUSTOMER, so a rejection is never a silent no. */
+    reviewNote: text("review_note"),
+    receivedAt: timestamp("received_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    /** The replacement order (returns_03_exchanges.sql). An exchange is a return
+     *  PLUS a new order, never a third entity. NULL until the goods arrive. */
+    exchangeOrderId: uuid("exchange_order_id"),
+  },
+  (table) => [
+    index("mink_brief_returns_store_created_idx").on(
+      table.storeId,
+      table.createdAt,
+    ),
+  ],
+);
 
 export const orderReturnItems = pgTable("order_return_items", {
   id: uuid().defaultRandom().primaryKey().notNull(),

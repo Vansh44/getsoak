@@ -5,11 +5,26 @@ export const MINK_STOREFRONT_BROWSER_WIDTHS = Object.freeze({
   desktop: 1280,
   mobile: 390,
 });
+// ★ These MUST NOT be stricter than package.json's `browserslist`, which is
+// the whole app's stated support floor (chrome/edge 111, firefox 128,
+// safari/ios_saf 16.4). A publication check that refuses a browser the rest of
+// the dashboard supports is an unfixable dead end: it is enforced again
+// server-side, so there is no override, and macOS Monterey caps out at Safari
+// 16.x. Firefox stays at 121 deliberately — it is BELOW its browserslist floor,
+// so it can only ever be permissive, never blocking.
+//
+// ⚠ Major versions only: `browser.major` is the sole version field in the
+// persisted, hash-bound `browser_validation` payload. Safari's 16.4 minor is
+// enforced by `minkStorefrontBrowserIdentity` below instead of by widening
+// that payload.
 export const MINK_STOREFRONT_BROWSER_FLOORS = Object.freeze({
-  chromium: 120,
+  chromium: 111,
   firefox: 121,
-  webkit: 17,
+  webkit: 16,
 });
+
+/** Safari/iOS gained the `@property` + `color-mix()` baseline at 16.4. */
+const WEBKIT_MINOR_FLOOR = Object.freeze({ major: 16, minor: 4 });
 
 export const MINK_STOREFRONT_BROWSER_ISSUES = [
   "runtime_error",
@@ -43,7 +58,9 @@ export function minkStorefrontBrowserIdentity(userAgent: string): {
   const edge = /Edg\/(\d+)/.exec(userAgent);
   const chromium = /(?:Chrome|CriOS)\/(\d+)/.exec(userAgent);
   const firefox = /(?:Firefox|FxiOS)\/(\d+)/.exec(userAgent);
-  const safari = /Version\/(\d+)(?:\.\d+)*[^\n]*Safari\//.exec(userAgent);
+  const safari = /Version\/(\d+)(?:\.(\d+))?(?:\.\d+)*[^\n]*Safari\//.exec(
+    userAgent,
+  );
   const family: MinkStorefrontBrowserFamily =
     edge || chromium
       ? "chromium"
@@ -55,7 +72,17 @@ export function minkStorefrontBrowserIdentity(userAgent: string): {
   const major = Number((edge ?? chromium ?? firefox ?? safari)?.[1] ?? 0);
   const floor =
     family === "unknown" ? null : MINK_STOREFRONT_BROWSER_FLOORS[family];
-  return { family, major, supported: floor !== null && major >= floor };
+  // Only Safari needs the minor: 16.0-16.3 are outside browserslist while 16.4
+  // is inside it, and the stored payload carries no minor field.
+  const belowWebkitMinor =
+    family === "webkit" &&
+    major === WEBKIT_MINOR_FLOOR.major &&
+    Number(safari?.[2] ?? 0) < WEBKIT_MINOR_FLOOR.minor;
+  return {
+    family,
+    major,
+    supported: floor !== null && major >= floor && !belowWebkitMinor,
+  };
 }
 
 export interface MinkStorefrontBrowserFrameResult {

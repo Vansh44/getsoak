@@ -1984,6 +1984,20 @@ is introduced. Migration `20260905_0080_mink_builder_chat_help` documents this
 flow. Echos acceptance prompts now use ordinary merchant wording and short
 follow-ups, with technical attack probes in a separate appendix.
 
+Mink Phase 8A adds requested daily/weekly business briefs on the existing
+restart-safe workflow queue. Daily covers yesterday; weekly covers the last
+7 completed local days, compared with preceding local calendar days. The four
+checks cover sales, current stock separately by location, return-record
+activity (original order location) and current failed-payment status for
+orders created in the historical window. Insufficient baselines are labelled,
+not guessed. Analytics/Products/Inventory/Orders View and captured scope are
+revalidated; scope narrowing cancels a checkpointed brief. No model calls run
+in the worker. Migration `20260905_0081_mink_phase_8a_business_briefs` adds the
+template and Help guide. Echos tests are ECH-P8A-01–24. Phase 8B recurring
+opt-in watch rules are next; Phase 8C approved proactive responses and Phase
+8D approved memory/optional inputs remain unbuilt. Conversion monitoring
+requires a separately validated source and is not claimed by Phase 8A.
+
 ### Returns, exchanges, BORIS, credit notes
 
 Spec: `docs/returns-exchanges-plan.md`. The twelve `returns.*` settings,

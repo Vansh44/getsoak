@@ -20,6 +20,7 @@ import {
 } from "../storefront-context-read";
 import type { MinkActorContext, MinkArtifact } from "../types";
 import {
+  enqueueBusinessBrief,
   enqueueDelayedPickupReview,
   enqueueProductLaunchPreparation,
   enqueueRevenueDeclineInvestigation,
@@ -661,6 +662,68 @@ const listLowStock: MinkTool = {
       inventoryDashboardPath: location.selectedId
         ? `/dashboard/inventory?location=${encodeURIComponent(location.selectedId)}`
         : "/dashboard/inventory",
+    };
+  },
+};
+
+const startBusinessBrief: MinkTool = {
+  declaration: {
+    name: "start_business_brief",
+    description:
+      "Prepare a private business overview when the merchant asks for a daily/weekly business brief or what needs attention across the business. Daily covers yesterday; weekly covers the last 7 completed local calendar days, with a preceding calendar-period comparison. Combines sales, current inventory separately by accessible active location, return-record activity and current failed-payment status of orders created in the period. Optional location_name selects one exact accessible location. Returns a background progress card, with fixed evidence rules and insufficient-data labels; no additional model calls. This is a one-off brief, not a recurring watch or automatic action. Use existing read tools for a simple current sales/stock question or today's partial figures.",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {
+        period: {
+          type: "string",
+          enum: ["daily", "weekly"],
+          description: "Defaults to daily.",
+        },
+        location_name: {
+          type: "string",
+          minLength: 1,
+          maxLength: 100,
+          description:
+            "Optional exact accessible location such as Shop or Delhi.",
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  permission: { section: "analytics", action: "view" },
+  available: (actor) =>
+    can(actor.permissions, "products", "view", actor.isSuperadmin) &&
+    can(actor.permissions, "inventory", "view", actor.isSuperadmin) &&
+    can(actor.permissions, "orders", "view", actor.isSuperadmin),
+  timeoutMs: 7_000,
+  artifact(output) {
+    return workflowArtifact(output, {
+      template: "business_brief",
+      title: "Business brief",
+      description:
+        "Sales, location-level stock, returns and payment-status evidence.",
+    });
+  },
+  async execute(actor, args) {
+    if (
+      Object.keys(args).some(
+        (key) => key !== "period" && key !== "location_name",
+      )
+    )
+      throw new MinkToolInputError(
+        "Business briefs accept only period and location_name.",
+      );
+    const period = readEnum(
+      args.period,
+      ["daily", "weekly"] as const,
+      "period",
+      "daily",
+    );
+    return {
+      workflow: await enqueueBusinessBrief(actor, {
+        period,
+        locationName: args.location_name,
+      }),
     };
   },
 };
@@ -1368,6 +1431,7 @@ export const minkReadToolRegistry = new MinkToolRegistry([
   getCurrentProduct,
   getSalesSummary,
   listLowStock,
+  startBusinessBrief,
   startWeeklyTradingReport,
   startRevenueDeclineInvestigation,
   startProductLaunchPreparation,

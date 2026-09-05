@@ -596,9 +596,24 @@ export function isMinkDraftKind(value: unknown): value is MinkDraftKind {
   return MINK_DRAFT_KINDS.includes(value as MinkDraftKind);
 }
 
+/**
+ * Normalize one stored draft payload.
+ *
+ * ★ `historicalSnapshot` marks a `before_json` value — a copy of what the
+ * merchant already had, not newly generated output. The generated-patch size
+ * ceiling must NOT be applied to it: `custom_code` legally holds up to
+ * `CODE_MAX_CHARS` (64 KiB) in EACH of html/css/js, so an existing section can
+ * exceed the 96 KiB combined AI-patch limit and still be a valid saved
+ * section. Enforcing the patch limit against that snapshot rejected the whole
+ * proposal after credits had already been charged, with an error that blamed
+ * the proposal's own code. Same reasoning as
+ * `readStoredStorefrontCodeConfig`: validate a historical snapshot's SHAPE,
+ * never retroactively hold it to a limit that only governs new output.
+ */
 export function normalizeMinkDraftContent(
   kind: MinkDraftKind,
   value: unknown,
+  { historicalSnapshot = false }: { historicalSnapshot?: boolean } = {},
 ): MinkDraftContent {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("Draft content must be an object.");
@@ -703,7 +718,10 @@ export function normalizeMinkDraftContent(
     ) {
       throw new Error("Fixed height must be a whole number from 40 to 4000.");
     }
-    if (result.html.length + result.css.length + result.js.length > 96 * 1024) {
+    if (
+      !historicalSnapshot &&
+      result.html.length + result.css.length + result.js.length > 96 * 1024
+    ) {
       throw new Error("Combined storefront code must be at most 96 KiB.");
     }
   }
@@ -860,7 +878,14 @@ export function estimateMinkDraftIntent(message: string): {
     return null;
   }
   const kind: MinkDraftKind | null =
-    /\b(storefront|website|homepage|home page|hero|banner|carousel|page section|custom code)\b.*\b(code|html|css|javascript|design|redesign|build|create|generate)\b|\b(code|html|css|javascript|design|redesign|build|create|generate)\b.*\b(storefront|website|homepage|home page|hero|banner|carousel|page section|custom code)\b/.test(
+    // ★ THIS BRANCH IS FIRST, SO IT SHADOWS EVERY MORE SPECIFIC ONE BELOW IT.
+    // It therefore needs an EXPLICIT code-or-design signal, not a generic verb:
+    // pairing `website` with `create` matched "create a new product for my
+    // website" and quoted 5 credits for a 3-credit product draft, and
+    // `homepage` with `generate` swallowed "generate a blog post for the
+    // homepage". `code` is likewise absent on its own — "coupon code",
+    // "promo code" and "discount code" all belong to other branches.
+    /\b(?:storefront|website|home ?page|landing page|page section|hero|banner|carousel)\b[\s\S]{0,80}\b(?:custom code|html|css|javascript|design|redesign|restyle)\b|\b(?:custom code|html|css|javascript|design|redesign|restyle)\b[\s\S]{0,80}\b(?:storefront|website|home ?page|landing page|page section|hero|banner|carousel)\b/.test(
       value,
     )
       ? "storefront_custom_code"

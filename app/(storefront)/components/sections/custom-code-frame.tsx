@@ -279,7 +279,14 @@ export function CustomCodeFrame({
       srcDoc={srcDoc}
       title={title}
       loading="lazy"
-      referrerPolicy="no-referrer"
+      // ★ STRICT PREVIEWS ONLY. A live section has no CSP, so merchant HTML/JS
+      // may legitimately load third-party resources — and a srcdoc document
+      // inherits this element's referrer policy, so applying it here would
+      // strip `Referer` from those requests. Google Maps, reCAPTCHA and
+      // hotlink-protected CDNs restrict keys BY referrer, so an existing,
+      // working custom-code section would silently start failing. Phase 7B/7D
+      // previews block the network outright, so there the policy costs nothing.
+      referrerPolicy={strictNetworkIsolation ? "no-referrer" : undefined}
       style={{ width: "100%", height, border: 0, display: "block" }}
     />
   );

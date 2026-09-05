@@ -11,7 +11,23 @@ const state = vi.hoisted(() => ({
   inserts: [] as Array<{ table: string; values: any }>,
   updates: [] as Array<{ table: string; values: any }>,
   updateReturns: {} as Record<string, any[][]>,
+  /** Tables locked with `for update`, in acquisition order. */
+  locked: [] as string[],
 }));
+
+/**
+ * Recover the literal text of a Drizzle `sql` template so a test can assert
+ * WHICH row a raw `for update` statement locked. Only the string chunks are
+ * needed — the interpolated ids are irrelevant to lock ordering.
+ */
+function lockedTable(query: any): string | null {
+  const text = ((query?.queryChunks ?? []) as any[])
+    .map((chunk) => (Array.isArray(chunk?.value) ? chunk.value.join("") : ""))
+    .join(" ")
+    .replace(/\s+/g, " ");
+  if (!/for update/i.test(text)) return null;
+  return /from\s+public\.([a-z_]+)/i.exec(text)?.[1] ?? "unknown";
+}
 
 function take(queue: any[][] | undefined) {
   if (!queue?.length) return [];
@@ -66,7 +82,11 @@ function chain(
 }
 
 const db = {
-  execute: async () => state.executeRows.shift() ?? { rows: [] },
+  execute: async (query: any) => {
+    const table = lockedTable(query);
+    if (table) state.locked.push(table);
+    return state.executeRows.shift() ?? { rows: [] };
+  },
   select: () => chain(),
   insert: (table: any) => chain(getTableName(table), "insert"),
   update: (table: any) => chain(getTableName(table), "update"),
@@ -365,6 +385,7 @@ beforeEach(() => {
   state.inserts = [];
   state.updates = [];
   state.updateReturns = {};
+  state.locked = [];
 });
 
 describe("Mink Phase 7D storefront publication", () => {
@@ -415,6 +436,44 @@ describe("Mink Phase 7D storefront publication", () => {
       sourceApprovalId: SAVE_APPROVAL_ID,
       resultId: null,
     });
+  });
+
+  // ★★ SAME CANONICAL ORDER AS EVERY OTHER PHASE: approval -> draft -> page.
+  // This preview is the only one in the codebase that locks a PRE-EXISTING
+  // approval row (the completed Phase 7C save), so taking the draft first
+  // inverted it against `executeMinkStorefrontCodeAction` and made the two
+  // deadlockable. Values are identical either way, so this has to be asserted
+  // as an order.
+  it("locks the source approval before the draft, keeping one global order", async () => {
+    state.selects.mink_action_tool_access = [[{ enabled: true }]];
+    state.selects.mink_drafts = [[draft()]];
+    state.selects.mink_action_approvals = [[saveApproval()]];
+    state.selects.mink_action_audit = [
+      [
+        {
+          id: AUDIT_ID,
+          outcome: "executed",
+          resourceVersionAfter: SAVE_VERSION,
+        },
+      ],
+    ];
+    state.selects.store_pages = [[page()]];
+
+    const { previewMinkStorefrontPublication } =
+      await import("./storefront-publication-actions");
+    await previewMinkStorefrontPublication({
+      actor: actor(),
+      draftId: DRAFT_ID,
+      sourceApprovalId: SAVE_APPROVAL_ID,
+      idempotencyKey: "99999999-9999-4999-8999-999999999999",
+      browserValidation: evidence(),
+    });
+
+    expect(state.locked).toEqual([
+      "mink_action_approvals",
+      "mink_drafts",
+      "store_pages",
+    ]);
   });
 
   it("rejects stale, failed or wrong-patch browser evidence", async () => {
@@ -509,6 +568,53 @@ describe("Mink Phase 7D storefront publication", () => {
       resourceType: "storefront_page",
       resultId: PAGE_ID,
     });
+  });
+
+  it("executes under the same approval-before-draft order", async () => {
+    state.selects.mink_action_approvals = [
+      [publicationApproval()],
+      [saveApproval()],
+    ];
+    state.selects.store_pages = [[page()]];
+    state.selects.mink_drafts = [[draft()]];
+    state.selects.mink_action_audit = [
+      [
+        {
+          id: AUDIT_ID,
+          outcome: "executed",
+          resourceVersionAfter: SAVE_VERSION,
+        },
+      ],
+    ];
+    state.executeRows = [
+      { rows: [] },
+      { rows: [{ enabled: true }] },
+      { rows: [] },
+      { rows: [] },
+      { rows: [] },
+    ];
+    state.updateReturns.store_pages = [
+      [{ id: PAGE_ID, updatedAt: PUBLISH_VERSION }],
+    ];
+    state.updateReturns.mink_action_approvals = [[{ id: PUBLISH_APPROVAL_ID }]];
+
+    const { executeMinkStorefrontPublication } =
+      await import("./storefront-publication-actions");
+    await executeMinkStorefrontPublication({
+      actor: actor(),
+      draftId: DRAFT_ID,
+      approvalId: PUBLISH_APPROVAL_ID,
+    });
+
+    // Both approval rows come before the draft: this publication approval
+    // first, then the Phase 7C save it is bound to.
+    expect(state.locked).toEqual([
+      "mink_action_approvals",
+      "mink_action_tool_access",
+      "mink_action_approvals",
+      "mink_drafts",
+      "store_pages",
+    ]);
   });
 
   it("restores the exact prior live snapshot without changing the Builder draft", async () => {

@@ -18,6 +18,12 @@ describe("Mink system prompt document", () => {
     );
     expect(template).toContain("{{available_tool_names}}");
     expect(template).toContain("{{brand_voice_or_default}}");
+    expect(template).toContain("Use start_business_brief");
+    expect(template).toContain("daily covers yesterday");
+    expect(template).toContain("Never invent a workflow-result lookup tool");
+    expect(template).toContain(
+      "Missing brief permissions must not be bypassed",
+    );
     expect(template).toContain(
       "one exact visible SKU, one exact accessible active location",
     );

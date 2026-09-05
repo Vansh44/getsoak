@@ -1,6 +1,6 @@
 # Mink AI Dashboard Agent — Architecture and Delivery Plan
 
-> **Status:** Phases 0–4, Phases 5A–5F, Phases 6A–6E and Phases 7A–7D are implemented in code. Phase 2
+> **Status:** Phases 0–4, Phases 5A–5F, Phases 6A–6E, Phases 7A–7D and Phase 8A are implemented in code. Phase 2
 > remains the invited read-only merchant beta. Phase 3 adds a separate,
 > fail-closed operator opt-in
 > for private versioned drafts and atomic weighted credits through migration
@@ -1391,6 +1391,38 @@ Exit criteria:
 
 ### Phase 8 — Proactive operations and optional specialists
 
+**Implementation split (2026-09-05):**
+
+- **8A — Requested business briefs: implemented.** Daily (yesterday) and weekly
+  (last 7 completed local days), compared with preceding complete calendar
+  periods. The existing durable worker produces four deterministic evidence
+  checks: recognized net-sales decline ≥20% with ≥5 previous recognized orders
+  and positive previous net sales; per-location tracked SKU shortages; return
+  records increasing ≥50% from ≥5 previous records; and ≥3 created orders with
+  current failed-payment status representing ≥20% of created orders. Sparse
+  evidence is labelled insufficient, and no threshold triggered is not an
+  all-clear. Returns are not a return rate; payment status is not gateway
+  attempt history. Inventory is current and location-separated. No conversion
+  signal is claimed. Source errors fail/retry the brief, with no extra model
+  calls. Requires four View permissions (Analytics, Products, Inventory,
+  Orders); uses captured scope, maximum 50 active locations, per-step checks,
+  cancellation on narrowing, private notification, readback isolation and
+  existing retry/cancel controls. Migration 0081 and ECH-P8A-01–24 cover this
+  release. Merchant end-to-end and live model routing checks remain deployment
+  acceptance gates, not implied by unit tests. Local verification: 5,959 tests
+  passed (10 skipped), 88 focused checks passed, TypeScript/lint and production
+  build passed. Migration 0081 was exercised in isolated PostgreSQL, including
+  manifest checks, safe repeat execution and rollback on missing Help guidance.
+- **8B — Opt-in recurring watch rules: next, not implemented.** Scheduling,
+  deduplicated alerts, quiet hours, pause/delete and bounded notification costs.
+- **8C — Approved proactive responses: not implemented.** Evidence-ranked
+  proposed responses under explicit action scope, limits and approvals.
+- **8D — Approved memory and optional inputs: not implemented.** Merchant-owned
+  memories, retention/deletion and separately validated optional input channels.
+
+Phase 8A does not start schedules or perform actions in response to a signal.
+The remaining original Phase 8 objectives below belong to later subphases.
+
 **Duration:** 4–6 weeks for the first release, then ongoing
 
 Deliver:
@@ -1610,7 +1642,17 @@ would move risk into production rather than remove work.
 
 ## 21. Immediate next sprint
 
-Validate the completed Phase 7D storefront-coding boundary before Phase 8:
+Phase 8A implementation is complete locally. Before enabling it on a deployed
+revision, apply `20260905_0081_mink_phase_8a_business_briefs`, run
+ECH-P8A-01–24 against Echos with the existing workflow worker, and verify date,
+scope, source-failure and permission-revocation outcomes. No new environment
+variables or recurring jobs are required. Phase 8B is the next implementation:
+explicit opt-in recurring watches, deduplication, quiet hours and pause/delete.
+Do not infer live model routing accuracy or production latency from unit tests.
+
+The Phase 7D deployment acceptance checklist remains applicable:
+
+Validate the completed Phase 7D storefront-coding boundary:
 
 1. Apply migrations `20260904_0077_mink_phase_7b_storefront_code_preview`,
    `20260904_0078_mink_phase_7c_builder_draft_save` and
@@ -1628,7 +1670,7 @@ Validate the completed Phase 7D storefront-coding boundary before Phase 8:
    proposal charges five credits; draft save, checks, publication and rollback
    use no model call and no second credit charge.
 5. Use the Phase 7 exit metrics to decide whether to graduate the storefront
-   coding beta before beginning Phase 8 proactive operations. Keep media/image
+   coding beta before broadening into recurring proactive operations. Keep media/image
    generation outside this publication authority until its own asset provenance,
    moderation, storage, placement and approval boundary is implemented.
 

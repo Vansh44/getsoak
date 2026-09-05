@@ -28,4 +28,16 @@ describe("selectMinkThinkingLevel", () => {
   ])("keeps read and analysis requests on low thinking: %s", (message) => {
     expect(selectMinkThinkingLevel(message, proposalTool)).toBe("low");
   });
+
+  // ⚠ HIGH reasoning is paid for on every turn it fires, so an everyday verb
+  // beside an everyday noun must not select it. `page`, `section` and a bare
+  // `code` all occur in requests that have nothing to do with builder code.
+  it.each([
+    "Can you update the description on the product page?",
+    "Fix the tax class on this section",
+    "Create a coupon code for regulars",
+    "Update stock for SKU TEA-500 in Delhi",
+  ])("keeps ordinary dashboard work on low thinking: %s", (message) => {
+    expect(selectMinkThinkingLevel(message, proposalTool)).toBe("low");
+  });
 });

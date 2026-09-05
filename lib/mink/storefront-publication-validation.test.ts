@@ -117,7 +117,74 @@ describe("Mink Phase 7D publication validation", () => {
       ),
     ).toEqual({ family: "chromium", major: 140, supported: true });
     expect(
-      minkStorefrontBrowserIdentity("Mozilla/5.0 Version/16.6 Safari/605.1.15"),
-    ).toEqual({ family: "webkit", major: 16, supported: false });
+      minkStorefrontBrowserIdentity("Mozilla/5.0 Version/26.0 Safari/605.1.15"),
+    ).toEqual({ family: "webkit", major: 26, supported: true });
+    expect(minkStorefrontBrowserIdentity("Mozilla/5.0 Firefox/118.0")).toEqual({
+      family: "firefox",
+      major: 118,
+      supported: false,
+    });
+    expect(minkStorefrontBrowserIdentity("Mozilla/5.0 curl/8.4.0")).toEqual({
+      family: "unknown",
+      major: 0,
+      supported: false,
+    });
+  });
+
+  // ★ The publication floor may not be stricter than package.json's
+  // `browserslist` (chrome/edge 111, safari/ios_saf 16.4). It is re-enforced
+  // server-side with no override, and macOS Monterey caps out at Safari 16.x,
+  // so a stricter floor left a supported merchant unable to publish at all.
+  it("accepts exactly the browsers the app itself supports", () => {
+    expect(
+      minkStorefrontBrowserIdentity("Mozilla/5.0 Version/16.4 Safari/605.1.15")
+        .supported,
+    ).toBe(true);
+    expect(
+      minkStorefrontBrowserIdentity("Mozilla/5.0 Version/16.6 Safari/605.1.15")
+        .supported,
+    ).toBe(true);
+    expect(
+      minkStorefrontBrowserIdentity(
+        "Mozilla/5.0 Chrome/111.0.0.0 Safari/537.36",
+      ).supported,
+    ).toBe(true);
+    // Below the stated floor in both families, including Safari's 16.4 minor.
+    expect(
+      minkStorefrontBrowserIdentity("Mozilla/5.0 Version/16.3 Safari/605.1.15")
+        .supported,
+    ).toBe(false);
+    expect(
+      minkStorefrontBrowserIdentity("Mozilla/5.0 Version/16 Safari/605.1.15")
+        .supported,
+    ).toBe(false);
+    expect(
+      minkStorefrontBrowserIdentity(
+        "Mozilla/5.0 Chrome/110.0.0.0 Safari/537.36",
+      ).supported,
+    ).toBe(false);
+  });
+
+  // ★ A bare /\bid\s*=/ scan also matched `data-id=`, so ordinary data
+  // attributes were reported as duplicate element IDs and refused publication
+  // — while the in-frame `querySelectorAll("[id]")` check saw none.
+  it("does not mistake repeated data attributes for duplicate element IDs", () => {
+    const result = validateMinkStorefrontPublicationStatic(
+      config({
+        html: '<div data-id="card"><h2>One</h2></div><div data-id="card"><h3>Two</h3></div>',
+      }),
+    );
+    expect(result.issues).not.toContain("Element IDs must be unique.");
+    expect(result.passed).toBe(true);
+  });
+
+  it("still rejects a genuinely duplicated element id", () => {
+    expect(
+      validateMinkStorefrontPublicationStatic(
+        config({
+          html: '<div id="card"><h2>One</h2></div><div id="card"><h3>Two</h3></div>',
+        }),
+      ).issues,
+    ).toContain("Element IDs must be unique.");
   });
 });
