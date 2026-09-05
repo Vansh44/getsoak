@@ -1592,21 +1592,13 @@ wholesip/
 │                              # missing/draft/empty guide drift is repaired before publication.
 │                              # It follows the 0049/0050 UX migrations.
 ├── scripts/
-│   ├── dev-server.mjs         # ★ resource-aware Next dev runner: 2 GB heap on ≤12 GB
-│   │                          # machines, 3 GB on ≤20 GB, uncapped above; rotates
-│   │                          # generated .next/dev caches over 3 GB, ALWAYS reclaims
-│   │                          # .next/cache over 256 MB (next build's webpack cache —
-│   │                          # Turbopack dev never reads it, so dropping it is a free
-│   │                          # reclaim, not a speed trade); warns when swap is ≥60%
-│   │                          # full BEFORE starting; drops a `.metadata_never_index`
-│   │                          # marker in .next/node_modules/coverage on every start
-│   │                          # (they are gitignored AND wiped by dev:reset / npm ci,
-│   │                          # so a one-time marker silently disappears); signal-safe.
-│   │                          # ⚠ The heap cap bounds V8's old space ONLY — Turbopack
-│   │                          # is Rust, so its module graph and source maps are native
-│   │                          # allocations outside it. Measured on M2/8 GB: 90 MB at
-│   │                          # boot → 1.77 GB after eight routes, cap never binding.
-│   │                          # Restarting the server is what reclaims memory, not the cap
+│   ├── dev-server.mjs         # Next dev runner: V8 old-space cap of 2 GB on ≤12 GB
+│   │                          # RAM, 3 GB on ≤20 GB; native memory is NOT capped.
+│   │                          # Turbopack default; honors explicit --webpack/--turbo.
+│   │                          # Preserves caches; DEV_CACHE_MAX_MB enables opt-in
+│   │                          # .next/dev rotation, dev:reset resets it manually.
+│   │                          # Warns about existing swap without diagnosing paging;
+│   │                          # best-effort Spotlight markers and signal forwarding.
 │   ├── db-migrate.mjs         # ★ status/baseline/apply/verify + recovery-only audit/adopt
 │   │                          # runner: physical DB guard, advisory lock, one transaction
 │   │                          # per migration, checksum drift/unknown-row refusal, and
@@ -9092,24 +9084,24 @@ way — an entry there is a deliberate act, not a way to silence the guard.
 
 ## 6. Commands
 
-> **Dev feels slow?** Read `docs/local-dev-performance.md` before tuning
-> anything. It is measured, and the answer is almost never the bundler:
-> compiles run 13 ms–1.5 s, while **every DB query costs ~46 ms** because
-> `db:proxy` points at a Cloud SQL instance in Mumbai — so a page render spends
-> 300–500 ms on network before React starts. Independent dashboard-shell reads
-> run concurrently, but the durable fix for the remaining network floor is a
-> local Postgres (not built; the doc says what it would take). On an 8 GB machine
-> the second cost is memory, so the default dev runner now caps Next at 2 GB,
-> rotates `.next/dev` only after its generated cache exceeds 3 GB, and always
-> reclaims `.next/cache` (dead in dev) once it passes 256 MB. **The cap bounds
-> V8's old space only** — Turbopack's native memory sits outside it, so total RSS
-> still climbs through a session; restart the server rather than trusting the cap.
-> The runner also warns when swap is already ≥60% full at startup, because on an
-> 8 GB machine that, not compilation, is what the slowdown actually is.
+> **Dev feels slow?** See `docs/local-dev-performance.md`. September's saved
+> trace contains 60 s login compilation and 43 s builder compilation: August's
+> fast timings must not be treated as a permanent diagnosis. The 8 GB Mac also
+> showed 6.4 GB swap used and 3.3 GB compressed RAM. Check current memory pressure
+> and separate compile time from render/database time. The runner limits V8's
+> old space, not total process memory. Warm caches are preserved by default;
+> `DEV_CACHE_MAX_MB` opts into size-based dev-cache rotation, and `dev:reset` is
+> for cache recovery, not routine speed tuning. `dev:all:webpack` provides an
+> explicit alternative bundler with the same proxy and V8 heap policy. Its
+> relative speed/memory must be measured; it is not a guaranteed improvement.
+> This is internal development tooling; customer flows and Help Centre content
+> are unchanged.
 
 ```bash
 npm run dev         # resource-aware next dev --turbopack: 2 GB heap on ≤12 GB RAM,
                     #   3 GB on ≤20 GB, uncapped above; test stores via {slug}.localhost:3000
+npm run dev:webpack # alternative bundler; same V8 heap policy
+npm run dev:all:webpack # Webpack + Cloud SQL proxy; compare when Turbopack is sluggish
 npm run dev:lean    # force the 2 GB heap regardless of detected machine memory
 npm run dev:full    # explicitly disable the heap cap (for high-memory machines/debugging)
 npm run dev:reset   # delete generated .next/dev only; next launch recompiles cold once
