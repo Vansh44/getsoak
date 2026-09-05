@@ -1,6 +1,6 @@
 # Mink AI Dashboard Agent — Architecture and Delivery Plan
 
-> **Status:** Phases 0–4, Phases 5A–5F, Phases 6A–6E and Phases 7A–7C are implemented in code. Phase 2
+> **Status:** Phases 0–4, Phases 5A–5F, Phases 6A–6E and Phases 7A–7D are implemented in code. Phase 2
 > remains the invited read-only merchant beta. Phase 3 adds a separate,
 > fail-closed operator opt-in
 > for private versioned drafts and atomic weighted credits through migration
@@ -56,9 +56,12 @@
 > Migration `20260904_0078_mink_phase_7c_builder_draft_save` adds the
 > default-off action vocabulary, exact-target approval/audit constraints,
 > partial indexes and guarded private Builder draft-save guidance.
+> Migration `20260904_0079_mink_phase_7d_storefront_publication` adds the
+> independent publication gate, full-page snapshot constraints and checked
+> publication/exact-rollback Help contract.
 > No transfer,
 > cancellation, refund, payment/shipment/pickup/POS lifecycle mutation, product/page/
-> storefront or bulk publication, arbitrary-recipient or direct customer
+> bulk or unrestricted storefront publication, arbitrary-recipient or direct customer
 > contact, membership, unbounded catalogue repricing or arbitrary-code authority is
 > present.
 >
@@ -1253,15 +1256,18 @@ Exit criteria:
 Merchant coding scope is the Website Builder and sandboxed custom-code
 sections—not StoreMink platform development.
 
-**Implementation split:** Phases 7A, 7B and 7C are built. Phase 7A adds read-only
+**Implementation split:** Phases 7A, 7B, 7C and 7D are built. Phase 7A adds read-only
 builder context and the strict patch/sandbox contract. Phase 7B adds one
 immutable private generated-code proposal against an existing custom-code
 section plus a network-isolated preview, without builder save or publication
 authority. Phase 7C adds a separately operator-gated, five-minute human
 approval that saves the exact reviewed replacement to one existing private
 Builder draft section with idempotency, transaction-level conflict protection
-and append-only audit outcomes. It cannot publish. Phase 7D will
-add a separate publish approval, accessibility/browser checks and exact
+and append-only audit outcomes. It cannot publish. Phase 7D adds a second
+default-off, human-only publication boundary: static accessibility/responsive
+validation, isolated current-browser checks at exact desktop/mobile widths, a
+new five-minute approval tied to the completed draft save and complete
+draft/live snapshots, atomic publication and a separately approved exact
 rollback.
 
 Deliver:
@@ -1340,7 +1346,35 @@ Phase 7B delivered:
 Phase 7C intentionally stops at the private Website Builder draft. Its fresh
 human-only action endpoint accepts only the immutable proposal version and an
 idempotency or approval ID; page, section and code values are loaded from the
-server-side proposal and exact current target. Publication remains Phase 7D.
+server-side proposal and exact current target. Publication is available only
+through the independent Phase 7D boundary below.
+
+Phase 7D delivered:
+
+- no new Gemini tool: the proposal card exposes the publication workflow only
+  after an exact Phase 7C save has completed for the signed-in proposal owner;
+- a separate `publish_storefront_code` operator gate, Website Builder Manage
+  check and custom-code entitlement recheck at review and execution;
+- deterministic publication checks for accessible names, image alternatives,
+  labels, unique IDs, heading order, keyboard focus, reduced motion and unsafe
+  mobile minimum widths;
+- opaque-origin, no-network browser validation at exactly 1,280 px desktop and
+  390 px mobile, reporting bounded runtime, CSP, horizontal-overflow and DOM
+  accessibility results without persisting the raw user agent;
+- a five-minute publication approval whose integrity hash binds the exact
+  proposal, completed Phase 7C save, tenant/admin, page version, complete
+  current live and Builder-draft section snapshots, code digest and browser
+  evidence;
+- one atomic, optimistic-lock publication that copies the checked full Builder
+  snapshot to `published_sections`, updates publication state/timestamp, keeps
+  `sections` unchanged, revalidates storefront caches and schedules the
+  existing indexing notification;
+- an independent five-minute rollback approval that restores only the exact
+  previous published snapshot, leaves the current private Builder draft
+  untouched and refuses rollback after any intervening live-page change; and
+- idempotent replay plus append-only executed, conflicted and expired audit
+  outcomes. Publication/rollback perform no model call and consume no extra AI
+  credits beyond the original five-credit code proposal.
 
 The merchant agent must not edit StoreMink's Next.js repository. If an internal
 StoreMink engineering agent is later built, it must be a separate operator-only
@@ -1576,23 +1610,27 @@ would move risk into production rather than remove work.
 
 ## 21. Immediate next sprint
 
-Validate Phase 7C before beginning the separate Phase 7D publication boundary:
+Validate the completed Phase 7D storefront-coding boundary before Phase 8:
 
-1. Apply migration `20260904_0077_mink_phase_7b_storefront_code_preview`, then
-   `20260904_0078_mink_phase_7c_builder_draft_save`; verify the full action
-   vocabulary, exact target constraints, indexes and Help Centre contract.
-2. Run ECH-P7C-01 through ECH-P7C-13 in Echos. Confirm successful approval
-   changes only one entry in `store_pages.sections`; `published_sections`, page
-   status and `published_at` must remain unchanged.
-3. Exercise expiry, stale page/section, replay, operator-gate, permission,
-   custom-code entitlement, hostile browser payload and cross-tenant cases.
-   Every terminal execution/conflict/expiry must have one audit outcome.
-4. Measure proposal HIGH-thinking cost separately from approval: the proposal
-   charges five credits, while review and execution use no model call and no
-   second credit charge.
-5. Design Phase 7D as a separate publication approval against the exact saved
-   draft version, with automated accessibility/browser/CSP checks and exact
-   rollback. Do not reuse the Phase 7C approval for publication.
+1. Apply migrations `20260904_0077_mink_phase_7b_storefront_code_preview`,
+   `20260904_0078_mink_phase_7c_builder_draft_save` and
+   `20260904_0079_mink_phase_7d_storefront_publication` in order. Enable the
+   draft-save and checked-publication gates independently for Echos.
+2. Run ECH-P7C-01 through ECH-P7C-13, then ECH-P7D-01 through ECH-P7D-14.
+   Confirm Phase 7C changes only `sections`; Phase 7D publication changes only
+   `published_sections`, status and `published_at`; exact rollback restores the
+   prior published checkpoint without changing `sections`.
+3. Exercise unsupported/outdated browsers, accessibility/runtime/CSP/layout
+   failures, evidence and approval expiry, stale save/live page, replay,
+   operator-gate, permission, entitlement, hostile payload and cross-tenant
+   cases. Every terminal execution/conflict/expiry must have one audit outcome.
+4. Measure proposal HIGH-thinking cost separately from human actions: the
+   proposal charges five credits; draft save, checks, publication and rollback
+   use no model call and no second credit charge.
+5. Use the Phase 7 exit metrics to decide whether to graduate the storefront
+   coding beta before beginning Phase 8 proactive operations. Keep media/image
+   generation outside this publication authority until its own asset provenance,
+   moderation, storage, placement and approval boundary is implemented.
 
 The intended outcome is not “Gemini 3.7 answered impressively.” It is:
 

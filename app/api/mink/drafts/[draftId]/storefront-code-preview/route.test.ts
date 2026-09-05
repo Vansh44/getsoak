@@ -6,6 +6,7 @@ const holder = vi.hoisted(() => ({
   actor: vi.fn(),
   preview: vi.fn(),
   latestAction: vi.fn(),
+  latestPublication: vi.fn(),
   rateAllowed: true,
 }));
 
@@ -23,6 +24,9 @@ vi.mock("@/lib/mink/storefront-code-proposals", () => ({
 }));
 vi.mock("@/lib/mink/storefront-code-actions", () => ({
   getLatestMinkStorefrontCodeAction: holder.latestAction,
+}));
+vi.mock("@/lib/mink/storefront-publication-actions", () => ({
+  getLatestMinkStorefrontPublication: holder.latestPublication,
 }));
 vi.mock("@/lib/rate-limit", () => ({
   rateLimit: vi.fn(async () => ({ allowed: holder.rateAllowed })),
@@ -48,6 +52,7 @@ beforeEach(() => {
   });
   holder.preview.mockResolvedValue({ id: DRAFT_ID, targetState: "current" });
   holder.latestAction.mockResolvedValue(null);
+  holder.latestPublication.mockResolvedValue(null);
 });
 
 describe("GET /api/mink/drafts/[draftId]/storefront-code-preview", () => {
@@ -67,6 +72,7 @@ describe("GET /api/mink/drafts/[draftId]/storefront-code-preview", () => {
     expect(await response.json()).toEqual({
       preview: { id: DRAFT_ID, targetState: "current" },
       lastAction: null,
+      lastPublication: null,
     });
   });
 

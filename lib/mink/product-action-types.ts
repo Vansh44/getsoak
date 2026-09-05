@@ -35,7 +35,10 @@ export const MINK_MARKETING_ACTION_TOOLS = ["send_campaign"] as const;
 
 export const MINK_PRICING_ACTION_TOOLS = ["bulk_update_prices"] as const;
 
-export const MINK_STOREFRONT_ACTION_TOOLS = ["apply_storefront_code"] as const;
+export const MINK_STOREFRONT_ACTION_TOOLS = [
+  "apply_storefront_code",
+  "publish_storefront_code",
+] as const;
 
 export const MINK_ACTION_TOOLS = [
   ...MINK_PRODUCT_ACTION_TOOLS,
@@ -130,6 +133,7 @@ export const MINK_ACTION_TOOL_LABELS: Record<MinkActionTool, string> = {
   update_offer: "Disabled offer updates",
   activate_offer: "Turning an offer on",
   apply_storefront_code: "Website Builder draft code saves",
+  publish_storefront_code: "Checked storefront publication and rollback",
 };
 
 export function actionToolForDraftKind(

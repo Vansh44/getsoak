@@ -32,6 +32,30 @@ describe("CustomCodeFrame Phase 7B isolation", () => {
     expect(source).toContain("Private preview");
   });
 
+  it("adds the bounded Phase 7D validation harness without weakening isolation", () => {
+    render(
+      <CustomCodeFrame
+        config={CONFIG}
+        title="Mink checked publication"
+        strictNetworkIsolation
+        validation={{
+          token: "validation-token",
+          viewport: "mobile",
+          width: 390,
+          onResult: () => undefined,
+        }}
+      />,
+    );
+    const frame = screen.getByTitle("Mink checked publication");
+    expect(frame).toHaveAttribute("sandbox", "allow-scripts");
+    const source = frame.getAttribute("srcdoc") ?? "";
+    expect(source).toContain('source:"sm-cc-validation"');
+    expect(source).toContain('viewport:"mobile"');
+    expect(source).toContain("width:390");
+    expect(source).toContain("securitypolicyviolation");
+    expect(source).toContain("horizontal_overflow");
+  });
+
   it("does not change the established live-storefront sandbox contract", () => {
     render(<CustomCodeFrame config={CONFIG} title="Live custom section" />);
     const frame = screen.getByTitle("Live custom section");

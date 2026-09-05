@@ -20,7 +20,12 @@ import type {
   MinkStorefrontCodeActionResult,
   MinkStorefrontCodeActionValues,
 } from "@/lib/mink/storefront-code-action-types";
+import type { MinkStorefrontPublicationResult } from "@/lib/mink/storefront-publication-types";
 import type { MinkArtifact } from "@/lib/mink/types";
+import {
+  MinkStorefrontPublicationControls,
+  readPublicationResult,
+} from "./mink-storefront-publication-controls";
 
 type Proposal = Extract<MinkArtifact, { type: "storefront_code_proposal" }>;
 type SourceField = "html" | "css" | "js";
@@ -41,6 +46,8 @@ export function MinkStorefrontCodeProposalCard({
     useState<MinkStorefrontCodeActionApproval | null>(null);
   const [actionResult, setActionResult] =
     useState<MinkStorefrontCodeActionResult | null>(null);
+  const [publicationResult, setPublicationResult] =
+    useState<MinkStorefrontPublicationResult | null>(null);
   const [actionBusy, setActionBusy] = useState<"preview" | "execute" | null>(
     null,
   );
@@ -56,6 +63,7 @@ export function MinkStorefrontCodeProposalCard({
           error: null,
         });
         setActionResult(loaded.lastAction);
+        setPublicationResult(loaded.lastPublication);
       })
       .catch((requestError) => {
         if (controller.signal.aborted) return;
@@ -154,6 +162,7 @@ export function MinkStorefrontCodeProposalCard({
         error: null,
       });
       setActionResult(loaded.lastAction);
+      setPublicationResult(loaded.lastPublication);
     } catch {
       // Keep the actionable server refusal already shown. A manual card reload
       // will retry the private preview without replacing that verdict.
@@ -169,6 +178,7 @@ export function MinkStorefrontCodeProposalCard({
         preview: loaded.preview,
         error: null,
       });
+      setPublicationResult(loaded.lastPublication);
       return loaded.lastAction?.approval.id === approvalId
         ? loaded.lastAction
         : null;
@@ -405,13 +415,22 @@ export function MinkStorefrontCodeProposalCard({
                 {actionError}
               </div>
             ) : null}
+
+            <MinkStorefrontPublicationControls
+              draftId={proposal.draftId}
+              patchDigest={preview.patchDigest}
+              config={preview.proposedConfig}
+              savedAction={actionResult}
+              initialResult={publicationResult}
+            />
           </>
         ) : null}
 
         <div className="rounded-xl border border-[#e5e1eb] bg-[#f8f7fa] px-3 py-2 text-[9px] leading-4 text-[#65616b]">
-          This proposal is immutable. Phase 7C can save its exact code only to
-          the private Website Builder draft after approval; it cannot publish
-          the page, access StoreMink source code, run shell commands or deploy.
+          This proposal is immutable. Phase 7C can save its exact code to the
+          private Builder draft. Phase 7D requires separate checks and approval
+          to publish or roll back; neither phase can access repository code, run
+          shell commands, commit or deploy.
         </div>
       </div>
     </section>
@@ -494,6 +513,7 @@ async function requestPreview(
 ): Promise<{
   preview: MinkStorefrontCodePreviewDto;
   lastAction: MinkStorefrontCodeActionResult | null;
+  lastPublication: MinkStorefrontPublicationResult | null;
 }> {
   const response = await fetch(
     `/api/mink/drafts/${encodeURIComponent(draftId)}/storefront-code-preview`,
@@ -512,6 +532,12 @@ async function requestPreview(
       body.lastAction !== null &&
       body.lastAction !== undefined
         ? readActionResult(body.lastAction, draftId)
+        : null,
+    lastPublication:
+      isRecord(body) &&
+      body.lastPublication !== null &&
+      body.lastPublication !== undefined
+        ? readPublicationResult(body.lastPublication, draftId)
         : null,
   };
 }

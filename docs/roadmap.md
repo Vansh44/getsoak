@@ -1963,15 +1963,19 @@ semantic sections before cross-article fusion. The next retrieval step is an
 operator-owned golden query set with measured recall/precision before changing
 the default similarity threshold or introducing any approximate vector index.
 
-Mink storefront coding Phase 7C is now implemented behind a separate default-off
-operator gate. A signed-in proposal owner with Website Builder Manage can review
-a complete immutable custom-code diff and create a five-minute approval tied to
-the exact tenant, admin, proposal version, page version and section digest. One
-transaction replaces only that existing section in `store_pages.sections`,
-records execution/conflict/expiry in the action audit, and makes retries
-idempotent. It never touches `published_sections`, page publication state,
-header/footer, repository code or deployment. Phase 7D publication,
-accessibility/browser validation and exact rollback remain next.
+Mink storefront coding Phase 7D is now implemented behind a second independent,
+default-off operator gate. After the signed-in proposal owner completes the
+Phase 7C draft save, the card runs static checks plus opaque-origin, no-network
+browser checks at exact 1,280 px desktop and 390 px mobile widths. A new
+five-minute approval binds that evidence, the completed save, complete private
+draft/current-live snapshots and the exact page version. One optimistic,
+idempotent transaction copies only the checked snapshot to
+`published_sections`, updates publication state/time and records an append-only
+outcome; no model tool can click or execute it. A separate five-minute rollback
+approval restores the exact previous published snapshot only while the live
+page is unchanged and never rewinds the private Builder draft. Phase 7 exit
+validation is next; media generation and placement require their own future
+provenance, moderation, storage and approval boundary.
 
 ### Returns, exchanges, BORIS, credit notes
 
