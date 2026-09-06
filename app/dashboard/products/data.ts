@@ -75,6 +75,8 @@ export async function getProductCreateData(): Promise<{
         settings: stores.settings,
         plan: stores.plan,
         planExpiresAt: stores.planExpiresAt,
+        compPlan: stores.compPlan,
+        compExpiresAt: stores.compExpiresAt,
       })
       .from(stores)
       .where(eq(stores.id, storeId))
@@ -87,6 +89,8 @@ export async function getProductCreateData(): Promise<{
     const plan = effectivePlan({
       plan: storeRows[0]?.plan,
       plan_expires_at: storeRows[0]?.planExpiresAt,
+      comp_plan: storeRows[0]?.compPlan ?? null,
+      comp_expires_at: storeRows[0]?.compExpiresAt ?? null,
     });
     const productLimit = PLAN_LIMITS[plan].maxProducts;
     const productCount = productCountRow?.n ?? 0;

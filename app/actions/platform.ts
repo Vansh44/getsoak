@@ -101,6 +101,10 @@ export interface PlatformStoreRow {
   status: string;
   plan: string;
   plan_expires_at: string | null; // timed plans — null = indefinite
+  /** Comped-plan overlay (docs/comped-plans-spec.md). Carried so the console
+   *  shows the EFFECTIVE plan, which is what every gate actually reads. */
+  comp_plan: string | null;
+  comp_expires_at: string | null;
   custom_domain: string | null;
   created_at: string;
   owner_email: string | null; // superadmin who set the store up (from admins)
@@ -192,6 +196,8 @@ export async function listAllStores(q?: string): Promise<PlatformStoreRow[]> {
           status: stores.status,
           plan: stores.plan,
           plan_expires_at: stores.planExpiresAt,
+          comp_plan: stores.compPlan,
+          comp_expires_at: stores.compExpiresAt,
           custom_domain: stores.customDomain,
           created_at: stores.createdAt,
         })
@@ -353,7 +359,12 @@ export async function setStorePlan(
 
   const storeRows = await withService((db) =>
     db
-      .select({ plan: stores.plan, plan_expires_at: stores.planExpiresAt })
+      .select({
+        plan: stores.plan,
+        plan_expires_at: stores.planExpiresAt,
+        comp_plan: stores.compPlan,
+        comp_expires_at: stores.compExpiresAt,
+      })
       .from(stores)
       .where(eq(stores.id, storeId))
       .limit(1),

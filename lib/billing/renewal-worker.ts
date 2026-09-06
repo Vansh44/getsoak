@@ -195,7 +195,18 @@ async function claimDue(db: Db, now: Date, limit: number): Promise<DueRow[]> {
     .where(
       and(
         inArray(billingSubscriptions.state, ["active", "past_due", "grace"]),
-        sql`${billingSubscriptions.planSource} <> 'comp'`,
+        // ★★ THERE IS NO COMP EXEMPTION HERE ANY MORE, and its absence is
+        // deliberate — see docs/comped-plans-spec.md §7 and migration 0078.
+        // A comped plan is an entitlement OVERLAY resolved at read time; holding
+        // a free upgrade never means the merchant stopped paying for the plan
+        // underneath, so skipping collection would turn a gift into a silent
+        // payment holiday. The predicate was also a latent trap:
+        // `billing_subscriptions.plan_source` DEFAULTS to 'comp' and only
+        // becomes 'paid' at activation, so a half-enrolled row was permanently
+        // uninvoiceable and undowngradeable with nothing reporting it. The
+        // matching predicate inside `billing_claim_downgrade()` went with it —
+        // removing only the TypeScript ones would invoice and chase a
+        // subscription that the atomic claim then silently refuses to downgrade.
         // ★★ A CANCELLED SUBSCRIPTION IS NOT INVOICED. It ends at the period end,
         // so raising a document for the cycle after it would bill a merchant who
         // explicitly stopped — and, because grace and downgrade follow an unpaid
@@ -458,7 +469,6 @@ export async function evaluateCycleTurns(
         .where(
           and(
             eq(billingSubscriptions.state, "active"),
-            sql`${billingSubscriptions.planSource} <> 'comp'`,
             isNotNull(billingSubscriptions.currentPeriodEnd),
             lte(billingSubscriptions.currentPeriodEnd, now.toISOString()),
           ),
@@ -817,7 +827,6 @@ export async function downgradeExpired(
         .where(
           and(
             inArray(billingSubscriptions.state, ["past_due", "grace"]),
-            sql`${billingSubscriptions.planSource} <> 'comp'`,
             isNotNull(billingSubscriptions.graceEndsAt),
             lte(billingSubscriptions.graceEndsAt, now.toISOString()),
           ),

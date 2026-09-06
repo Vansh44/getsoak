@@ -1,5 +1,14 @@
-import { describe, it, expect } from "vitest";
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { makeDbMock } from "@/app/actions/_test-helpers";
+
+const dbHolder = vi.hoisted(() => ({ current: null as any }));
+vi.mock("@/lib/db/client", () => ({
+  withService: (fn: any) => fn(dbHolder.current.db),
+}));
+
 import {
+  resolveBillingEmail,
   planActivatedTemplate,
   paymentReceiptTemplate,
   paymentFailedTemplate,
@@ -93,5 +102,77 @@ describe("billing email templates", () => {
     });
     expect(e.html).not.toContain("<script>x</script>");
     expect(e.html).toContain("&lt;script&gt;");
+  });
+});
+
+/**
+ * ★★ THE REGRESSION THIS PINS: no phone, no subscription.
+ *
+ * `startEnrolment` refuses before Razorpay unless it gets BOTH fields back, so
+ * a null phone here is not a cosmetic omission — it is a store that cannot
+ * subscribe at all. `admins.phone` was the only source and signup never wrote
+ * it, which took every wizard-created store's Subscribe button out of service.
+ */
+describe("resolveBillingEmail", () => {
+  const STORE = "store-1";
+  const store = [{ name: "Echos", slug: "echos" }];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function seed(owner: any[], billing: any[]) {
+    dbHolder.current = makeDbMock({ selectQueue: [store, owner, billing] });
+  }
+
+  it("prefers the owner's own verified number", async () => {
+    seed(
+      [{ email: "owner@echos.test", phone: "+919000000001" }],
+      [{ contact_email: "billing@echos.test", contact_phone: "+919000000002" }],
+    );
+    expect(await resolveBillingEmail(STORE)).toMatchObject({
+      email: "owner@echos.test",
+      phone: "+919000000001",
+    });
+  });
+
+  it("★★ falls back to the invoice contact phone when the admin row has none", async () => {
+    seed(
+      [{ email: "owner@echos.test", phone: null }],
+      [{ contact_email: null, contact_phone: "+919814468834" }],
+    );
+    expect(await resolveBillingEmail(STORE)).toMatchObject({
+      email: "owner@echos.test",
+      phone: "+919814468834",
+    });
+  });
+
+  it("normalises the invoice contact phone to E.164", async () => {
+    seed(
+      [{ email: "owner@echos.test", phone: null }],
+      [{ contact_email: null, contact_phone: "98144 68834" }],
+    );
+    expect((await resolveBillingEmail(STORE))?.phone).toBe("+919814468834");
+  });
+
+  it("★ refuses a landline or placeholder rather than registering an unreachable mandate", async () => {
+    seed(
+      [{ email: "owner@echos.test", phone: null }],
+      [{ contact_email: null, contact_phone: "022-24001234" }],
+    );
+    expect((await resolveBillingEmail(STORE))?.phone).toBeNull();
+  });
+
+  it("never pairs the owner's number with someone else's billing email", async () => {
+    seed([], [{ contact_email: "billing@echos.test", contact_phone: null }]);
+    expect(await resolveBillingEmail(STORE)).toMatchObject({
+      email: "billing@echos.test",
+      phone: null,
+    });
+  });
+
+  it("is null when no email exists at all", async () => {
+    seed([], [{ contact_email: null, contact_phone: "+919814468834" }]);
+    expect(await resolveBillingEmail(STORE)).toBeNull();
   });
 });

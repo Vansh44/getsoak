@@ -4687,8 +4687,38 @@ export const stores = pgTable(
       withTimezone: true,
       mode: "string",
     }),
+    /**
+     * The comped-plan OVERLAY (docs/comped-plans-spec.md, migration 0077).
+     *
+     * ★ Deliberately separate from `plan`/`planSource`/`planExpiresAt`, which
+     * describe the PAID entitlement. A comp is resolved on top of those at read
+     * time by `effectivePlan`, so when it lapses there is nothing to revert.
+     *
+     * The operator sets `compPlan` + `compDurationDays` (the duration) and the
+     * merchant's acceptance sets `compStartsAt`/`compExpiresAt` (the window).
+     */
+    compPlan: text("comp_plan"),
+    compDurationDays: integer("comp_duration_days"),
+    compOfferedAt: timestamp("comp_offered_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    compStartsAt: timestamp("comp_starts_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    compExpiresAt: timestamp("comp_expires_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
   },
   (table) => [
+    index("stores_comp_expiry_idx")
+      .using(
+        "btree",
+        table.compExpiresAt.asc().nullsLast().op("timestamptz_ops"),
+      )
+      .where(sql`(comp_expires_at IS NOT NULL)`),
     index("stores_plan_expiry_idx")
       .using(
         "btree",

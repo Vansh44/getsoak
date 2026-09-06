@@ -455,6 +455,29 @@ describe("confirmEnrolment", () => {
     expect(store.finalizeInvoice).toHaveBeenCalledWith(INVOICE, NOW);
   });
 
+  it("★★ FINALIZES BEFORE SETTLING — settling a DRAFT leaves a paid invoice unpaid", async () => {
+    // The regression this pins cost 20 days of phantom debt on production.
+    //
+    // `syncInvoiceStatus` claims the move to paid with
+    // `inArray(status, ["open", "processing"])`. While an invoice is still a
+    // DRAFT that claim matches zero rows, so settling first captures the money,
+    // leaves the invoice unpaid, sends no receipt, and reports nothing — and
+    // `finalizeInvoice` then stamps `status: "open"`, i.e. an open bill behind a
+    // captured payment. Store `echos` was chased for a ₹15 invoice it had paid
+    // on 2026-08-16 until 2026-09-05, when clicking "Pay now" re-synced it and
+    // fired a "Payment received" email for a payment the merchant had CANCELLED.
+    //
+    // Order is the whole fix, so order is what this asserts. Both calls are
+    // mocked, so nothing else in this file can catch a swap.
+    seedConfirm();
+    await confirmEnrolment(args);
+    expect(store.finalizeInvoice).toHaveBeenCalled();
+    expect(collect.settleAttempt).toHaveBeenCalled();
+    expect(store.finalizeInvoice.mock.invocationCallOrder[0]).toBeLessThan(
+      collect.settleAttempt.mock.invocationCallOrder[0],
+    );
+  });
+
   it("★ finalizes only AFTER the signature verifies", async () => {
     rzp.verifyCheckoutSignature.mockReturnValue(false);
     seedConfirm();

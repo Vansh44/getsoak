@@ -5,6 +5,13 @@
 > No production customers exist, so this replaces the current Razorpay
 > Subscriptions design rather than migrating it.
 
+> **Free grants layered over a paid subscription** (an operator comping a month
+> of Pro to a store already paying for Basic) are specified separately in
+> **`docs/comped-plans-spec.md`**. That case does not belong here because the
+> correct answer is to keep it OUT of the billing tables entirely: a comp is an
+> entitlement overlay resolved at read time, never a cycle, an invoice or a
+> mutation of `stores.plan`.
+
 **Decisions already settled by the owner** (2026-08-11) and treated as fixed
 inputs below:
 

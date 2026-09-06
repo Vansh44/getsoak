@@ -49,7 +49,13 @@ export const POS_URL = `https://pos.${ROOT_DOMAIN}`;
 export function storeOrigin(
   store: Pick<
     Store,
-    "slug" | "custom_domain" | "settings" | "plan" | "plan_expires_at"
+    | "slug"
+    | "custom_domain"
+    | "settings"
+    | "plan"
+    | "plan_expires_at"
+    | "comp_plan"
+    | "comp_expires_at"
   >,
 ): string {
   const verified = store.settings?.custom_domain_verified === true;

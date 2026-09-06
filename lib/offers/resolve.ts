@@ -453,7 +453,12 @@ export async function offerCapacity(
 ): Promise<{ limit: number | null; active: number }> {
   return withService(async (db) => {
     const [store] = await db
-      .select({ plan: stores.plan, planExpiresAt: stores.planExpiresAt })
+      .select({
+        plan: stores.plan,
+        planExpiresAt: stores.planExpiresAt,
+        compPlan: stores.compPlan,
+        compExpiresAt: stores.compExpiresAt,
+      })
       .from(stores)
       .where(eq(stores.id, storeId))
       .limit(1);
@@ -463,7 +468,16 @@ export async function offerCapacity(
       .where(and(eq(offers.storeId, storeId), eq(offers.status, "active")));
     // effectivePlan, never the stored one: an expired timed grant IS free
     // today, and the gate reads it that way (CODEBASE.md §15).
-    const limits = limitsFor(store ? effectivePlan(store) : "free");
+    const limits = limitsFor(
+      store
+        ? effectivePlan({
+            plan: store.plan,
+            plan_expires_at: store.planExpiresAt,
+            comp_plan: store.compPlan,
+            comp_expires_at: store.compExpiresAt,
+          })
+        : "free",
+    );
     return { limit: limits.maxActiveOffers, active: row?.n ?? 0 };
   });
 }

@@ -45,7 +45,9 @@ this 8 GB Mac; `dev:full` removes that protection and is not a speed fix.
 Caches are now preserved across restarts. The previous runner automatically
 removed `.next/dev` over 3 GB and `.next/cache` over 256 MB. Deleting caches
 can force recompilation; disk cache size is not resident memory usage.
-Next 16.2.12 enables Turbopack development filesystem caching by default.
+Next 16.2.12 enables Turbopack development filesystem caching by default;
+the runner disables it when Turbopack runs on a ≤12 GB machine, where it was
+measured stalling requests — see "Turbopack's filesystem cache" below.
 `DEV_CACHE_MAX_MB=3072 npm run dev:all` restores opt-in dev-cache rotation for
 machines short on disk. `npm run dev:reset` explicitly deletes `.next/dev`;
 stop the server first and use it only for cache recovery or deliberate cleanup.
@@ -104,6 +106,55 @@ tracing permanently. See the installed Next.js guides in
 
 These changes affect developer tooling only. No merchant/customer flow changes,
 Help Centre migration, POS acceptance updates or roadmap phase changes apply.
+
+## Turbopack's filesystem cache
+
+Measured 2026-09-06, before this runner defaulted small machines to Webpack, so
+it describes what happens when **Turbopack is used on a machine that is
+swapping** — today that means forcing `--turbopack` on ≤12 GB.
+
+`experimental.turbopackFileSystemCacheForDev` became enabled by default in
+Next 16.1. It writes and periodically compacts a database under
+`.next/dev/cache`. With that cache at 2.88 GB on an 8 GB M2, one session logged:
+
+```
+✓ Finished writing to filesystem cache in 2.5min
+✓ Finished filesystem cache database compaction in 12.8s
+⚠ Slow filesystem detected. The benchmark took 794ms.
+```
+
+During the first of those, an ordinary request measured:
+
+```
+POST /api/auth/session 200 in 102s (next.js: 101s, application-code: 1564ms)
+```
+
+**Read that split before drawing a conclusion.** 1.5 s was the route's own work
+and 101 s was the framework, so this is not the ~46 ms database round trip and
+not slow application code — the server was blocked behind its own cache write.
+A large `next.js:` number with a small `application-code:` number points here.
+
+The cost is disk IO, and on a machine already paging the SSD is the contended
+resource, so the cache competes with swap. Next's own "Slow filesystem detected"
+warning is that contention observed from the inside; the disk is busy, not slow.
+
+Measured with the cache off, same routes: `GET /` 20.4 s → 5.7 s, `GET /signup`
+10.0 s → 0.85 s, `.next/dev` 3.15 GB → 0.27 GB, and none of the stall lines
+above. ⚠ That is a low-memory result and does not generalise — it says the cache
+loses on a machine that is swapping, not that it loses everywhere.
+
+The runner therefore leaves the cache **on** where there is RAM to spare and
+turns it **off** when Turbopack runs on a ≤12 GB machine, reclaiming any
+`.next/dev/cache` left behind. Turning it off costs cold compiles after a
+restart; Turbopack still caches in memory, so edit-refresh is unaffected.
+
+```bash
+npm run dev -- --turbopack --fs-cache     # force the cache ON  (DEV_FS_CACHE=1)
+npm run dev -- --turbopack --no-fs-cache  # force it OFF        (DEV_FS_CACHE=0)
+```
+
+Running `npx next dev` directly sets nothing and keeps Next's own default: the
+runner adds behaviour rather than redefining the framework's.
 
 ## Webpack tuning from official guidance
 

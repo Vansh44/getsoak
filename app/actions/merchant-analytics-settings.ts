@@ -42,6 +42,8 @@ const STORE_COLUMNS = {
   settings: stores.settings,
   plan: stores.plan,
   plan_expires_at: stores.planExpiresAt,
+  comp_plan: stores.compPlan,
+  comp_expires_at: stores.compExpiresAt,
 };
 
 async function readStore(storeId: string) {

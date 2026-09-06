@@ -72,6 +72,8 @@ async function readStoreRow(storeId: string) {
         settings: stores.settings,
         plan: stores.plan,
         plan_expires_at: stores.planExpiresAt,
+        comp_plan: stores.compPlan,
+        comp_expires_at: stores.compExpiresAt,
       })
       .from(stores)
       .where(eq(stores.id, storeId))

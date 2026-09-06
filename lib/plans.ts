@@ -44,25 +44,99 @@ export function normalizePlan(plan: unknown): Plan {
 }
 
 /**
- * The plan a store is ACTUALLY entitled to right now: its stored plan unless
- * that plan has expired (plan_expires_at in the past ⇒ free). Every gate that
- * reads stores.plan must resolve through this — the expiry cron flips rows
- * durably, but only once a day. An unparseable expiry is treated as
- * indefinite (fail open — junk data must never strip a paying merchant).
+ * What a store may be entitled to, as `effectivePlan` reads it.
+ *
+ * ★★ THE COMP FIELDS ARE REQUIRED, AND THAT IS THE POINT — not an oversight to
+ * tidy into optionals later.
+ *
+ * `plan`/`plan_expires_at` are optional because they always were, and 18 of the
+ * 40 call sites pass an object literal or a `?? {}` fallback. If the comp fields
+ * were optional too, every one of those would compile unchanged and silently
+ * ignore the comp: the merchant is told they have Pro and gets Basic, with no
+ * error anywhere and nothing in a log. Requiring them turns that into one build
+ * error per call site — the same technique `OrderInsert` uses for the two
+ * trigger-owned columns and `withUser` for the email field.
+ *
+ * A caller that genuinely has no comp data passes `null` explicitly and means
+ * it.
+ */
+export interface PlanEntitlement {
+  plan?: unknown;
+  plan_expires_at?: string | Date | null;
+  comp_plan: unknown;
+  comp_expires_at: string | Date | null;
+}
+
+/** A store with no comp overlay — the explicit "I checked, there isn't one". */
+export const NO_COMP = { comp_plan: null, comp_expires_at: null } as const;
+
+/** Parse a timestamp that may be a Date, an ISO string, or junk. */
+function instant(raw: string | Date | null | undefined): number | null {
+  if (raw == null) return null;
+  const d = raw instanceof Date ? raw : new Date(raw);
+  const t = d.getTime();
+  return Number.isNaN(t) ? null : t;
+}
+
+/**
+ * The plan a store is ACTUALLY entitled to right now.
+ *
+ * Two independent grants, resolved by rank:
+ *
+ *   - the PAID entitlement — `plan`, unless `plan_expires_at` has passed;
+ *   - the COMP overlay — `comp_plan`, while `comp_expires_at` is in the future.
+ *
+ * Every gate that reads `stores.plan` must resolve through this. The expiry
+ * crons flip both durably, but only once a day.
+ *
+ * ★★ THE COMP IS AN OVERLAY, NEVER A REPLACEMENT, and that is what makes its
+ * expiry free. Nothing writes the comp into `plan`, so when the window closes
+ * the paid entitlement underneath is simply what remains — there is no "put
+ * them back on Basic" step that could be forgotten or fail. See
+ * docs/comped-plans-spec.md §4.
+ *
+ * ★ IT CAN ONLY EVER RAISE. A comp at or below the paid rank is inert, so a Pro
+ * subscriber handed a comped Basic keeps Pro rather than being quietly demoted
+ * by a gift.
+ *
+ * ★ An unparseable expiry is treated as INDEFINITE for the paid plan (fail
+ * open — junk data must never strip a paying merchant) and as ABSENT for the
+ * comp (fail closed — junk data must never manufacture an entitlement nobody
+ * granted). The asymmetry is deliberate: one direction protects a customer, the
+ * other protects the business, and both err away from the expensive mistake.
  */
 export function effectivePlan(
-  store: {
-    plan?: unknown;
-    plan_expires_at?: string | Date | null;
-  },
+  store: PlanEntitlement,
   now: Date = new Date(),
 ): Plan {
+  const paid = paidEntitlement(store, now);
+  const comp = compEntitlement(store, now);
+  return PLAN_RANK[comp] > PLAN_RANK[paid] ? comp : paid;
+}
+
+function paidEntitlement(store: PlanEntitlement, now: Date): Plan {
   const plan = normalizePlan(store.plan);
-  const raw = store.plan_expires_at;
-  if (plan === "free" || raw == null) return plan;
-  const expiresAt = raw instanceof Date ? raw : new Date(raw);
-  if (Number.isNaN(expiresAt.getTime())) return plan;
-  return expiresAt.getTime() <= now.getTime() ? "free" : plan;
+  if (plan === "free") return plan;
+  const expiresAt = instant(store.plan_expires_at);
+  if (expiresAt === null) return plan; // indefinite, or unparseable — fail open.
+  return expiresAt <= now.getTime() ? "free" : plan;
+}
+
+function compEntitlement(store: PlanEntitlement, now: Date): Plan {
+  const plan = normalizePlan(store.comp_plan);
+  if (plan === "free") return "free";
+  const expiresAt = instant(store.comp_expires_at);
+  // No window, or an unreadable one, means no comp. Fail closed.
+  if (expiresAt === null) return "free";
+  return expiresAt <= now.getTime() ? "free" : plan;
+}
+
+/** Is a comp overlay live right now? For UI that must name it explicitly. */
+export function compActive(
+  store: PlanEntitlement,
+  now: Date = new Date(),
+): boolean {
+  return compEntitlement(store, now) !== "free";
 }
 
 /** Is `plan` at or above `minPlan`? (No minPlan = available on every plan.) */

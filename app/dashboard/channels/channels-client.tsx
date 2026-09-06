@@ -385,9 +385,9 @@ export function ChannelsClient({
               def={c}
               badge={
                 c.id === "razorpay" && !state.planAllowsOnlinePayments
-                  ? { text: "Basic plan", tone: "amber", icon: Lock }
+                  ? { text: "Basic plan onwards", tone: "amber", icon: Lock }
                   : c.id === "shiprocket" && !shiprocketState.availableOnPlan
-                    ? { text: "Basic plan", tone: "amber", icon: Lock }
+                    ? { text: "Basic plan onwards", tone: "amber", icon: Lock }
                     : undefined
               }
               cta="Connect"
