@@ -28,6 +28,9 @@ export interface RzpOrder {
   status: string;
   /** Set on a recurring authorisation order: the rail the mandate is bound to. */
   method?: string | null;
+  /** How many times a payment has been tried against this order. 0 = untouched. */
+  attempts?: number | null;
+  amount_paid?: number | null;
 }
 
 export interface RzpPayment {

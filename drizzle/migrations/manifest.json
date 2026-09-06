@@ -3291,6 +3291,33 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260906_0079_mandate_rail_choice_help",
+      "description": "Document the card / UPI Autopay renewal-rail choice and the resumed-window exception",
+      "file": "sql/20260906_0079_mandate_rail_choice_help.sql",
+      "checksum": "536d37b7dfefc65ab9232e64e23d730cd35de47746baa6dc3c3c84bf040dcdf0",
+      "transaction": true,
+      "requires": ["20260906_0078_drop_subscription_comp_exemption"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "the plan guide explains the renewal-rail choice",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and slug = 'manage-your-storemink-plan-and-subscription' and body like '%<h2>Choose how renewals are charged</h2>%' and body like '%UPI Autopay%' and body like '%cannot be changed after a mandate is authorised%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "the plan guide already explains the renewal-rail choice",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and slug = 'manage-your-storemink-plan-and-subscription' and body like '%<h2>Choose how renewals are charged</h2>%' and body like '%UPI Autopay%' and body like '%cannot be changed after a mandate is authorised%'",
+            "equals": "1"
+          }
+        ]
+      }
     }
   ]
 }
