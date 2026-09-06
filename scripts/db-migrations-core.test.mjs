@@ -22,8 +22,8 @@ describe("database migration controls", () => {
   it("loads the repository manifest and checksums the enrolled SQL", async () => {
     const loaded = await loadManifest();
     expect(loaded.baseline.id).toBe("baseline:cloudsql-2026-08-14");
-    // 75 shared + three billing migrations + seven Mink migrations.
-    expect(loaded.migrations).toHaveLength(85);
+    // 75 shared + five billing migrations + seven Mink migrations.
+    expect(loaded.migrations).toHaveLength(87);
     // Keep the already-applied billing block before pending Mink migrations;
     // otherwise the migration planner rejects the database as out_of_order.
     expect(loaded.migrations.at(-1)).toMatchObject({

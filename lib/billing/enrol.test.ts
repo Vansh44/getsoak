@@ -39,6 +39,11 @@ const rzp = vi.hoisted(() => ({
     data: { id: "order_1", method: "card" },
   })),
   rzpCreateCustomer: vi.fn(),
+  // Defaults to an unreadable list: "we could not check" is never "nobody
+  // paid", so the conservative branch is what an unconfigured test gets.
+  rzpFetchOrderPayments: vi.fn<(...a: unknown[]) => Promise<unknown>>(
+    async () => ({ ok: false, error: "not stubbed", outcome: "unknown" }),
+  ),
   // Read on every confirm to learn whether the checkout registered a mandate.
   // Default deliberately has no token to cover the post-payment anomaly path.
   rzpFetchPayment: vi.fn<(...a: unknown[]) => Promise<unknown>>(async () => ({
@@ -74,6 +79,8 @@ const store = vi.hoisted(() => ({
   loadTaxContext: vi.fn(),
   loadInvoiceParties: vi.fn(),
   ensureRenewalInvoice: vi.fn(),
+  getCycleInvoice: vi.fn(),
+  reshapeDraftSubscriptionInvoice: vi.fn(),
   finalizeInvoice: vi.fn(),
   amountDueForInvoice: vi.fn(),
 }));
@@ -94,6 +101,10 @@ import { RECURRING_CHARGE_VERIFIED } from "./gateway";
 const STORE = "store-1";
 const INVOICE = "inv-1";
 const NOW = new Date("2026-09-01T00:00:00.000Z");
+/** A monthly cycle is a 30-day DURATION, never a calendar month. */
+const MONTHLY_CYCLE_END = new Date(
+  NOW.getTime() + 30 * 86_400_000,
+).toISOString();
 const CYCLE_END = "2026-10-01T00:00:00.000Z";
 
 const priceFor = vi.fn(async () => ({
@@ -121,6 +132,17 @@ beforeEach(() => {
   // ⚠ clearAllMocks clears CALLS, not IMPLEMENTATIONS — and this default
   // matters: a missing token after money moved must still grant the paid plan.
   rzp.rzpFetchPayment.mockResolvedValue({ ok: true, data: { id: "pay_1" } });
+  // Same trap: the rail tests below override this, and without restoring it
+  // here the override leaks into whichever test `test:shuffle` runs next.
+  rzp.rzpFetchOrder.mockResolvedValue({
+    ok: true,
+    data: { id: "order_1", method: "card" },
+  });
+  rzp.rzpFetchOrderPayments.mockResolvedValue({
+    ok: false,
+    error: "not stubbed",
+    outcome: "unknown",
+  });
   rzp.verifyCapturedCheckoutPayment.mockResolvedValue({
     ok: true,
     gatewayRead: true,
@@ -144,12 +166,25 @@ beforeEach(() => {
     customerGstin: null,
     placeOfSupply: null,
   });
+  // ★ Matches what `args` would build — monthly at ₹5,000, ending one 30-day
+  // cycle after NOW — so the ordinary path does NOT look like a merchant who
+  // changed their plan. A mismatch here would send every test through the
+  // reshape branch, which is the opposite of representative.
   store.ensureRenewalInvoice.mockResolvedValue({
     id: INVOICE,
     status: "draft",
     finalizedAt: null,
     invoiceRef: null,
+    totalPaise: 5_000_00,
+    periodStart: NOW.toISOString(),
+    periodEnd: MONTHLY_CYCLE_END,
   });
+  store.reshapeDraftSubscriptionInvoice.mockResolvedValue(null);
+  // No earlier enrolment invoice: the ordinary path, where nothing is stale.
+  store.getCycleInvoice.mockResolvedValue(null);
+  // Same trap again: the reshape tests below override the price, and
+  // clearAllMocks clears CALLS, not IMPLEMENTATIONS.
+  priceFor.mockResolvedValue({ planPaise: 5_000_00, locationPaise: 1_000_00 });
   store.finalizeInvoice.mockResolvedValue({ id: INVOICE, status: "open" });
   store.amountDueForInvoice.mockResolvedValue(5_000_00);
   collect.beginAttempt.mockResolvedValue({
@@ -352,6 +387,414 @@ describe("startEnrolment", () => {
     });
     // ★ And it must NOT open a second order at the gateway.
     expect(rzp.rzpCreateOrder).not.toHaveBeenCalled();
+  });
+
+  it("★★ a SECOND click on the SAME plan is not a changed plan", async () => {
+    // The cycle is anchored to the instant it was raised, so two Subscribe
+    // clicks a minute apart produce different period ENDPOINTS for the very
+    // same plan. Comparing instants would call every ordinary resume a change —
+    // abandoning the order the resume branch exists to protect, and refusing a
+    // merchant who is simply mid-payment. The comparison is amount + LENGTH.
+    store.getCycleInvoice.mockResolvedValue({
+      id: INVOICE,
+      status: "draft",
+      finalizedAt: null,
+      invoiceRef: null,
+      totalPaise: 5_000_00,
+      // Raised a minute before this click: same 30-day cycle, later endpoints.
+      periodStart: new Date(NOW.getTime() - 60_000).toISOString(),
+      periodEnd: new Date(
+        NOW.getTime() - 60_000 + 30 * 86_400_000,
+      ).toISOString(),
+    });
+
+    await startEnrolment(args);
+
+    expect(store.reshapeDraftSubscriptionInvoice).not.toHaveBeenCalled();
+    expect(collect.settleAttempt).not.toHaveBeenCalledWith(
+      expect.anything(),
+      "failed",
+      expect.objectContaining({ failureCode: "shape_changed" }),
+    );
+  });
+
+  it("★ reshapes an invoice with no period recorded rather than assuming it fits", async () => {
+    // An unknown duration cannot be shown to match, and billing one is worse
+    // than rewriting a draft nobody has received.
+    store.getCycleInvoice.mockResolvedValue({
+      id: INVOICE,
+      status: "draft",
+      finalizedAt: null,
+      invoiceRef: null,
+      totalPaise: 5_000_00,
+      periodStart: null,
+      periodEnd: null,
+    });
+
+    await startEnrolment(args);
+
+    expect(store.reshapeDraftSubscriptionInvoice).toHaveBeenCalled();
+  });
+
+  it("★★ RESHAPES the cycle-1 invoice when the merchant changes plan or period", async () => {
+    // `ensureRenewalInvoice` is idempotent on (store, kind, cycle_seq) — right
+    // for a renewal, wrong for an enrolment, where the invoice is raised the
+    // first time anyone opens Checkout and the merchant is still choosing.
+    // Measured on production 2026-09-06: a merchant who picked Pro monthly,
+    // dismissed Checkout, then picked Pro YEARLY was quoted ₹2,400 for a full
+    // year of Pro, because `activate` reads the period off the SUBSCRIPTION and
+    // the amount off the INVOICE. ₹21,600 short, silently.
+    // A stale MONTHLY invoice sitting in front of a yearly enrolment.
+    store.getCycleInvoice.mockResolvedValue({
+      id: INVOICE,
+      status: "draft",
+      finalizedAt: null,
+      invoiceRef: null,
+      totalPaise: 5_000_00,
+      periodStart: NOW.toISOString(),
+      periodEnd: MONTHLY_CYCLE_END,
+    });
+    store.reshapeDraftSubscriptionInvoice.mockResolvedValue({
+      id: INVOICE,
+      status: "draft",
+      finalizedAt: null,
+      invoiceRef: null,
+      totalPaise: 50_000_00,
+      periodStart: NOW.toISOString(),
+      periodEnd: new Date(NOW.getTime() + 365 * 86_400_000).toISOString(),
+    });
+    priceFor.mockResolvedValue({
+      planPaise: 50_000_00,
+      locationPaise: 10_000_00,
+    });
+
+    await startEnrolment({ ...args, period: "yearly" });
+
+    const call = store.reshapeDraftSubscriptionInvoice.mock.calls[0][0];
+    expect(call).toMatchObject({ invoiceId: INVOICE, storeId: STORE });
+    // Rewritten to the YEARLY cycle, not the monthly one it found.
+    expect(call.periodEnd.getTime()).toBe(NOW.getTime() + 365 * 86_400_000);
+    expect(call.built.totalPaise).toBe(50_000_00);
+  });
+
+  it("★ leaves a MATCHING invoice completely alone", async () => {
+    // The ordinary path: nothing changed, so nothing is rewritten. A reshape on
+    // every enrolment would churn a document for no reason and widen the window
+    // in which an amount can move under a payment.
+    await startEnrolment(args);
+    expect(store.reshapeDraftSubscriptionInvoice).not.toHaveBeenCalled();
+  });
+
+  it("★★ frees an untouched order BEFORE rewriting the amount", async () => {
+    // The old amount may already be sitting at the gateway. Rewriting the
+    // invoice while that order stays payable would let a merchant pay ₹2,400
+    // against a ₹24,000 obligation, so the stale attempt is failed first — and
+    // only on the gateway's word that nobody has paid against it.
+    store.getCycleInvoice.mockResolvedValue({
+      id: INVOICE,
+      status: "draft",
+      finalizedAt: null,
+      invoiceRef: null,
+      totalPaise: 5_000_00,
+      periodStart: NOW.toISOString(),
+      periodEnd: MONTHLY_CYCLE_END,
+    });
+    priceFor.mockResolvedValue({
+      planPaise: 50_000_00,
+      locationPaise: 10_000_00,
+    });
+    rzp.rzpFetchOrder.mockResolvedValue({
+      ok: true,
+      data: {
+        id: "order_old",
+        method: "card",
+        status: "created",
+        attempts: 0,
+        amount_paid: 0,
+      },
+    });
+    // ★ Only a settled attempt frees the index — a lost claim must not reshape.
+    collect.settleAttempt.mockResolvedValue("failed");
+    seed([
+      [], // currentState
+      [{ id: "att-old", providerOrderId: "order_old", amountPaise: 5_000_00 }],
+    ]);
+
+    await startEnrolment({ ...args, period: "yearly" });
+
+    expect(collect.settleAttempt).toHaveBeenCalledWith(
+      "att-old",
+      "failed",
+      expect.objectContaining({ failureCode: "shape_changed" }),
+    );
+    const settleOrder =
+      collect.settleAttempt.mock.invocationCallOrder[0] ?? Infinity;
+    const reshapeOrder =
+      store.reshapeDraftSubscriptionInvoice.mock.invocationCallOrder[0] ??
+      -Infinity;
+    expect(settleOrder).toBeLessThan(reshapeOrder);
+  });
+
+  it("★★ REFUSES when a payment for the earlier choice is still in flight", async () => {
+    // Neither outcome is safe here: rewriting the invoice lets that payment
+    // settle the wrong amount, and leaving it lets the merchant pay for one
+    // shape and be granted another. Refusing costs them a minute; it clears on
+    // its own. ★ And it happens BEFORE `seedSubscription`, so nothing records a
+    // shape we are not going to bill for — that write is what `activate` reads.
+    store.getCycleInvoice.mockResolvedValue({
+      id: INVOICE,
+      status: "draft",
+      finalizedAt: null,
+      invoiceRef: null,
+      totalPaise: 5_000_00,
+      periodStart: NOW.toISOString(),
+      periodEnd: MONTHLY_CYCLE_END,
+    });
+    priceFor.mockResolvedValue({
+      planPaise: 50_000_00,
+      locationPaise: 10_000_00,
+    });
+    rzp.rzpFetchOrder.mockResolvedValue({
+      ok: true,
+      data: {
+        id: "order_old",
+        method: "upi",
+        status: "attempted",
+        attempts: 1,
+        amount_paid: 0,
+      },
+    });
+    // One payment still `created` — the shopper is mid-approval in their app.
+    rzp.rzpFetchOrderPayments.mockResolvedValue({
+      ok: true,
+      data: [{ id: "pay_1", status: "created" }],
+    });
+    // ★ Would succeed if it were called, so the ONLY thing standing between
+    // this test and a reshape is the untouched check itself.
+    collect.settleAttempt.mockResolvedValue("failed");
+    seed([
+      [], // currentState
+      [{ id: "att-old", providerOrderId: "order_old", amountPaise: 5_000_00 }],
+    ]);
+
+    const res = await startEnrolment({ ...args, period: "yearly" });
+
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error).toMatch(/still going through/i);
+    expect(store.reshapeDraftSubscriptionInvoice).not.toHaveBeenCalled();
+    // Nothing recorded the new shape.
+    expect(dbHolder.current.calls.insert.length).toBe(0);
+  });
+
+  it("★★ REFUSES to abandon an order that has been PAID", async () => {
+    // `amount_paid` is the plainest possible statement that money has moved.
+    // Nothing below it — status, attempt counts, payment states — may override
+    // that, so it is checked first and on its own.
+    store.getCycleInvoice.mockResolvedValue({
+      id: INVOICE,
+      status: "draft",
+      finalizedAt: null,
+      invoiceRef: null,
+      totalPaise: 5_000_00,
+      periodStart: NOW.toISOString(),
+      periodEnd: MONTHLY_CYCLE_END,
+    });
+    priceFor.mockResolvedValue({
+      planPaise: 50_000_00,
+      locationPaise: 10_000_00,
+    });
+    rzp.rzpFetchOrder.mockResolvedValue({
+      ok: true,
+      data: {
+        id: "order_old",
+        method: "upi",
+        status: "paid",
+        attempts: 1,
+        amount_paid: 5_000_00,
+      },
+    });
+    // Deliberately reports every payment as failed: a contradictory list must
+    // not be able to talk us past money the order says it took.
+    rzp.rzpFetchOrderPayments.mockResolvedValue({
+      ok: true,
+      data: [{ id: "pay_1", status: "failed" }],
+    });
+    collect.settleAttempt.mockResolvedValue("failed");
+    seed([
+      [], // currentState
+      [{ id: "att-old", providerOrderId: "order_old", amountPaise: 5_000_00 }],
+    ]);
+
+    const res = await startEnrolment({ ...args, period: "yearly" });
+
+    expect(res.ok).toBe(false);
+    expect(store.reshapeDraftSubscriptionInvoice).not.toHaveBeenCalled();
+  });
+
+  it("★★ frees an order whose every payment FAILED", async () => {
+    // A merchant who scans a UPI QR and never approves it leaves the order
+    // `attempted` with failed payments and nothing paid — measured on
+    // production 2026-09-06, three of them. A `failed` payment is terminal and
+    // can never be captured, so treating that as untouchable would strand them
+    // behind their own abandoned attempt for 72 hours.
+    store.getCycleInvoice.mockResolvedValue({
+      id: INVOICE,
+      status: "draft",
+      finalizedAt: null,
+      invoiceRef: null,
+      totalPaise: 5_000_00,
+      periodStart: NOW.toISOString(),
+      periodEnd: MONTHLY_CYCLE_END,
+    });
+    priceFor.mockResolvedValue({
+      planPaise: 50_000_00,
+      locationPaise: 10_000_00,
+    });
+    rzp.rzpFetchOrder.mockResolvedValue({
+      ok: true,
+      data: {
+        id: "order_old",
+        method: "upi",
+        status: "attempted",
+        attempts: 3,
+        amount_paid: 0,
+      },
+    });
+    rzp.rzpFetchOrderPayments.mockResolvedValue({
+      ok: true,
+      data: [
+        { id: "pay_1", status: "failed" },
+        { id: "pay_2", status: "failed" },
+        { id: "pay_3", status: "failed" },
+      ],
+    });
+    collect.settleAttempt.mockResolvedValue("failed");
+    seed([
+      [], // currentState
+      [{ id: "att-old", providerOrderId: "order_old", amountPaise: 5_000_00 }],
+    ]);
+
+    const res = await startEnrolment({ ...args, period: "yearly" });
+
+    expect(res.ok).toBe(true);
+    expect(collect.settleAttempt).toHaveBeenCalledWith(
+      "att-old",
+      "failed",
+      expect.objectContaining({ failureCode: "shape_changed" }),
+    );
+    expect(store.reshapeDraftSubscriptionInvoice).toHaveBeenCalled();
+  });
+
+  it("★ carries on with what it has when the invoice can no longer be reshaped", async () => {
+    // A refusal means the invoice is finalized, paid or void — a document or a
+    // debt, not a choice still being made. Blocking the merchant over it would
+    // be worse than letting them finish what they started.
+    store.getCycleInvoice.mockResolvedValue({
+      id: INVOICE,
+      status: "draft",
+      finalizedAt: null,
+      invoiceRef: null,
+      totalPaise: 5_000_00,
+      periodStart: NOW.toISOString(),
+      periodEnd: MONTHLY_CYCLE_END,
+    });
+    store.reshapeDraftSubscriptionInvoice.mockResolvedValue(null);
+    priceFor.mockResolvedValue({
+      planPaise: 50_000_00,
+      locationPaise: 10_000_00,
+    });
+
+    const res = await startEnrolment({ ...args, period: "yearly" });
+
+    expect(res.ok).toBe(true);
+    expect(store.amountDueForInvoice).toHaveBeenCalledWith(INVOICE);
+  });
+
+  it("★★ REPLACES an untouched order when the merchant picks a different rail", async () => {
+    // The rail is fixed when the order is created and cannot be edited after.
+    // So resuming a card order for someone who just chose UPI Autopay does not
+    // merely mislabel the screen — it registers the WRONG MANDATE, and until
+    // reconciliation gives up on the stale attempt (72h) every retry does it
+    // again. Abandoning an order the gateway says nobody has ever paid against
+    // costs nothing, which is the only condition under which this is allowed.
+    collect.beginAttempt
+      .mockResolvedValueOnce(null) // refused by the one-in-flight index
+      .mockResolvedValueOnce({ attemptId: "att-new", idempotencyKey: "key-2" });
+    collect.settleAttempt.mockResolvedValue("failed");
+    rzp.rzpFetchOrder.mockResolvedValue({
+      ok: true,
+      data: {
+        id: "order_old",
+        method: "card",
+        status: "created",
+        attempts: 0,
+        amount_paid: 0,
+      },
+    });
+    seed([
+      [], // currentState: no subscription
+      [{ id: "att-old", providerOrderId: "order_old", amountPaise: 5_000_00 }],
+    ]);
+
+    const res = await startEnrolment({ ...args, mandateMethod: "upi" });
+
+    expect(collect.settleAttempt).toHaveBeenCalledWith(
+      "att-old",
+      "failed",
+      expect.objectContaining({ failureCode: "rail_changed" }),
+    );
+    expect(rzp.rzpCreateAuthorizationOrder.mock.calls[0][1].method).toBe("upi");
+    expect(res.ok && res.data.mandateMethod).toBe("upi");
+    expect(res.ok && res.data.attemptId).toBe("att-new");
+  });
+
+  it("★★ resumes rather than replaces once a payment has been TRIED", async () => {
+    // `attempts > 0` means a payment instrument has been presented against that
+    // order. Abandoning it then risks a second payable order for the same
+    // invoice, which is the duplicate charge the resume branch exists to stop —
+    // so the merchant keeps the old rail and is told so.
+    collect.beginAttempt.mockResolvedValue(null);
+    rzp.rzpFetchOrder.mockResolvedValue({
+      ok: true,
+      data: {
+        id: "order_old",
+        method: "card",
+        status: "created",
+        attempts: 1,
+        amount_paid: 0,
+      },
+    });
+    seed([
+      [],
+      [{ id: "att-old", providerOrderId: "order_old", amountPaise: 5_000_00 }],
+    ]);
+
+    const res = await startEnrolment({ ...args, mandateMethod: "upi" });
+
+    expect(collect.settleAttempt).not.toHaveBeenCalled();
+    expect(rzp.rzpCreateAuthorizationOrder).not.toHaveBeenCalled();
+    expect(res.ok && res.data.mandateMethod).toBe("card");
+  });
+
+  it("★ an UNREADABLE order is never treated as untouched", async () => {
+    // "We could not check" is not "nobody paid". A gateway blip must not become
+    // permission to abandon an order that may already carry a payment.
+    collect.beginAttempt.mockResolvedValue(null);
+    rzp.rzpFetchOrder.mockResolvedValue({
+      ok: false,
+      error: "timeout",
+      outcome: "unknown",
+    });
+    seed([
+      [],
+      [{ id: "att-old", providerOrderId: "order_old", amountPaise: 5_000_00 }],
+    ]);
+
+    const res = await startEnrolment({ ...args, mandateMethod: "upi" });
+
+    expect(collect.settleAttempt).not.toHaveBeenCalled();
+    expect(res.ok && res.data.providerOrderId).toBe("order_old");
   });
 
   it("★ asks them to wait when the in-flight attempt has NO order to resume", async () => {

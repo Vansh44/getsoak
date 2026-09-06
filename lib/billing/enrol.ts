@@ -44,6 +44,7 @@ import { getPlatformRazorpayCreds } from "@/lib/payments/provider";
 import {
   rzpCreateAuthorizationOrder,
   rzpFetchOrder,
+  rzpFetchOrderPayments,
   rzpCreateCustomer,
   rzpFetchPayment,
   verifyCapturedCheckoutPayment,
@@ -70,7 +71,9 @@ import {
   ensureRenewalInvoice,
   finalizeInvoice,
   loadInvoiceParties,
+  getCycleInvoice,
   loadTaxContext,
+  reshapeDraftSubscriptionInvoice,
 } from "./invoice-store";
 import { beginAttempt, settleAttempt } from "./collect";
 import { notifyPlanActivated } from "./receipts";
@@ -255,6 +258,62 @@ export async function startEnrolment(input: {
     tax,
   });
 
+  // ★★ CYCLE 1's INVOICE IS RAISED BEFORE THE MERCHANT HAS FINISHED CHOOSING.
+  // `ensureRenewalInvoice` is idempotent on (store, kind, cycle_seq) — right for
+  // a RENEWAL, wrong here, because the invoice appears the first time anyone
+  // opens the payment window and they may still change plan or period. Reused
+  // blindly it charges the FIRST shape they ever picked while
+  // `billing_subscriptions` records the latest, and `activate` reads the
+  // SUBSCRIPTION: measured on production 2026-09-06, a merchant who chose Pro
+  // monthly, dismissed Checkout, then chose Pro yearly was quoted ₹2,400 for a
+  // full year of Pro — ₹21,600 short. Reversed, they overpay by the same.
+  //
+  // ★★ THIS RUNS BEFORE `seedSubscription`, and the ordering is the point: that
+  // write is what `activate` later reads, so recording a shape we then fail to
+  // bill for is exactly how the two halves came apart. Nothing records the new
+  // choice until we know the invoice can carry it.
+  const stale = await staleEnrolmentInvoice(input.storeId, built, cycle);
+  if (stale) {
+    const inFlight = await inspectResumable(creds, stale.id, input.storeId);
+    // The old amount may already be at the gateway. Free it FIRST, on the same
+    // untouched-order proof the rail replacement uses — rewriting the invoice
+    // while an old order stays payable would let ₹2,400 settle ₹24,000.
+    const freed =
+      !inFlight ||
+      (inFlight.untouched &&
+        (await settleAttempt(inFlight.resumable.id, "failed", {
+          providerOrderId: inFlight.resumable.providerOrderId,
+          failureCode: "shape_changed",
+          failureReason:
+            "Abandoned an unpaid order for a plan or period the merchant then changed.",
+          now,
+        })) === "failed");
+
+    if (!freed) {
+      // ★ A payment for the EARLIER choice is genuinely still in flight. Neither
+      // outcome is safe: rewriting the invoice lets that payment settle the
+      // wrong amount, and leaving it lets them pay for one shape and be granted
+      // another. Say so — it clears on its own within minutes.
+      return {
+        ok: false,
+        error:
+          "A payment for your earlier plan choice is still going through. Finish it, or give it a minute and try again.",
+      };
+    }
+
+    // ★ A refusal here is not a failure: it means the invoice is no longer a
+    // plain draft, so it is a document or a debt and the merchant finishes what
+    // they started rather than being blocked.
+    await reshapeDraftSubscriptionInvoice({
+      invoiceId: stale.id,
+      storeId: input.storeId,
+      periodStart: cycle.start,
+      periodEnd: cycle.end,
+      dueAt: now,
+      built,
+    });
+  }
+
   // ★ Ensure the subscription row FIRST, in a non-entitling state. It is what
   // makes enrolment resumable: a merchant who closes the tab and comes back
   // finds the same cycle_seq, so `ensureRenewalInvoice` returns the same invoice
@@ -306,15 +365,17 @@ export async function startEnrolment(input: {
     return { ok: false, error: "Couldn't work out what's due." };
   }
 
-  const attempt = await beginAttempt({
+  const attemptInput = {
     invoiceId: invoice.id,
     storeId: input.storeId,
     amountPaise: amountDue,
-    mode: "manual",
+    mode: "manual" as const,
     // Durable before checkout. Confirmation copies this exact value into the
     // mandate rather than trusting the browser or recomputing after a reprice.
     mandateMaxPaise: mandateMax,
-  });
+  };
+  const mandateMethod = normalizeMandateMethod(input.mandateMethod);
+  let attempt = await beginAttempt(attemptInput);
 
   // ★★ REFUSED BY `billing_payment_attempts_one_in_flight` — and this used to be
   // a DEAD END. Dismissing the Razorpay modal leaves the attempt `processing`
@@ -326,19 +387,48 @@ export async function startEnrolment(input: {
   // until it is paid, so hand the SAME order back rather than opening a second
   // one. No staleness guess, no duplicate charge, and a resumed tab simply works.
   if (!attempt) {
-    const resumable = await resumableAttempt(invoice.id, input.storeId);
-    if (resumable) {
-      // ★ THE RAIL IS FIXED ON THE EXISTING ORDER, so a merchant who picked a
-      // different one this time cannot be given it — the order is what stays
-      // payable, and minting a second one is the duplicate charge this branch
-      // exists to prevent. Read it back and report it truthfully rather than
-      // echoing the request; the caller says so on screen.
-      const existing = await rzpFetchOrder(creds, resumable.providerOrderId);
-      // A failed read is a label problem, not a correctness one — every order
-      // created before this change omitted `method`, which Razorpay treats as
-      // card, so that is the honest fallback.
-      const resumedMethod: MandateMethod =
-        existing.ok && existing.data.method === "upi" ? "upi" : "card";
+    // ★ THE RAIL IS FIXED ON THE EXISTING ORDER, so resuming normally hands
+    // back whatever rail that order was created with — the order is what stays
+    // payable, and minting a second one is the duplicate charge this branch
+    // exists to prevent. Read it back rather than echoing the request.
+    const found = await inspectResumable(creds, invoice.id, input.storeId);
+    if (!found) {
+      // In flight but with no order to resume — a race between two Subscribe
+      // clicks, caught before either reached the gateway. Waiting IS the answer.
+      return {
+        ok: false,
+        error: "A payment is already in progress. Give it a moment.",
+      };
+    }
+    const { resumable } = found;
+    const resumedMethod: MandateMethod = found.method;
+
+    // ★★ BUT AN ORDER NOBODY EVER PAID AGAINST IS NOT WORTH PINNING A RAIL TO.
+    // Dismissing Checkout leaves the attempt `processing` with nothing to say a
+    // modal was closed, so without this a merchant who once opened a card
+    // authorisation is served cards for the next 72 hours — however many times
+    // they pick UPI Autopay — until reconciliation gives up on that attempt.
+    // The rail is chosen once and cannot be edited afterwards, so serving the
+    // wrong one is not a cosmetic mismatch: it is the wrong mandate.
+    //
+    // Replacement is allowed ONLY on the gateway's own word that the order is
+    // untouched — `created`, zero attempts, nothing paid. That is proof no
+    // payment instrument has ever been presented against it, which is exactly
+    // the condition under which abandoning it cannot cost anyone money. An
+    // unreadable order is NOT untouched: we resume and report the truth.
+    if (resumedMethod !== mandateMethod && found.untouched) {
+      const dropped = await settleAttempt(resumable.id, "failed", {
+        providerOrderId: resumable.providerOrderId,
+        failureCode: "rail_changed",
+        failureReason: `Abandoned an unpaid ${resumedMethod} authorisation; the merchant chose ${mandateMethod}.`,
+        now,
+      });
+      // Only a settled attempt frees the one-in-flight index. If the claim lost
+      // a race the merchant simply resumes, which is the safe outcome.
+      if (dropped === "failed") attempt = await beginAttempt(attemptInput);
+    }
+
+    if (!attempt) {
       return {
         ok: true,
         data: {
@@ -355,12 +445,6 @@ export async function startEnrolment(input: {
         },
       };
     }
-    // In flight but with no order to resume — a race between two Subscribe
-    // clicks, caught before either reached the gateway. Waiting IS the answer.
-    return {
-      ok: false,
-      error: "A payment is already in progress. Give it a moment.",
-    };
   }
 
   const notes = {
@@ -370,7 +454,6 @@ export async function startEnrolment(input: {
     // match it even if we never see the response.
     sm_billing_key: attempt.idempotencyKey,
   };
-  const mandateMethod = normalizeMandateMethod(input.mandateMethod);
   const order = await rzpCreateAuthorizationOrder(creds, {
     amountPaise: amountDue,
     customerId,
@@ -445,6 +528,125 @@ export async function startEnrolment(input: {
  * covered, via the providerOrderId check.
  */
 const RESUMABLE_STATE = "processing";
+
+/**
+ * The existing cycle-1 invoice, but ONLY when it no longer matches what is
+ * being bought and can still be rewritten.
+ *
+ * ★★ THE COMPARISON IS AMOUNT + CYCLE **LENGTH**, NEVER THE ENDPOINTS. A cycle
+ * is anchored to the instant it was raised (`cycleFrom(now, …)`), so two
+ * Subscribe clicks a minute apart legitimately produce different period
+ * endpoints for the very same plan. Comparing instants would call every
+ * ordinary resume a changed plan — abandoning the order the resume branch
+ * exists to protect, and refusing a merchant who is simply mid-payment.
+ *
+ * ★ The length is what separates a 30-day first cycle from a 365-day one, which
+ * is the case the amount alone can miss if an operator ever prices two shapes
+ * the same.
+ *
+ * Returns null for the ordinary case, so a normal enrolment does no extra work
+ * beyond one indexed read.
+ */
+async function staleEnrolmentInvoice(
+  storeId: string,
+  built: { totalPaise: number },
+  cycle: { start: Date; end: Date },
+): Promise<{ id: string } | null> {
+  const existing = await getCycleInvoice(storeId, FIRST_CYCLE);
+  if (!existing || existing.status !== "draft") return null;
+  const matches =
+    existing.totalPaise === built.totalPaise &&
+    sameLength(existing, cycle.end.getTime() - cycle.start.getTime());
+  return matches ? null : { id: existing.id };
+}
+
+/**
+ * Does a stored invoice cover a cycle of this many milliseconds?
+ *
+ * An invoice with no period recorded cannot be shown to match, so it is
+ * reshaped — the safe direction, since the alternative is billing an unknown
+ * duration.
+ */
+function sameLength(
+  invoice: { periodStart: string | null; periodEnd: string | null },
+  lengthMs: number,
+): boolean {
+  if (!invoice.periodStart || !invoice.periodEnd) return false;
+  const start = Date.parse(invoice.periodStart);
+  const end = Date.parse(invoice.periodEnd);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return false;
+  // Postgres keeps microseconds and JavaScript truncates to milliseconds, so
+  // allow one millisecond of slack rather than demanding an exact match.
+  return Math.abs(end - start - lengthMs) <= 1;
+}
+
+/**
+ * The in-flight attempt for this invoice, and whether its order is still
+ * untouched at the gateway.
+ *
+ * ★★ "Untouched" is the ONE condition under which an order may be abandoned:
+ * status `created`, zero attempts, nothing paid. That is proof no payment
+ * instrument has ever been presented against it, so replacing it cannot cost
+ * anyone money. Both callers — a changed plan/period and a changed rail — need
+ * exactly this, and a second hand-written copy of it is how one of them ends up
+ * abandoning an order somebody has already paid.
+ *
+ * ★ An UNREADABLE order is NOT untouched. "We could not check" is not "nobody
+ * paid", so a gateway blip is never permission to abandon.
+ */
+async function inspectResumable(
+  creds: Parameters<typeof rzpFetchOrder>[0],
+  invoiceId: string,
+  storeId: string,
+): Promise<{
+  resumable: NonNullable<Awaited<ReturnType<typeof resumableAttempt>>>;
+  method: MandateMethod;
+  untouched: boolean;
+} | null> {
+  const resumable = await resumableAttempt(invoiceId, storeId);
+  if (!resumable) return null;
+  const existing = await rzpFetchOrder(creds, resumable.providerOrderId);
+  return {
+    resumable,
+    // A failed read is a label problem, not a correctness one — every order
+    // created before the rail was declared omitted `method`, which Razorpay
+    // treats as card, so that is the honest fallback.
+    method: existing.ok && existing.data.method === "upi" ? "upi" : "card",
+    untouched: await orderIsUntouched(creds, existing),
+  };
+}
+
+/**
+ * Has any payment ever succeeded, or could one still, against this order?
+ *
+ * ★ The cheap proof is `created` with zero attempts: nothing has been presented
+ * at all, so no extra call is needed and the ordinary path pays nothing.
+ *
+ * ★★ BUT A TRIED ORDER IS NOT NECESSARILY A PAID ONE. A merchant who scans a
+ * UPI QR and never approves it leaves the order `attempted` with three FAILED
+ * payments and `amount_paid: 0` — measured on production 2026-09-06. Treating
+ * that as untouchable strands them behind their own abandoned attempt until
+ * reconciliation gives up 72 hours later. A `failed` payment is terminal and
+ * can never be captured, so an order whose payments have ALL failed is as safe
+ * to abandon as one nobody ever opened.
+ *
+ * ★ Anything else is refused: money already paid, a payment still `created` or
+ * `authorized` (the shopper is mid-approval in their UPI app), or a read we
+ * could not make. "We could not check" is never "nobody paid".
+ */
+async function orderIsUntouched(
+  creds: Parameters<typeof rzpFetchOrder>[0],
+  order: Awaited<ReturnType<typeof rzpFetchOrder>>,
+): Promise<boolean> {
+  if (!order.ok) return false;
+  if (order.data.amount_paid) return false;
+  if (order.data.status === "created" && (order.data.attempts ?? 0) === 0) {
+    return true;
+  }
+  const payments = await rzpFetchOrderPayments(creds, order.data.id);
+  if (!payments.ok) return false;
+  return payments.data.every((payment) => payment.status === "failed");
+}
 
 async function resumableAttempt(
   invoiceId: string,

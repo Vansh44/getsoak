@@ -7677,6 +7677,61 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       second charge. ⚠ Only a `processing` attempt is resumable: the index also
       covers `created` (no order exists yet) and `authorized` (money already
       authorized — re-opening checkout would invite a second authorization).
+    - **★★ AND CYCLE 1's INVOICE PINNED THE PLAN AND PERIOD THE SAME WAY.**
+      `ensureRenewalInvoice` is idempotent on (store, kind, cycle_seq) — exactly
+      right for a RENEWAL, wrong for an ENROLMENT, where the invoice is raised
+      the first time anyone opens Checkout and the merchant is still choosing.
+      Reused blindly it charges the FIRST shape they ever picked, while
+      `seedSubscription` records the latest and `activate` reads the
+      SUBSCRIPTION — so the two halves of one purchase disagree. Measured on
+      production 2026-09-06: a merchant chose Pro monthly, dismissed Checkout,
+      came back and chose Pro yearly, and was quoted **₹2,400 for a full year of
+      Pro** — the invoice said 30 days and ₹2,400 while the subscription row
+      said yearly. ₹21,600 short, silently; reversed, the merchant overpays by
+      the same. `reshapeDraftSubscriptionInvoice` rewrites an unpaid draft to
+      the shape now being bought.
+    - **★ THE DATABASE ALREADY PERMITTED IT.** Both immutability guards return
+      early while `finalized_at IS NULL`, because lines are deliberately written
+      before finalize — a draft carries no number and has been sent to nobody,
+      so nothing in the gapless GST series is burned. It refuses anything that
+      is not a plain unpaid draft (finalized, open, paid, void), each guard
+      pinned by its own isolating test.
+    - **★★ THE RECONCILIATION RUNS BEFORE `seedSubscription`, AND THAT ORDERING
+      IS THE FIX.** That write is what `activate` later reads, so recording a
+      shape we then fail to bill for is precisely how the two halves came apart.
+      Nothing records the new choice until the invoice can carry it. When the
+      earlier attempt genuinely cannot be freed, enrolment REFUSES — rewriting
+      the invoice would let the in-flight payment settle the wrong amount, and
+      leaving it would grant a plan nobody paid for. It clears in minutes.
+    - **★★ "UNTOUCHED" IS NOT "NEVER TRIED"** (`orderIsUntouched`, shared by the
+      shape and rail paths). The cheap proof is `created` with zero attempts, so
+      the ordinary path costs no extra call. But a merchant who scans a UPI QR
+      and never approves it leaves the order `attempted` with FAILED payments
+      and `amount_paid: 0` — three of them, on production 2026-09-06 — and
+      treating that as untouchable strands them behind their own abandoned
+      attempt until reconciliation gives up 72 hours later. A `failed` payment
+      is terminal and can never be captured, so an order whose payments have
+      ALL failed is as safe to abandon as one nobody ever opened. ⚠ `amount_paid`
+      is checked FIRST and on its own: a contradictory payment list must not be
+      able to talk us past money the order says it took. A payment still
+      `created` or `authorized` (the shopper is mid-approval in their app), and
+      any read we could not make, both refuse.
+    - **★★ BUT RESUMING PINNED THE MANDATE RAIL, WHICH IS NOT A LABEL.** The
+      rail is fixed when the authorisation order is created and cannot be edited
+      afterwards, so handing a card order back to a merchant who has just chosen
+      UPI Autopay registers the WRONG MANDATE — and because the stale attempt
+      only dies when reconciliation gives up on it (72h), every retry in between
+      does it again. Found in production 2026-09-06: an order created before the
+      rail was declared carried `method: null` and Checkout offered cards only,
+      however many times UPI was picked. `startEnrolment` now abandons the old
+      order and mints a fresh one on the chosen rail — but ONLY on the gateway's
+      own word that the order is untouched: status `created`, zero attempts,
+      nothing paid. That is proof no payment instrument has ever been presented
+      against it, and it is the only state in which abandoning one cannot cost
+      anyone money. ⚠ An UNREADABLE order is NOT untouched — "we could not
+      check" is not "nobody paid" — and an order with even one attempt is
+      resumed on its original rail and reported truthfully. Pinned in all three
+      directions, and both guards mutation-tested.
     - **★★ EXTRA LOCATIONS ARE BOUGHT ON THE NEW SYSTEM** (`lib/billing/locations.ts`,
       `supabase/billing_07_addon_invoices.sql`). The old path called
       `rzpUpdateSubscription`, which Razorpay does not support for UPI or
