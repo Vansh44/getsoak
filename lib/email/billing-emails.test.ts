@@ -14,6 +14,7 @@ import {
   paymentFailedTemplate,
   subscriptionCancelledTemplate,
   planDowngradedTemplate,
+  renewalDueTemplate,
 } from "./billing-emails";
 
 const MANAGE = "https://echos.storemink.com/dashboard/plans";
@@ -113,6 +114,52 @@ describe("billing email templates", () => {
  * subscribe at all. `admins.phone` was the only source and signup never wrote
  * it, which took every wizard-created store's Subscribe button out of service.
  */
+describe("renewalDueTemplate — naming a reprice", () => {
+  const base = {
+    storeName: "Echos",
+    planName: "Pro",
+    amountInr: 3000,
+    dueOn: "2026-10-06T00:00:00.000Z",
+    invoiceRef: "SM/2026-27/0007",
+    autopay: true,
+    manageUrl: MANAGE,
+  };
+
+  it("★★ says a rise is a rise, in both the autopay and the bill wording", () => {
+    // The amount alone does not tell a merchant it CHANGED — they would have to
+    // remember last cycle's figure. An unexplained larger debit is what turns
+    // an operator reprice into a chargeback.
+    for (const autopay of [true, false]) {
+      const e = renewalDueTemplate({
+        ...base,
+        autopay,
+        previousAmountInr: 2400,
+      });
+      expect(e.html).toContain("an increase");
+      expect(e.html).toContain("₹2,400");
+    }
+  });
+
+  it("★ calls a reduction a reduction", () => {
+    // "Your price has changed" reads as a rise to everyone, so a merchant whose
+    // bill went DOWN would write in to ask what went wrong.
+    const e = renewalDueTemplate({ ...base, previousAmountInr: 4000 });
+    expect(e.html).toContain("a reduction");
+    expect(e.html).not.toContain("an increase");
+  });
+
+  it("★ stays silent when the price did not move", () => {
+    // Noise on an unchanged bill is what teaches people to stop reading
+    // billing email — the one channel that must still be read.
+    for (const previousAmountInr of [3000, null, undefined]) {
+      const e = renewalDueTemplate({ ...base, previousAmountInr });
+      expect(e.html).not.toContain("an increase");
+      expect(e.html).not.toContain("a reduction");
+      expect(e.html).not.toContain("last time");
+    }
+  });
+});
+
 describe("resolveBillingEmail", () => {
   const STORE = "store-1";
   const store = [{ name: "Echos", slug: "echos" }];

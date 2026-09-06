@@ -2,7 +2,11 @@ import "server-only";
 
 // ★ The mandate rail lives in a client-safe module: this file is `server-only`,
 // so a client component importing even the TYPE from here fails the build.
-import { normalizeMandateMethod, type MandateMethod } from "./mandate-types";
+import {
+  AFA_EXEMPT_PAISE,
+  autopayRailFor,
+  type MandateMethod,
+} from "./mandate-types";
 export { MANDATE_METHODS, normalizeMandateMethod } from "./mandate-types";
 export type { MandateMethod } from "./mandate-types";
 
@@ -43,6 +47,7 @@ import { logError, logWarn } from "@/lib/observability/logger";
 import { getPlatformRazorpayCreds } from "@/lib/payments/provider";
 import {
   rzpCreateAuthorizationOrder,
+  rzpCreateOrder,
   rzpFetchOrder,
   rzpFetchOrderPayments,
   rzpCreateCustomer,
@@ -98,6 +103,15 @@ export interface EnrolmentStart {
   providerCustomerId: string;
   /** The rail the order was created for; Checkout must be opened to match. */
   mandateMethod: MandateMethod;
+  /**
+   * Will future cycles be collected automatically?
+   *
+   * ★ False means no mandate was requested at all, because the recurring charge
+   * is above RBI's AFA-exempt limit and no supported rail can carry it. The
+   * merchant pays cycle 1 now and is INVOICED for renewals — the screen must
+   * say so rather than implying autopay.
+   */
+  autopay: boolean;
 }
 
 export type EnrolmentResult<T> =
@@ -211,26 +225,79 @@ export async function startEnrolment(input: {
 
   const price = await input.priceFor(input.plan, input.period);
   const tax = await loadTaxContext(input.storeId);
-  const mandateMax = mandateSizePaise({
-    planPaise: price.planPaise,
-    taxInclusive: tax.inclusive,
-  });
+  // ★★ CAPPED AT THE AFA LIMIT, because authority above it can never be
+  // exercised on card or UPI. The 1.18 × 1.5 provision exists so a REPRICE does
+  // not lock a subscriber out of their own renewal — real headroom while both
+  // the old and new charge stay under ₹15,000 (Pro monthly: ₹2,400 charge,
+  // ₹5,000 ceiling, a reprice to ₹4,000 still auto-collects). Above the limit
+  // it buys nothing: a charge of ₹15,001 is manual whatever the ceiling says,
+  // so Basic yearly was asking a merchant to authorise ₹27,000 against a
+  // ₹15,000 charge that is already at the maximum a mandate can carry.
+  // ⚠ Phase 2's eNACH rail has no AFA limit (₹1 crore), so this cap moves under
+  // the rail decision when that lands.
+  const mandateMax = Math.min(
+    mandateSizePaise({
+      planPaise: price.planPaise,
+      taxInclusive: tax.inclusive,
+    }),
+    AFA_EXEMPT_PAISE,
+  );
 
-  // A paid subscription is an autopay product. Never silently turn its first
-  // cycle into an ordinary payment: that succeeds today and surprises the
-  // merchant with a manual invoice next renewal.
-  if (!RECURRING_CHARGE_VERIFIED) {
-    return {
-      ok: false,
-      error: "Autopay is unavailable right now. No payment was taken.",
-    };
-  }
-  if (!mandateFitsGateway(mandateMax)) {
-    return {
-      ok: false,
-      error:
-        "This billing option is above Razorpay's autopay limit. Choose a shorter billing period. No payment was taken.",
-    };
+  // ★★ CAN THIS PLAN BE COLLECTED AUTOMATICALLY AT ALL? Decided from the
+  // RECURRING charge, not cycle 1's amount: the mandate exists to carry future
+  // renewals, and cycle 1 is taken on-session either way.
+  //
+  // RBI's AFA-exempt limit is ₹15,000 on BOTH cards and UPI, so Pro yearly at
+  // ₹24,000 can never be auto-debited without the merchant authenticating every
+  // single renewal. We used to register a ₹43,000 mandate for it anyway —
+  // authority we ask for on the Razorpay screen and can never exercise.
+  const recurringPaise = buildSubscriptionInvoice({
+    planLabel: PLAN_META[input.plan].name,
+    period: input.period,
+    planPaise: price.planPaise,
+    tax,
+  }).totalPaise;
+  const autopayRail = autopayRailFor(recurringPaise);
+
+  // ★ THE AMOUNT PICKS THE RAIL; the merchant may only step ACROSS to card,
+  // never up to something the amount cannot carry. UPI Autopay is the default
+  // because it needs no card on file; the card escape exists because the rail
+  // is fixed on the order, so a merchant with no UPI app would otherwise be
+  // unable to subscribe at all.
+  const chosenRail: MandateMethod | null =
+    autopayRail === null
+      ? null
+      : input.mandateMethod === "card"
+        ? "card"
+        : autopayRail;
+
+  // ★★ THE CARVE-OUT, and it is deliberately NARROW. The refusal below exists
+  // because turning a first cycle into an ordinary payment SILENTLY surprises
+  // the merchant with a manual invoice next renewal — that is autopay failing
+  // when it should have worked. This branch is the other case: autopay is
+  // structurally impossible for this amount, so there is nothing to fail. We
+  // take cycle 1 on the verified one-time checkout and SAY renewals are
+  // invoiced. Not silent, and the alternative is refusing to sell a yearly plan
+  // at all.
+  const autopayImpossible = autopayRail === null;
+
+  if (!autopayImpossible) {
+    // A paid subscription is an autopay product. Never silently turn its first
+    // cycle into an ordinary payment: that succeeds today and surprises the
+    // merchant with a manual invoice next renewal.
+    if (!RECURRING_CHARGE_VERIFIED) {
+      return {
+        ok: false,
+        error: "Autopay is unavailable right now. No payment was taken.",
+      };
+    }
+    if (!mandateFitsGateway(mandateMax)) {
+      return {
+        ok: false,
+        error:
+          "This billing option is above Razorpay's autopay limit. Choose a shorter billing period. No payment was taken.",
+      };
+    }
   }
   const customer = await ensureRzpCustomer(creds, input.storeId);
   if (!customer.ok) {
@@ -374,7 +441,7 @@ export async function startEnrolment(input: {
     // mandate rather than trusting the browser or recomputing after a reprice.
     mandateMaxPaise: mandateMax,
   };
-  const mandateMethod = normalizeMandateMethod(input.mandateMethod);
+  const mandateMethod: MandateMethod = chosenRail ?? "card";
   let attempt = await beginAttempt(attemptInput);
 
   // ★★ REFUSED BY `billing_payment_attempts_one_in_flight` — and this used to be
@@ -416,7 +483,11 @@ export async function startEnrolment(input: {
     // payment instrument has ever been presented against it, which is exactly
     // the condition under which abandoning it cannot cost anyone money. An
     // unreadable order is NOT untouched: we resume and report the truth.
-    if (resumedMethod !== mandateMethod && found.untouched) {
+    if (
+      chosenRail !== null &&
+      resumedMethod !== mandateMethod &&
+      found.untouched
+    ) {
       const dropped = await settleAttempt(resumable.id, "failed", {
         providerOrderId: resumable.providerOrderId,
         failureCode: "rail_changed",
@@ -442,6 +513,7 @@ export async function startEnrolment(input: {
           // Checkout requires the same customer binding on every open. The
           // order carrying customer_id is not enough by itself.
           providerCustomerId: customerId,
+          autopay: chosenRail !== null,
         },
       };
     }
@@ -454,26 +526,39 @@ export async function startEnrolment(input: {
     // match it even if we never see the response.
     sm_billing_key: attempt.idempotencyKey,
   };
-  const order = await rzpCreateAuthorizationOrder(creds, {
-    amountPaise: amountDue,
-    customerId,
-    // ★ Declared on the ORDER, not left to Checkout — omitting it is what made
-    // every enrolment a card mandate regardless of what the merchant wanted.
-    method: mandateMethod,
-    terms: {
-      maxAmountPaise: mandateMax,
-      // The mandate outlives the cycle it was authorised in; Razorpay wants
-      // Unix SECONDS, not milliseconds.
-      expireAtUnix: Math.floor(
-        new Date(now.getTime() + MANDATE_YEARS * 365 * 86_400_000).getTime() /
-          1000,
-      ),
-      frequency: input.period === "yearly" ? "yearly" : "monthly",
-    },
-    receipt: invoice.invoiceRef ?? invoice.id.slice(0, 30),
-    description: "StoreMink subscription",
-    notes,
-  });
+  // ★★ NO MANDATE WHEN NONE COULD EVER FIRE. A plain one-time order takes
+  // cycle 1 on the checkout that IS verified in production, and the merchant is
+  // told renewals are invoiced. Creating an authorisation order here would ask
+  // them to authorise a ceiling above the AFA limit — permission we could never
+  // exercise, on a screen that reads like autopay.
+  const order =
+    chosenRail === null
+      ? await rzpCreateOrder(creds, {
+          amountPaise: amountDue,
+          receipt: invoice.invoiceRef ?? invoice.id.slice(0, 30),
+          notes,
+        })
+      : await rzpCreateAuthorizationOrder(creds, {
+          amountPaise: amountDue,
+          customerId,
+          // ★ Declared on the ORDER, not left to Checkout — omitting it is what made
+          // every enrolment a card mandate regardless of what the merchant wanted.
+          method: chosenRail,
+          terms: {
+            maxAmountPaise: mandateMax,
+            // The mandate outlives the cycle it was authorised in; Razorpay wants
+            // Unix SECONDS, not milliseconds.
+            expireAtUnix: Math.floor(
+              new Date(
+                now.getTime() + MANDATE_YEARS * 365 * 86_400_000,
+              ).getTime() / 1000,
+            ),
+            frequency: input.period === "yearly" ? "yearly" : "monthly",
+          },
+          receipt: invoice.invoiceRef ?? invoice.id.slice(0, 30),
+          description: "StoreMink subscription",
+          notes,
+        });
   if (!order.ok) {
     // A rejected order means nothing was created at the gateway, so the attempt
     // is genuinely dead. An UNKNOWN is left in flight for reconciliation.
@@ -504,6 +589,7 @@ export async function startEnrolment(input: {
       amountPaise: amountDue,
       suggestedMandateMaxPaise: mandateMax,
       providerCustomerId: customerId,
+      autopay: chosenRail !== null,
     },
   };
 }

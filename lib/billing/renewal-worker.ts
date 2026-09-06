@@ -35,10 +35,11 @@ import {
   posShifts,
   stores,
 } from "@/drizzle/schema";
-import { logError, logInfo } from "@/lib/observability/logger";
+import { logError, logInfo, logWarn } from "@/lib/observability/logger";
 import type { Plan } from "@/lib/plans";
 import {
   collectionCutoff,
+  collectionRoute,
   cycleFrom,
   graceEndsAt,
   type MandateStatus,
@@ -48,6 +49,7 @@ import {
   amountDueForInvoice,
   ensureRenewalInvoice,
   finalizeInvoiceClaimed,
+  getCycleInvoice,
   loadInvoiceParties,
   loadTaxContext,
 } from "./invoice-store";
@@ -304,17 +306,51 @@ async function collectOne(
   // ⚠ AFTER the amount is known and OUTSIDE any transaction: an email is a
   // network call, and holding a pooled connection across one is how a fleet-wide
   // renewal exhausts the pool.
+  // ★★ LOADED BEFORE THE NOTICE, NOT AFTER. The email says either "there's
+  // nothing you need to do" or "pay this" — and getting that wrong in the
+  // reassuring direction is how a merchant does nothing and loses their plan.
+  const mandate = await loadMandate(row.mandateId);
+  const route = collectionRoute({
+    mandateStatus: mandate?.status ?? null,
+    mandateMaxPaise: mandate?.maxAmountPaise ?? null,
+    totalPaise: amountDue,
+  });
+  const willAutoCollect = !!input.charge && route.auto;
+
+  // ★★ THE REASON WAS COMPUTED AND THROWN AWAY. `collectionRoute` has always
+  // said WHY a renewal cannot be auto-collected, `collectInvoice` returned it,
+  // and `classify` collapsed all three into "manual" — no log, no metric,
+  // nothing. So when an operator reprice pushed a cohort over a ceiling, the
+  // only symptom was that invoices quietly stopped being paid automatically.
+  if (!route.auto && !!input.charge) {
+    logWarn("billing.renewal_not_auto_collectable", {
+      storeId: row.storeId,
+      plan,
+      period,
+      reason: route.reason,
+      amountPaise: amountDue,
+      mandateMaxPaise: mandate?.maxAmountPaise ?? null,
+    });
+  }
+
   if (justIssued?.claimed) {
+    // ★ What the LAST cycle cost, so a reprice is named rather than left for
+    // the merchant to spot. Absent for cycle 1, which has no predecessor.
+    const previous =
+      next.seq > 1 ? await getCycleInvoice(row.storeId, next.seq - 1) : null;
+
     await notifyInvoiceIssued({
       storeId: row.storeId,
       plan,
       amountPaise: amountDue,
       dueAt: next.start,
       invoiceRef: justIssued.ref,
-      // Autopay only if there is a gateway AND a mandate to charge. Saying
-      // "we'll collect this automatically" to someone with neither is how a
-      // merchant does nothing and loses their plan.
-      autopay: !!input.charge && !!row.mandateId,
+      // ★ Autopay means the charge will ACTUALLY be taken — a gateway, a live
+      // mandate, and an amount inside both its ceiling and the AFA limit. It
+      // used to mean "a mandate row exists", which for every yearly subscriber
+      // promised an automatic debit that could never happen.
+      autopay: willAutoCollect,
+      previousAmountPaise: previous?.totalPaise ?? null,
     });
   }
 
@@ -325,7 +361,6 @@ async function collectOne(
   // so every attempt would sit in reconciliation forever.
   if (!input.charge) return "manual";
 
-  const mandate = await loadMandate(row.mandateId);
   const outcome = await collectInvoice({
     invoiceId: invoice.id,
     storeId: row.storeId,

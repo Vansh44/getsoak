@@ -69,6 +69,15 @@ export async function notifyInvoiceIssued(input: {
   dueAt: Date;
   invoiceRef: string | null;
   autopay: boolean;
+  /**
+   * What the previous cycle cost, when there was one.
+   *
+   * ★ Plan prices are operator-editable and renewals are priced LIVE, so a
+   * merchant can be debited a different amount than last time with nothing
+   * saying so. Naming the change is what keeps a reprice from arriving as a
+   * surprise on a card statement.
+   */
+  previousAmountPaise?: number | null;
 }): Promise<void> {
   try {
     const to = await resolveBillingEmail(input.storeId);
@@ -82,6 +91,11 @@ export async function notifyInvoiceIssued(input: {
         dueOn: input.dueAt.toISOString(),
         invoiceRef: input.invoiceRef,
         autopay: input.autopay,
+        previousAmountInr:
+          input.previousAmountPaise != null &&
+          input.previousAmountPaise !== input.amountPaise
+            ? Math.round(input.previousAmountPaise / 100)
+            : null,
         manageUrl: manageUrl(to.slug),
       }),
       input.storeId,
