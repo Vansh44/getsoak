@@ -7959,6 +7959,36 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       autopay build depends on — shipping that code against a database without
       it makes every enrolment attempt insert fail, which is why it was a
       prerequisite rather than a follow-up.
+    - **★★ THE MANDATE RAIL IS DECLARED ON THE ORDER, AND CHECKOUT CANNOT OFFER
+      THE CHOICE** (fixed 2026-09-06). A merchant on the Pro review step saw a
+      Cards-only Razorpay Checkout with no UPI. The cause was
+      `rzpCreateAuthorizationOrder` omitting `method`, under a comment claiming
+      "omit to let the customer pick at checkout". Razorpay's recurring docs say
+      otherwise: the authorisation order declares the rail — `"method": "card"`
+      for a card mandate, `"method": "upi"` for UPI Autopay — and omitting it
+      yields a CARD mandate. ⚠ It was not an account problem: Checkout's own
+      preferences endpoint reported `recurring.upi_autopay → collect, intent`
+      alongside `card`, `emandate` and `nach`, and the mandate parameters were
+      well inside the limits (max_amount ₹5,000 against a ₹99,999 default
+      ceiling, expire_at 5 years against a 40-year maximum, frequency monthly).
+      Because the rail is fixed when the ORDER is created, the choice has to be
+      made before Checkout opens, so it is a step on the review dialog rather
+      than a Checkout affordance. `lib/billing/mandate-types.ts` holds the
+      client-safe vocabulary — `MANDATE_METHODS`, `normalizeMandateMethod` and
+      the labelled choices — because `enrol.ts` is `server-only` and a client
+      component importing even a TYPE from it fails the build (the trap
+      `invoice-types.ts` already exists for). ★ The browser may pick a RAIL and
+      nothing else: every figure stays server-computed and an unrecognised value
+      coerces to `card`, which is also the default, so an absent choice
+      reproduces the previous behaviour exactly. ★ A RESUMED enrolment cannot
+      honour a new choice — the pending order is what stays payable, and minting
+      a second one is the duplicate charge that branch exists to prevent — so
+      `rzpFetchOrder` reads the original rail back and the dialog says which one
+      it is resuming. ⚠ Card and UPI only; `emandate` and `nach` are enabled on
+      the account but are bank-mandate flows with a different settlement story.
+      ⚠ NOT YET EXERCISED against a live UPI Autopay authorisation — the order
+      now carries the rail, but that Checkout renders and completes it needs one
+      controlled real-money test before anyone relies on it.
     - **★★ THE CHARGE PATH IS BUILT** (`lib/billing/gateway.ts`,
       `rzpCreateCustomer` / `rzpCreateAuthorizationOrder` / `rzpChargeMandate`
       in `lib/payments/razorpay.ts`; runbook in `docs/autopay-verification.md`).
