@@ -7857,9 +7857,28 @@ way — an entry there is a deliberate act, not a way to silence the guard.
         grants SELECT to `public`, so who comped a store and why lives in
         `plan_events` (service-role only), audited with an `operator` source — NOT
         `comp`, which belongs to `stores.plan_source` and is rejected by that CHECK
-        (§15). **⚠ STILL TO DO:** the hand-reviewed backfill of the remaining
-        production comped store, and only then removing the renewal worker's comp
-        exemption (spec §7, §10).
+        (§15). **✅ BACKFILL AND EXEMPTION DONE (2026-09-06).** The one live
+        grant was moved into the overlay by `docs/comped-plans-backfill.sql` —
+        one production row, guarded, with a plpgsql assertion that aborts the
+        transaction unless the entitlement is provably unchanged at three
+        instants. Only that one row needed it: `plan_source` DEFAULTS to `comp`,
+        so all four stores read as comped while only `wholesip` (an indefinite
+        grant with no subscription, deliberately left alone — the overlay is
+        time-boxed by constraint) and `echos` were real.
+      - **★★ THE COMP EXEMPTION IS GONE FROM COLLECTION** (migration
+        `20260906_0078_drop_subscription_comp_exemption`). A subscription's own
+        `plan_source = 'comp'` no longer means "do not bill": the plan underneath
+        a comp is real and must still be collected, or a gift becomes a silent
+        payment holiday. ★ It was also a latent trap —
+        `billing_subscriptions.plan_source` DEFAULTS to `comp` and only becomes
+        `paid` at activation, so a half-enrolled row was permanently
+        uninvoiceable AND undowngradeable with nothing reporting it. ★★ ALL FOUR
+        SITES MOVED TOGETHER: three Drizzle predicates in `renewal-worker.ts`
+        plus the one inside `billing_claim_downgrade()`. Removing only the
+        TypeScript ones would be worse than none — a comped subscription would be
+        invoiced, chased through grace, selected for downgrade, then silently
+        refused at the atomic claim. ⚠ Verified inert first: no subscription in
+        either database had `plan_source = 'comp'`.
       - **★★ FINALIZE BEFORE SETTLING, OR A PAID INVOICE STAYS UNPAID** (fixed
         2026-09-06; `enrol.ts`, `plan-change.ts`, `locations.ts`). All three
         confirm paths called `settleAttempt(captured)` and only THEN

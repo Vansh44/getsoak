@@ -3233,6 +3233,64 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260906_0078_drop_subscription_comp_exemption",
+      "description": "Stop exempting comped subscriptions from downgrade; a comp is an overlay, not a billing state",
+      "file": "sql/20260906_0078_drop_subscription_comp_exemption.sql",
+      "checksum": "1d067345ebbe37b871d7d813490dc4990ea43ccb17adb25b88de706bb90a2105",
+      "transaction": true,
+      "requires": ["20260906_0077_comped_plan_overlay"],
+      "verify": {
+        "functions": ["billing_claim_downgrade"],
+        "queries": [
+          {
+            "name": "the downgrade claim no longer exempts a comped subscription",
+            "sql": "select count(*)::text from pg_proc where proname = 'billing_claim_downgrade' and pg_get_functiondef(oid) not like '%plan_source%'",
+            "equals": "1"
+          },
+          {
+            "name": "the rest of the downgrade claim is intact",
+            "sql": "select count(*)::text from pg_proc where proname = 'billing_claim_downgrade' and pg_get_functiondef(oid) like '%grace_ends_at < p_now%' and pg_get_functiondef(oid) like '%cycle_seq = s.current_cycle_seq%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "applyVerify": {
+        "functions": ["billing_claim_downgrade"],
+        "queries": [
+          {
+            "name": "the downgrade claim no longer exempts a comped subscription",
+            "sql": "select count(*)::text from pg_proc where proname = 'billing_claim_downgrade' and pg_get_functiondef(oid) not like '%plan_source%'",
+            "equals": "1"
+          },
+          {
+            "name": "the rest of the downgrade claim is intact",
+            "sql": "select count(*)::text from pg_proc where proname = 'billing_claim_downgrade' and pg_get_functiondef(oid) like '%grace_ends_at < p_now%' and pg_get_functiondef(oid) like '%cycle_seq = s.current_cycle_seq%'",
+            "equals": "1"
+          },
+          {
+            "name": "no subscription was relying on the exemption",
+            "sql": "select count(*)::text from billing_subscriptions where plan_source = 'comp'",
+            "equals": "0"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "functions": ["billing_claim_downgrade"],
+        "queries": [
+          {
+            "name": "the downgrade claim no longer exempts a comped subscription",
+            "sql": "select count(*)::text from pg_proc where proname = 'billing_claim_downgrade' and pg_get_functiondef(oid) not like '%plan_source%'",
+            "equals": "1"
+          },
+          {
+            "name": "the rest of the downgrade claim is intact",
+            "sql": "select count(*)::text from pg_proc where proname = 'billing_claim_downgrade' and pg_get_functiondef(oid) like '%grace_ends_at < p_now%' and pg_get_functiondef(oid) like '%cycle_seq = s.current_cycle_seq%'",
+            "equals": "1"
+          }
+        ]
+      }
     }
   ]
 }
