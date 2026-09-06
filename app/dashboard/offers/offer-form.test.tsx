@@ -91,64 +91,161 @@ function view(props: Record<string, unknown> = {}) {
 
 beforeEach(() => vi.clearAllMocks());
 
-describe("OfferForm — four collapsible sections", () => {
-  it("opens on the decision a merchant came to make", () => {
+/**
+ * Render, then get past the type picker a NEW offer now opens on.
+ *
+ * ★ THE PICKER IS THE FIRST SCREEN, Shopify's shape: the type decides which
+ * cards the form even has, so asking for it inside the form would change the
+ * form's own shape under the merchant while they read it.
+ */
+async function newOffer(title: string, props: Record<string, unknown> = {}) {
+  const user = userEvent.setup();
+  const rendered = view(props);
+  await user.click(
+    screen.getByRole("button", { name: new RegExp(title, "i") }),
+  );
+  return { ...rendered, user };
+}
+
+beforeEach(() => vi.clearAllMocks());
+
+describe("OfferForm — the type picker", () => {
+  it("asks what kind of discount this is before showing a form", () => {
     view();
     expect(
-      screen.getByRole("button", { name: /What the customer gets/i }),
+      screen.getByText(/What kind of discount is this/i),
     ).toBeInTheDocument();
-    // Open, so its control is on screen without a click.
-    expect(screen.getByText("Discount")).toBeInTheDocument();
+    // No form yet: nothing to summarise, and a default nobody picked would be
+    // described as though they had.
+    expect(screen.queryByText("Summary")).toBeNull();
+    expect(screen.queryByText("Method")).toBeNull();
   });
 
-  it("folds the optional sections away at their defaults, and SAYS what they hold", () => {
+  it("groups the types by what the discount acts on", () => {
     view();
-    // ★ The summary is what makes folding safe: a closed section still reports
-    // its value, so nothing is hidden — only folded.
+    for (const group of [
+      "Off the whole order",
+      "Off chosen products",
+      "Something extra, not a discount",
+    ]) {
+      expect(screen.getByText(group)).toBeInTheDocument();
+    }
+  });
+
+  it("opens the form on the type that was chosen", async () => {
+    await newOffer("Buy X, get Y");
+    expect(screen.getByText("Method")).toBeInTheDocument();
+    expect(screen.getByText("Max sets per order")).toBeInTheDocument();
+  });
+
+  // ★ EDITING SKIPS IT. An existing offer's type is set and its fields are
+  // full; a screen with one obvious answer is a click for nothing, and
+  // changing an existing offer's type is not what anyone opens the editor for.
+  it("is skipped when editing", () => {
+    view({ offer: OFFER });
+    expect(screen.queryByText(/What kind of discount is this/i)).toBeNull();
+    expect(screen.getByText("Method")).toBeInTheDocument();
+  });
+});
+
+describe("OfferForm — the card layout", () => {
+  // ★★ CARDS, ALL OPEN, replacing four collapsible sections. Folding made the
+  // form shorter without making it legible: what the offer WAS lived across
+  // four headers a merchant opened one at a time. Flat is affordable because
+  // the Summary is pinned beside it.
+  it("shows every question at once, named, without a click", async () => {
+    await newOffer("A coupon");
+    for (const card of [
+      "Method",
+      "Value",
+      "Minimum requirements",
+      "Maximum uses",
+      "Combinations",
+      "Active dates",
+      "Summary",
+    ]) {
+      expect(screen.getByText(card)).toBeInTheDocument();
+    }
+    // Previously behind a click.
+    expect(screen.getByText("Total budget (₹)")).toBeInTheDocument();
+  });
+
+  // ★★ SAVE AND BACK IN ONE PINNED BAR. Save used to sit at the bottom of the
+  // left column, and with two columns the form has no single end — so on a long
+  // offer the button was somewhere a merchant had to go looking for. "Always
+  // visible" is exactly the property a later refactor breaks silently, so it is
+  // asserted structurally rather than by looking for the words.
+  it("keeps Back, Cancel and Save together in the sticky header", () => {
+    const { container } = view({ offer: OFFER });
+    const header = container.querySelector("header.dash-offer-header")!;
+    expect(header).not.toBeNull();
+    expect(header.textContent).toContain("Offers");
+    expect(header.textContent).toContain("Cancel");
+    expect(header.textContent).toContain("Save offer");
+    // Not left behind at the foot of the form as well.
+    expect(container.querySelectorAll("button")).toBeTruthy();
+    const saves = Array.from(container.querySelectorAll("button")).filter((b) =>
+      /Save offer/i.test(b.textContent ?? ""),
+    );
+    expect(saves).toHaveLength(1);
+  });
+
+  // ★ NOTHING TO SAVE YET. A live Create button on the picker would create the
+  // default nobody chose.
+  it("offers no save action while a type is still being chosen", () => {
+    const { container } = view();
+    const header = container.querySelector("header.dash-offer-header")!;
+    expect(header.textContent).toContain("Offers");
+    expect(header.textContent).not.toContain("Create offer");
+  });
+
+  it("keeps the whole offer readable in the summary while a field is edited", () => {
+    view({ offer: { ...OFFER, name: "launch" } });
+    const summary = screen.getByText("Summary").closest("section")!;
+    expect(summary.textContent).toContain("launch");
+    expect(summary.textContent).toMatch(/Buy 1, get 1 free/);
+    // Status lives with the summary, as the go-live decision rather than a
+    // field lost at the bottom of a column.
+    expect(summary.textContent).toMatch(/Status/i);
+  });
+
+  it("names an untitled offer rather than showing an empty summary", async () => {
+    await newOffer("A coupon");
+    const summary = screen.getByText("Summary").closest("section")!;
+    expect(summary.textContent).toContain("Untitled offer");
+  });
+
+  // ★ THE STRUCTURE, not just the presence of the words. A card accidentally
+  // nested inside another, or the summary emitted outside the grid, renders
+  // every assertion above green and looks broken — which is exactly the class
+  // of mistake a layout rewrite makes.
+  it("puts the cards and the summary side by side, not one inside the other", () => {
+    const { container } = view({ offer: OFFER });
+    const grid = container.querySelector(".grid.items-start")!;
+    expect(grid).not.toBeNull();
+    expect(grid.children).toHaveLength(2);
+
+    const [column, aside] = Array.from(grid.children);
+    expect(aside.tagName).toBe("ASIDE");
+    expect(aside.textContent).toContain("Summary");
+    // Cards are siblings in the column, never nested.
+    const cards = column.querySelectorAll("section.dash-card");
+    expect(cards.length).toBeGreaterThanOrEqual(5);
+    for (const card of cards) {
+      expect(card.querySelector("section.dash-card")).toBeNull();
+    }
+  });
+
+  it("carries each card's current value in its subtitle", () => {
+    view({ offer: OFFER });
     expect(screen.getByText("on any order")).toBeInTheDocument();
     expect(
       screen.getByText("No limits — runs until you pause it"),
     ).toBeInTheDocument();
-    // Closed, so the field inside is not rendered.
-    expect(screen.queryByText("Total budget (₹)")).toBeNull();
   });
+});
 
-  it("makes every folded field reachable in one click", async () => {
-    const user = userEvent.setup();
-    view();
-    await user.click(screen.getByRole("button", { name: /Limits/i }));
-    expect(screen.getByText("Total budget (₹)")).toBeInTheDocument();
-  });
-
-  // ★★ THE REGROUPING'S REAL RISK. Editing an offer that HAS a budget must not
-  // bury it behind a click the merchant does not know to make — they came to
-  // this page to change exactly that.
-  it("starts a configured section open, so an edit is never buried", () => {
-    view({ offer: { ...OFFER, budget: 5000 } });
-    expect(screen.getByText("Total budget (₹)")).toBeInTheDocument();
-  });
-
-  it("starts the trigger section open when the offer has a real condition", () => {
-    view({
-      offer: { ...OFFER, triggerType: "min_subtotal", minSubtotal: 500 },
-    });
-    expect(screen.getByText("Minimum order (₹)")).toBeInTheDocument();
-  });
-
-  it("summarises the reward in the same words as the offers list", () => {
-    view({ offer: OFFER });
-    // The header summary and the live sentence both come from describeReward,
-    // so they cannot describe the same offer differently.
-    expect(
-      screen.getAllByText(/Buy 1, get 1 free/).length,
-    ).toBeGreaterThanOrEqual(1);
-  });
-
-  // ★★ IT DEFAULTED TO ONE SET, in a field whose placeholder reads "No limit".
-  // So "Buy 1, get 1 free" on a basket of four gave ONE free item, not two —
-  // the offer stopped meaning what its own name says, with nothing on screen
-  // to explain it. Blank is the honest default; the budget is the guard rail.
-
+describe("OfferForm — fields", () => {
   /** The Max-sets input, once the reward type actually renders it. */
   const maxSetsField = () =>
     screen
@@ -161,12 +258,12 @@ describe("OfferForm — four collapsible sections", () => {
       .map((el) => el.textContent ?? "")
       .find((t) => t.includes("A set is")) ?? "";
 
+  // ★★ IT DEFAULTED TO ONE SET, in a field whose placeholder reads "No limit".
+  // So "Buy 1, get 1 free" on a basket of four gave ONE free item, not two —
+  // the offer stopped meaning what its own name says, with nothing on screen
+  // to explain it. Blank is the honest default; the budget is the guard rail.
   it("starts a NEW buy-X-get-Y offer with no set limit", async () => {
-    const user = userEvent.setup();
-    view();
-    // The Discount select is the first combobox on the form; it has no
-    // accessible name of its own (the label above it is a plain span).
-    await user.selectOptions(screen.getAllByRole("combobox")[0], "buy_x_get_y");
+    await newOffer("Buy X, get Y");
     expect(maxSetsField()).toHaveValue("");
     expect(maxSetsField()).toHaveAttribute("placeholder", "No limit");
   });
@@ -194,27 +291,35 @@ describe("OfferForm — four collapsible sections", () => {
     expect(maxSetsField()).toHaveValue("3");
   });
 
-  // ★★ "COUPON" IS ONE DROPDOWN ENTRY NOW, not two. A percentage off the order
-  // and a rupee amount off the order are the same thing to a merchant, and
-  // splitting them made them read as two unrelated features while every other
-  // entry described a mechanic.
+  // ★★ "COUPON" IS ONE ENTRY, not two. A percentage off the order and a rupee
+  // amount off the order are the same thing to a merchant, and splitting them
+  // made them read as two unrelated features while every other entry described
+  // a mechanic.
   describe("the coupon family", () => {
-    const discountSelect = () => screen.getAllByRole("combobox")[0];
+    // ★ BY LABEL, not by position. The Method card comes first now, so the
+    // first combobox on the page is Delivery — a positional lookup would pass
+    // today and quietly test the wrong control after the next reorder.
+    const discountSelect = () =>
+      screen.getByText("Discount").parentElement!.querySelector("select")!;
 
-    it("offers one Coupon entry rather than two order-level rewards", () => {
+    it("offers one Coupon card in the picker rather than two order rewards", () => {
       view();
-      const options = Array.from(
-        discountSelect().querySelectorAll("option"),
-      ).map((o) => (o as HTMLOptionElement).value);
-      expect(options).toContain("coupon");
-      expect(options).not.toContain("percent_off");
-      expect(options).not.toContain("amount_off");
+      expect(
+        screen.getByRole("button", { name: /A coupon/i }),
+      ).toBeInTheDocument();
+      // ★ TITLES, not accessible names — the coupon card's own blurb says
+      // "a percentage or a fixed amount off", so a name match would find the
+      // very card this asserts the absence of. The order group holds exactly
+      // the coupon and the ladder.
+      const orderGroup = screen
+        .getByText("Off the whole order")
+        .parentElement!.querySelectorAll("button");
+      expect(orderGroup).toHaveLength(2);
+      expect(screen.queryByText("A fixed amount off")).toBeNull();
     });
 
     it("keeps the stored reward types — the schema is not regrouped", async () => {
-      const user = userEvent.setup();
-      view();
-      // The family select lands on percentage; the type control switches it.
+      const { user } = await newOffer("A coupon");
       expect(screen.getByText("Coupon type")).toBeInTheDocument();
       expect(screen.getByText("Percentage")).toBeInTheDocument();
       await user.selectOptions(
@@ -260,7 +365,6 @@ describe("OfferForm — four collapsible sections", () => {
     });
 
     it("is absent for a reward the cart cannot preview", () => {
-      // buy_x_get_y on a code: works at checkout, cannot be shown as a saving.
       view({ offer: { ...OFFER, delivery: "code", code: "B1G1" } });
       expect(box()).toBeNull();
     });
@@ -281,14 +385,14 @@ describe("OfferForm — four collapsible sections", () => {
   });
 
   it("warns on the delivery control when automatic offers are switched off", () => {
-    view({ autoApplyOn: false });
+    view({ offer: OFFER, autoApplyOn: false });
     expect(
       screen.getByText(/automatic offers switched off/i),
     ).toBeInTheDocument();
   });
 
   it("says nothing when they are switched on", () => {
-    view({ autoApplyOn: true });
+    view({ offer: OFFER, autoApplyOn: true });
     expect(screen.queryByText(/automatic offers switched off/i)).toBeNull();
   });
 });

@@ -8629,10 +8629,29 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       folded into the cell that owns it and shown only when it is not the
       default. The editor was TEN unlabelled fieldsets in one scroll, seven of
       them optional and sitting at defaults on most offers; it is four named
-      collapsible sections, **each header carrying a summary of what is
-      inside** (which is what makes folding safe — a closed section still
-      reports "on any order" or "No limits"), and **the defaults decide what
-      opens**, computed once so a section cannot slam shut mid-edit. The
+      **cards, laid out the way Shopify's discount editor is** — which is not
+      cargo-culting: the accordion that preceded it made the form shorter
+      without making it legible, because what the offer WAS lived across four
+      headers a merchant opened one at a time, and a section they had not
+      opened was a question they did not know they had answered. Three parts:
+      **type first** (the type decides which cards exist at all, so asking
+      inside the form changes the form's shape under the merchant while they
+      read it); **flat cards, one question each**, in answering order — how they
+      get it → what it gives → what it covers → who → how many → where → when;
+      and **a pinned Summary column**, which is what makes flat affordable, and
+      the thing the accordion could not do — the whole offer readable beside the
+      field being edited rather than a sentence at the top that scrolls away.
+      Each card still carries its VALUE as a subtitle ("on any order", "No
+      limits"), the same phrases the list and the summary use. **Back, Cancel
+      and Save share one PINNED header** — two columns leave the form no single
+      end, so a save button under either of them is somewhere a merchant has to
+      go looking for; it reuses `.dash-savebar`'s two sticky workarounds, both
+      load-bearing (negative side margins to span the scroll column, a negative
+      TOP inset because `top: 0` parks the bar below the container's padding
+      and lets content show above it). The picker is full width at three
+      columns, since a menu you scroll past the fold is one whose last options
+      are never read. On a phone the header tightens rather than stacking — a
+      pinned bar that wraps costs that height on every screen of the form. The
       reward dropdown's eleven flat options are grouped by what the discount
       acts on. `How offers behave` moved from the bottom of the page to **its
       own route**, `/dashboard/offers/settings`. It was briefly a header dialog;

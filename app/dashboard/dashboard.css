@@ -4983,3 +4983,41 @@ a.customer-detail-field:hover {
     display: none;
   }
 }
+
+/* ---------- Offer editor header ---------- */
+/* Back link, title and the save actions in one bar pinned to the top of the
+   scroll column. The mechanics are `.dash-savebar`'s and both of its
+   workarounds apply for the same reasons — the negative SIDE margins cancel
+   .dash-content's horizontal padding so the bar spans the column edge to edge,
+   and the negative TOP INSET cancels its padding-top (with `top: 0` the bar
+   parks 28px down and a strip of content shows above it).
+   ★ It needs an opaque ground of its own: cards scroll UNDER it, and without
+   one the buttons sit on whatever happens to be passing behind. */
+.dashboard-shell .dash-offer-header {
+  position: sticky;
+  top: calc(var(--dash-pad-t, 28px) * -1);
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 calc(var(--dash-pad-x, 32px) * -1) 16px;
+  padding: 10px var(--dash-pad-x, 32px);
+  background: var(--dash-bg, #ebebeb);
+  border-bottom: 1px solid var(--dash-border);
+}
+
+/* ★ TIGHTER, NOT STACKED, ON A PHONE. Wrapping the actions onto a second row
+   doubles the height of a bar that is pinned — so it would cost that space on
+   every screen of the form, which is the opposite of what a small screen
+   wants. The title truncates instead; the buttons never move. */
+@media (max-width: 640px) {
+  .dashboard-shell .dash-offer-header {
+    /* The var is already narrowed to 14px by the mobile .dash-content rule
+       above, so this only tightens the vertical. */
+    padding: 8px var(--dash-pad-x);
+  }
+  .dashboard-shell .dash-offer-header h1 {
+    font-size: 16px;
+  }
+}

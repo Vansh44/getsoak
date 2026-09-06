@@ -4,7 +4,7 @@ import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { toast } from "sonner";
-import { ArrowLeft, ChevronDown, Plus, Trash2 } from "lucide-react";
+import { ArrowLeft, Plus, Trash2 } from "lucide-react";
 import { describeReward, describeTrigger } from "@/lib/offers/describe";
 import {
   createOffer,
@@ -591,6 +591,92 @@ function LadderEditor({
   );
 }
 
+/**
+ * The discount types, as a first-screen choice.
+ *
+ * ★★ TYPE BEFORE FORM, which is Shopify's shape and is not merely a
+ * convention. The type decides which cards the form even has — a percentage
+ * needs no item scope, a bundle needs one, a gift needs a product — so asking
+ * for it inside the form means the form's own shape changes under the merchant
+ * while they read it. Asked first, every card that then appears is one they
+ * need.
+ *
+ * ★ THE SAME GROUPS THE DROPDOWN USED, kept because they answer the question a
+ * merchant actually has ("off the order, or off some products?") before the
+ * names have to mean anything. "Buy X get Y" and "bundle price" are opaque
+ * until you know which group they are in.
+ */
+const TYPE_GROUPS: {
+  label: string;
+  types: { value: OfferRewardType | "coupon"; title: string; blurb: string }[];
+}[] = [
+  {
+    label: "Off the whole order",
+    types: [
+      {
+        value: "coupon",
+        title: "A coupon",
+        blurb: "A percentage or a fixed amount off the order total.",
+      },
+      {
+        value: "tiered",
+        title: "Spend more, save more",
+        blurb: "A ladder — spend ₹1,000 save 5%, spend ₹2,500 save 10%.",
+      },
+    ],
+  },
+  {
+    label: "Off chosen products",
+    types: [
+      {
+        value: "percent_off_items",
+        title: "A percentage off",
+        blurb: "Discounts only the products or categories you pick.",
+      },
+      {
+        value: "fixed_price",
+        title: "A set price each",
+        blurb: "“Any tee ₹499.” Items already cheaper are left alone.",
+      },
+      {
+        value: "buy_x_get_y",
+        title: "Buy X, get Y",
+        blurb: "Buy 1 get 1 free, or the second one half price.",
+      },
+      {
+        value: "volume_break",
+        title: "Buy more, save more",
+        blurb: "A case price — buy 10 or more, save 15% on each.",
+      },
+      {
+        value: "bundle_price",
+        title: "A few items for one price",
+        blurb: "“Any 3 for ₹999”, counted across the basket.",
+      },
+    ],
+  },
+  {
+    label: "Something extra, not a discount",
+    types: [
+      {
+        value: "free_shipping",
+        title: "Free delivery",
+        blurb: "Waives the delivery charge. Never applies at a till.",
+      },
+      {
+        value: "free_item",
+        title: "A free gift",
+        blurb: "Adds a product at ₹0. Its stock is held like any other line.",
+      },
+      {
+        value: "credit_back",
+        title: "Store credit back",
+        blurb: "They pay full price and get credit to spend later.",
+      },
+    ],
+  },
+];
+
 const BXGY_PRESETS = [
   { label: "Buy 1 get 1 free", buy: 1, get: 1, pct: 100 },
   { label: "Buy 2 get 1 free", buy: 2, get: 1, pct: 100 },
@@ -601,57 +687,36 @@ const BXGY_PRESETS = [
 const dateValue = (iso: string | null) => (iso ? iso.slice(0, 10) : "");
 
 /**
- * One collapsible part of the offer form.
+ * One card of the offer form.
  *
- * ★ LOCAL, NOT THE BUILDER'S `FieldGroup`. That component is styled by
- * `sm-builder-*` classes in `builder.css`, which only the builder overlay
- * loads — reusing it here would render an unstyled block on a page that never
- * imports that stylesheet. Same reason the dashboard has its own tokens.
+ * ★★ A CARD, NOT A DISCLOSURE. The previous shape folded ten fieldsets into
+ * four collapsible sections, which made the form shorter without making it
+ * legible: what the offer WAS lived across four headers a merchant opened one
+ * at a time, and a section they had not opened was a question they did not
+ * know they had answered. Shopify's discount editor is flat cards with a live
+ * summary beside them, and the summary is what makes flat affordable — you can
+ * read the whole offer without scrolling the form.
  *
- * ★ THE SUMMARY IS THE POINT. A disclosure that only shows a title makes the
- * merchant open every section to find out what is in it, which is worse than
- * the long scroll it replaced. Closed sections read as a settings list.
+ * ★ THE SUBTITLE IS STILL THE VALUE, not a description. "on any order", "No
+ * limits" — the same phrases the summary and the offers list use, so a card
+ * answers its own question before it is read.
  */
-function OfferSection({
+function OfferCard({
   title,
-  summary,
-  defaultOpen = false,
+  subtitle,
   children,
 }: {
   title: string;
-  summary?: string;
-  defaultOpen?: boolean;
+  subtitle?: string;
   children: React.ReactNode;
 }) {
-  const [open, setOpen] = useState(defaultOpen);
   return (
-    <section className="mb-3 rounded-[10px] border border-[var(--dash-border)]">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        aria-expanded={open}
-        className="flex w-full items-center gap-3 px-4 py-3 text-left"
-      >
-        <ChevronDown
-          size={16}
-          className={`shrink-0 text-[var(--dash-ink-2)] transition-transform ${
-            open ? "" : "-rotate-90"
-          }`}
-        />
-        <span className="min-w-0 flex-1">
-          <span className="block text-sm font-medium">{title}</span>
-          {!open && summary && (
-            <span className="mt-0.5 block truncate text-xs text-[var(--dash-ink-2)]">
-              {summary}
-            </span>
-          )}
-        </span>
-      </button>
-      {open && (
-        <div className="border-t border-[var(--dash-border)] p-4">
-          {children}
-        </div>
+    <section className="dash-card p-4 sm:p-5">
+      <h2 className="text-sm font-semibold text-[var(--dash-ink)]">{title}</h2>
+      {subtitle && (
+        <p className="mt-0.5 text-xs text-[var(--dash-ink-2)]">{subtitle}</p>
       )}
+      <div className="mt-3">{children}</div>
     </section>
   );
 }
@@ -699,6 +764,12 @@ export function OfferForm({
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
+
+  // ★ ONLY A NEW OFFER IS ASKED. Editing one whose type is already set and
+  // whose fields are full of values would be a screen with one obvious answer,
+  // and changing an existing offer's type is not what anyone opens the editor
+  // to do — the Value card's own control still allows it.
+  const [pickingType, setPickingType] = useState(!offer);
 
   const [form, setForm] = useState<OfferFormData>({
     name: offer?.name ?? "",
@@ -886,16 +957,6 @@ export function OfferForm({
     scopeCount,
     giftName: products.find((pr) => pr.id === form.giftProductId)?.name,
   });
-  const whenSummary = [
-    describeTrigger(form.triggerType, form.minSubtotal, { scopeCount }),
-    form.conditions.length > 0
-      ? `${form.conditions.length} extra condition${
-          form.conditions.length === 1 ? "" : "s"
-        }`
-      : null,
-  ]
-    .filter(Boolean)
-    .join(" · ");
   const howSummary = [
     form.delivery === "automatic"
       ? "Applied automatically"
@@ -928,21 +989,6 @@ export function OfferForm({
       .filter(Boolean)
       .join(" · ") || "No limits — runs until you pause it";
 
-  // ★ COMPUTED ONCE, from the form as it FIRST loaded. Recomputing would close
-  // a section the moment its last value was cleared, mid-edit.
-  const [openWhen] = useState(
-    () => form.triggerType !== "always" || form.conditions.length > 0,
-  );
-  const [openLimits] = useState(() =>
-    Boolean(
-      form.budget ||
-      form.maxRedemptions ||
-      form.maxPerCustomer ||
-      form.validFrom ||
-      form.validUntil,
-    ),
-  );
-
   const submit = () =>
     startTransition(async () => {
       const res = offer
@@ -959,864 +1005,994 @@ export function OfferForm({
 
   return (
     <div className="dash-page-enter">
-      <header className="dash-page-header row">
-        <div>
+      {/* ★★ BACK AND SAVE IN ONE BAR, PINNED. Save used to sit at the bottom of
+          the left column — but with two columns the form has no single end, so
+          on a long offer the button was somewhere a merchant had to go looking
+          for, and "how do I get out of here" was a separate scroll. Both live
+          in the header now and neither ever leaves the screen.
+
+          ★ THE STICKY MECHANICS ARE `.dash-savebar`'s, and both of its
+          workarounds are load-bearing (see dashboard.css): the negative SIDE
+          margins cancel the scroll column's padding so the bar spans it edge to
+          edge, and the negative TOP INSET cancels its padding-top — with
+          `top: 0` the bar parks 28px down and page content shows above it. */}
+      <header className="dash-offer-header">
+        <div className="min-w-0">
           <Link
             href="/dashboard/offers"
-            className="mb-2 inline-flex items-center gap-1 text-sm text-[var(--dash-ink-2)] hover:underline"
+            className="inline-flex items-center gap-1 text-xs text-[var(--dash-ink-2)] hover:underline"
           >
-            <ArrowLeft size={14} /> Offers
+            <ArrowLeft size={13} /> Offers
           </Link>
-          <h1>{offer ? "Edit offer" : "New offer"}</h1>
-          <p>{summary}</p>
+          <h1 className="truncate text-[19px] font-semibold leading-tight">
+            {offer ? "Edit offer" : "New offer"}
+          </h1>
         </div>
+        {/* ★ HIDDEN WHILE PICKING A TYPE. There is nothing to save yet, and a
+            live Create button on the picker would create the default nobody
+            chose. */}
+        {!pickingType && (
+          <div className="flex shrink-0 items-center gap-2">
+            <Link href="/dashboard/offers" className="dash-btn">
+              Cancel
+            </Link>
+            <button
+              type="button"
+              className="dash-btn dash-btn-primary"
+              disabled={pending}
+              onClick={submit}
+            >
+              {pending ? "Saving…" : offer ? "Save offer" : "Create offer"}
+            </button>
+          </div>
+        )}
       </header>
 
-      <div className="dash-card max-w-3xl p-5">
-        <div className="mb-5 grid gap-4 sm:grid-cols-2">
-          <label className="block">
-            <span className={labelClass}>Name</span>
-            <input
-              className={fieldClass}
-              value={form.name}
-              maxLength={120}
-              placeholder="Launch week"
-              onChange={(e) => set("name", e.target.value)}
-            />
-            <span className={hintClass}>
-              For your reference. Customers never see it.
-            </span>
-          </label>
-          <label className="block">
-            <span className={labelClass}>Note (optional)</span>
-            <input
-              className={fieldClass}
-              value={form.description}
-              onChange={(e) => set("description", e.target.value)}
-              placeholder="Why this offer exists"
-            />
-          </label>
+      {/* ★ THE PICKER'S OWN PROMPT. On the FORM this line is gone: the Summary
+          card carries the same sentence, and repeating it under a sticky
+          header spent the one row of vertical space a phone can least
+          afford. */}
+      {pickingType && (
+        <p className="mb-4 text-sm text-[var(--dash-ink-2)]">
+          What kind of discount is this?
+        </p>
+      )}
+
+      {pickingType ? (
+        <div className="space-y-5">
+          {TYPE_GROUPS.map((group) => (
+            <div key={group.label}>
+              <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--dash-ink-2)]">
+                {group.label}
+              </h2>
+              {/* ★ THREE ACROSS ON A WIDE SCREEN. Two columns inside a
+                  `max-w-3xl` left the right half of the page empty while the
+                  list of types ran off the bottom — the picker is a menu, and a
+                  menu you have to scroll past the fold is one where the last
+                  options are never read. */}
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                {group.types.map((t) => (
+                  <button
+                    key={t.value}
+                    type="button"
+                    onClick={() => {
+                      set(
+                        "rewardType",
+                        t.value === "coupon"
+                          ? "percent_off"
+                          : (t.value as OfferRewardType),
+                      );
+                      setPickingType(false);
+                    }}
+                    className="dash-card p-4 text-left transition-colors hover:border-[var(--dash-ink-2)]"
+                  >
+                    <span className="block text-sm font-medium text-[var(--dash-ink)]">
+                      {t.title}
+                    </span>
+                    <span className="mt-1 block text-xs leading-relaxed text-[var(--dash-ink-2)]">
+                      {t.blurb}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
         </div>
+      ) : (
+        <>
+          {/* ★★ SHOPIFY'S SHAPE, because it is the one merchants already know —
+          and because it fixes what the accordion only hid. Four collapsible
+          sections made a long form shorter; they did not make it easier to see
+          what the offer WAS, because the answer was spread across four headers
+          you opened one at a time.
 
-        {/* ★★ FOUR NAMED SECTIONS, DOWN FROM TEN UNLABELLED BLOCKS. The
-            form was one scroll of ten fieldsets — reward, trigger, delivery,
-            channels, limits, dates, item scope, locations, groups, extra
-            conditions — with no way to see its shape or skip a part. Seven of
-            the ten are OPTIONAL and sit at defaults on most offers, so most of
-            that scroll was reading past things nobody had set.
-
-            ★ EACH HEADER CARRIES A SUMMARY OF WHAT IS INSIDE, which is what
-            makes collapsing safe: a closed section still tells you it says
-            "Any order" or "No limits", so nothing is hidden — only folded.
-
-            ★ AND THE DEFAULTS DECIDE WHAT OPENS. A section at its defaults
-            starts closed; one the merchant has actually configured starts
-            open, so editing an existing offer never buries the part they came
-            to change. Computed once from the initial form, never re-derived,
-            or a section would slam shut while being typed into. */}
-        <OfferSection
-          title="What the customer gets"
-          summary={givesSummary}
-          defaultOpen
-        >
-          <fieldset className="mb-5">
-            <legend className="sr-only">What the customer gets</legend>
-            <div className="mt-2 grid gap-4 sm:grid-cols-2">
-              <label className="block">
-                <span className={hintClass}>Discount</span>
-                <select
-                  className={fieldClass}
-                  value={rewardFamily}
-                  onChange={(e) => {
-                    const next = e.target.value;
-                    // Picking the family lands on the commoner of its two
-                    // shapes; the type control below switches between them.
-                    set(
-                      "rewardType",
-                      next === "coupon"
-                        ? "percent_off"
-                        : (next as OfferRewardType),
-                    );
-                  }}
-                >
-                  {/* ★★ GROUPED BY WHAT THE DISCOUNT ACTS ON, because eleven
-                      flat options is a list you read three times to find the one
-                      you want — and two of the names ("Buy X get Y", "Bundle
-                      price") mean nothing until you know which group they are
-                      in. `<optgroup>` is the native control for exactly this and
-                      costs no JavaScript, no library and no custom keyboard
-                      handling.
-
-                      ★ ORDER IS BY HOW OFTEN IT IS REACHED FOR, not by the
-                      order the phases shipped in: the two whole-order discounts
-                      are what most merchants build first, and the ladders and
-                      bundles are the long tail. */}
-                  <optgroup label="Off the whole order">
-                    <option value="coupon">
-                      A coupon — a percentage or an amount off
-                    </option>
-                    <option value="tiered">
-                      Spend more, save more (order levels)
-                    </option>
-                  </optgroup>
-                  <optgroup label="Off chosen products">
-                    <option value="percent_off_items">A percentage off</option>
-                    <option value="fixed_price">A set price each</option>
-                    <option value="buy_x_get_y">
-                      Buy X, get Y free or discounted
-                    </option>
-                    <option value="volume_break">
-                      Buy more, save more (quantity levels)
-                    </option>
-                    <option value="bundle_price">
-                      Any few items for one price
-                    </option>
-                  </optgroup>
-                  <optgroup label="Something extra, not a discount">
-                    <option value="free_shipping">Free delivery</option>
-                    <option value="free_item">A free gift</option>
-                    <option value="credit_back">Store credit back</option>
-                  </optgroup>
-                </select>
-              </label>
-              {form.rewardType === "bundle_price" ? (
-                <div className="sm:col-span-2 grid gap-4 sm:grid-cols-3">
-                  {(
-                    [
-                      ["bundleQuantity", "How many items"],
-                      ["bundlePrice", "Bundle price (₹)"],
-                      ["maxSets", "Max bundles per order"],
-                    ] as const
-                  ).map(([key, label]) => (
-                    <label key={key} className="block">
-                      <span className={hintClass}>{label}</span>
-                      <input
-                        className={fieldClass}
-                        inputMode="numeric"
-                        value={form[key] || ""}
-                        placeholder={key === "maxSets" ? "No limit" : ""}
-                        onChange={(e) =>
-                          set(
-                            key,
-                            Number(e.target.value.replace(/\D/g, "")) || 0,
-                          )
-                        }
-                      />
-                    </label>
-                  ))}
-                  <span className={`${hintClass} sm:col-span-3`}>
-                    Items are counted across the basket, and the most expensive
-                    qualifying ones go into the bundle — which gives the
-                    customer the biggest saving and means a bundle can never
-                    charge more than the items were worth. If they come to less
-                    than the bundle price, the offer does not apply.{" "}
-                    {form.maxSets > 0 ? (
-                      <>
-                        <strong>
-                          Your limit of {form.maxSets}{" "}
-                          {form.maxSets === 1 ? "bundle" : "bundles"} caps it
-                        </strong>{" "}
-                        — a bigger basket earns no more.
-                      </>
-                    ) : (
-                      <>
-                        It repeats for as long as the basket allows; a{" "}
-                        <strong>total budget</strong> under Limits is the way to
-                        bound what you give away.
-                      </>
-                    )}
-                  </span>
-                </div>
-              ) : form.rewardType === "credit_back" ? (
-                <div className="sm:col-span-2">
-                  <label className="block max-w-[12rem]">
-                    <span className={hintClass}>Store credit (₹)</span>
-                    <input
-                      className={fieldClass}
-                      inputMode="numeric"
-                      value={form.creditAmount || ""}
-                      onChange={(e) =>
-                        set(
-                          "creditAmount",
-                          Number(e.target.value.replace(/\D/g, "")) || 0,
-                        )
-                      }
-                    />
-                  </label>
-                  <span className={hintClass}>
-                    The customer pays full price today and receives store credit
-                    afterwards. It does not reduce the order total, change the
-                    tax or appear on the invoice, because nothing about what
-                    they paid has changed.
-                  </span>
-                  <p className="mt-2 text-xs text-[#b45309]">
-                    This is money you owe. Unlike a discount, which costs you
-                    once, credit sits on the customer&rsquo;s account until they
-                    spend it — set a budget if you want a ceiling on how much
-                    you issue.
-                  </p>
-                </div>
-              ) : form.rewardType === "free_item" ? (
-                <div className="sm:col-span-2">
+          Three things do the work:
+            · TYPE FIRST. The type decides which of these cards even exist, so
+              it is a choice made BEFORE the form rather than a dropdown buried
+              inside it.
+            · CARDS, ALL OPEN, one question each, in the order a merchant
+              answers them: how they get it → what it gives → what it covers →
+              who → how many → where → when.
+            · A LIVE SUMMARY, PINNED — the thing an accordion could not do. The
+              whole offer readable at once, beside the field being edited,
+              rather than a sentence at the top that scrolls away. */}
+          <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
+            <div className="min-w-0 space-y-4">
+              <OfferCard title="Method" subtitle={howSummary}>
+                <div className="mt-2 grid gap-4 sm:grid-cols-2">
                   <label className="block">
-                    <span className={hintClass}>The gift</span>
+                    <span className={hintClass}>Delivery</span>
                     <select
                       className={fieldClass}
-                      value={form.giftProductId}
-                      onChange={(e) => set("giftProductId", e.target.value)}
-                    >
-                      <option value="">Choose a product…</option>
-                      {products.map((pr) => (
-                        <option key={pr.id} value={pr.id}>
-                          {pr.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="mt-3 block max-w-[10rem]">
-                    <span className={hintClass}>How many</span>
-                    <input
-                      className={fieldClass}
-                      inputMode="numeric"
-                      value={form.giftQuantity || ""}
+                      value={form.delivery}
                       onChange={(e) =>
-                        set(
-                          "giftQuantity",
-                          Number(e.target.value.replace(/\D/g, "")) || 0,
-                        )
+                        set("delivery", e.target.value as OfferDelivery)
+                      }
+                    >
+                      <option value="automatic">Automatically</option>
+                      <option value="code">With a discount code</option>
+                      <option value="link">From a shareable link</option>
+                    </select>
+                    {form.delivery === "automatic" && !autoApplyOn && (
+                      <span className="mt-1 block text-[11px] text-amber-700">
+                        Your store has automatic offers switched off, so this
+                        will not apply to anything — online or at the till —
+                        however you set it up here. Turn on{" "}
+                        <Link
+                          href="/dashboard/offers/settings"
+                          className="underline"
+                        >
+                          “Apply offers automatically”
+                        </Link>{" "}
+                        to let it run, or give it a discount code instead.
+                      </span>
+                    )}
+                  </label>
+                  {form.delivery !== "automatic" && (
+                    <label className="block">
+                      <span className={hintClass}>Code</span>
+                      <input
+                        className={`${fieldClass} font-mono uppercase`}
+                        value={form.code}
+                        onChange={(e) => set("code", e.target.value)}
+                        placeholder="LAUNCH10"
+                      />
+                      <span className={hintClass}>
+                        Not case-sensitive. Spaces are removed.
+                      </span>
+                    </label>
+                  )}
+                </div>
+
+                {/* ★★ ONLY FOR A COUPON ON A CODE. Publishing a code puts it in front
+                          of every visitor, and the cart can only preview an order-level
+                          percentage or amount — so a buy-X-get-Y on a code would be
+                          advertised, typed in, and refused. §23's rule: rather than a
+                          checkbox that sometimes produces a broken code, the control is
+                          absent — and `buildRow` forces the column false regardless,
+                          because a hidden field is not a boundary.
+
+                          ★ OFF BY DEFAULT, and that is the meaningful default rather than
+                          the timid one: a code is usually targeted — emailed to a segment,
+                          printed on a flyer — and listing it for every visitor destroys
+                          exactly the targeting the merchant set up. */}
+                {form.delivery !== "automatic" && isCouponReward && (
+                  <label className="mt-3 flex items-start gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5"
+                      checked={form.showOnStorefront}
+                      onChange={(e) =>
+                        set("showOnStorefront", e.target.checked)
                       }
                     />
+                    <span>
+                      Show this coupon on my storefront
+                      <span className={hintClass}>
+                        Lists the code in the cart under &ldquo;Available
+                        coupons&rdquo;, so any shopper can apply it in one tap.
+                        Leave it off for a code you only want to send to
+                        particular customers.
+                      </span>
+                    </span>
                   </label>
-                  {/* ★★ THE TWO THINGS A MERCHANT WOULD OTHERWISE DISCOVER THE
-                      HARD WAY, said before they save rather than after. */}
-                  <span className={hintClass}>
-                    The gift is added to the order at ₹0 and its stock is
-                    reserved like any sold item, so it is taken off your shelf
-                    and appears on the order and the receipt. The offer stops
-                    applying on its own when the gift runs out — customers are
-                    never promised one you cannot send.
-                  </span>
-                  <p className="mt-2 text-xs text-[#b45309]">
-                    Tax on free goods: the line records the gift&rsquo;s own tax
-                    class, and tax on a zero value is zero. Whether GST is due
-                    on a free item given with a sale depends on your
-                    circumstances — check with your accountant before relying on
-                    this for a return.
-                  </p>
+                )}
+                <div className="mt-3 flex flex-wrap gap-4">
+                  {(["storefront", "pos"] as OfferChannel[]).map((ch) => (
+                    <label key={ch} className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={
+                          form.channels.length === 0 ||
+                          form.channels.includes(ch)
+                        }
+                        onChange={() => {
+                          // Empty means "everywhere", so unticking one has to write
+                          // the OTHER explicitly rather than leaving an empty list
+                          // that silently means both.
+                          const current =
+                            form.channels.length === 0
+                              ? (["storefront", "pos"] as OfferChannel[])
+                              : form.channels;
+                          const next = toggle(current, ch) as OfferChannel[];
+                          set("channels", next);
+                        }}
+                      />
+                      {ch === "pos" ? "Point of sale" : "Online store"}
+                    </label>
+                  ))}
                 </div>
-              ) : form.rewardType === "tiered" ||
-                form.rewardType === "volume_break" ? (
-                <LadderEditor form={form} setForm={setForm} />
-              ) : form.rewardType === "buy_x_get_y" ? (
-                <div className="sm:col-span-2">
-                  {/* ★ PRESETS OVER FOUR NUMBER BOXES. "Buy 1 get 1 free" is what
-                      a merchant is thinking; buy/get/percent is how it is
-                      stored. The boxes stay visible and editable underneath, so
-                      an unusual combination is still reachable — a preset is a
-                      shortcut, not a restriction. */}
-                  <span className={hintClass}>Common offers</span>
-                  <div className="mb-3 mt-1 flex flex-wrap gap-2">
-                    {BXGY_PRESETS.map((preset) => {
-                      const active =
-                        form.buyQuantity === preset.buy &&
-                        form.getQuantity === preset.get &&
-                        form.getPercent === preset.pct;
-                      return (
-                        <button
-                          key={preset.label}
-                          type="button"
-                          onClick={() =>
-                            setForm((f) => ({
-                              ...f,
-                              buyQuantity: preset.buy,
-                              getQuantity: preset.get,
-                              getPercent: preset.pct,
-                            }))
-                          }
-                          className={`rounded-full border px-3 py-1 text-xs ${
-                            active
-                              ? "border-[#4f46e5] bg-[#eef2ff] text-[#4f46e5]"
-                              : "border-[#e5e7eb] text-[#6b7280]"
-                          }`}
-                        >
-                          {preset.label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <div className="grid gap-4 sm:grid-cols-4">
-                    {(
-                      [
-                        ["buyQuantity", "Buy"],
-                        ["getQuantity", "Get"],
-                        ["getPercent", "% off the free ones"],
-                        ["maxSets", "Max sets per order"],
-                      ] as const
-                    ).map(([key, label]) => (
-                      <label key={key} className="block">
-                        <span className={hintClass}>{label}</span>
+                {form.channels.length === 0 && (
+                  <span className={hintClass}>Runs everywhere you sell.</span>
+                )}
+                <div className="mb-5 grid gap-4 sm:grid-cols-2">
+                  <label className="block">
+                    <span className={labelClass}>Name</span>
+                    <input
+                      className={fieldClass}
+                      value={form.name}
+                      maxLength={120}
+                      placeholder="Launch week"
+                      onChange={(e) => set("name", e.target.value)}
+                    />
+                    <span className={hintClass}>
+                      For your reference. Customers never see it.
+                    </span>
+                  </label>
+                  <label className="block">
+                    <span className={labelClass}>Note (optional)</span>
+                    <input
+                      className={fieldClass}
+                      value={form.description}
+                      onChange={(e) => set("description", e.target.value)}
+                      placeholder="Why this offer exists"
+                    />
+                  </label>
+                </div>
+              </OfferCard>
+
+              <OfferCard title="Value" subtitle={givesSummary}>
+                <div className="mt-2 grid gap-4 sm:grid-cols-2">
+                  <label className="block">
+                    <span className={hintClass}>Discount</span>
+                    <select
+                      className={fieldClass}
+                      value={rewardFamily}
+                      onChange={(e) => {
+                        const next = e.target.value;
+                        // Picking the family lands on the commoner of its two
+                        // shapes; the type control below switches between them.
+                        set(
+                          "rewardType",
+                          next === "coupon"
+                            ? "percent_off"
+                            : (next as OfferRewardType),
+                        );
+                      }}
+                    >
+                      {/* ★★ GROUPED BY WHAT THE DISCOUNT ACTS ON, because eleven
+                                  flat options is a list you read three times to find the one
+                                  you want — and two of the names ("Buy X get Y", "Bundle
+                                  price") mean nothing until you know which group they are
+                                  in. `<optgroup>` is the native control for exactly this and
+                                  costs no JavaScript, no library and no custom keyboard
+                                  handling.
+
+                                  ★ ORDER IS BY HOW OFTEN IT IS REACHED FOR, not by the
+                                  order the phases shipped in: the two whole-order discounts
+                                  are what most merchants build first, and the ladders and
+                                  bundles are the long tail. */}
+                      <optgroup label="Off the whole order">
+                        <option value="coupon">
+                          A coupon — a percentage or an amount off
+                        </option>
+                        <option value="tiered">
+                          Spend more, save more (order levels)
+                        </option>
+                      </optgroup>
+                      <optgroup label="Off chosen products">
+                        <option value="percent_off_items">
+                          A percentage off
+                        </option>
+                        <option value="fixed_price">A set price each</option>
+                        <option value="buy_x_get_y">
+                          Buy X, get Y free or discounted
+                        </option>
+                        <option value="volume_break">
+                          Buy more, save more (quantity levels)
+                        </option>
+                        <option value="bundle_price">
+                          Any few items for one price
+                        </option>
+                      </optgroup>
+                      <optgroup label="Something extra, not a discount">
+                        <option value="free_shipping">Free delivery</option>
+                        <option value="free_item">A free gift</option>
+                        <option value="credit_back">Store credit back</option>
+                      </optgroup>
+                    </select>
+                  </label>
+                  {form.rewardType === "bundle_price" ? (
+                    <div className="sm:col-span-2 grid gap-4 sm:grid-cols-3">
+                      {(
+                        [
+                          ["bundleQuantity", "How many items"],
+                          ["bundlePrice", "Bundle price (₹)"],
+                          ["maxSets", "Max bundles per order"],
+                        ] as const
+                      ).map(([key, label]) => (
+                        <label key={key} className="block">
+                          <span className={hintClass}>{label}</span>
+                          <input
+                            className={fieldClass}
+                            inputMode="numeric"
+                            value={form[key] || ""}
+                            placeholder={key === "maxSets" ? "No limit" : ""}
+                            onChange={(e) =>
+                              set(
+                                key,
+                                Number(e.target.value.replace(/\D/g, "")) || 0,
+                              )
+                            }
+                          />
+                        </label>
+                      ))}
+                      <span className={`${hintClass} sm:col-span-3`}>
+                        Items are counted across the basket, and the most
+                        expensive qualifying ones go into the bundle — which
+                        gives the customer the biggest saving and means a bundle
+                        can never charge more than the items were worth. If they
+                        come to less than the bundle price, the offer does not
+                        apply.{" "}
+                        {form.maxSets > 0 ? (
+                          <>
+                            <strong>
+                              Your limit of {form.maxSets}{" "}
+                              {form.maxSets === 1 ? "bundle" : "bundles"} caps
+                              it
+                            </strong>{" "}
+                            — a bigger basket earns no more.
+                          </>
+                        ) : (
+                          <>
+                            It repeats for as long as the basket allows; a{" "}
+                            <strong>total budget</strong> under Limits is the
+                            way to bound what you give away.
+                          </>
+                        )}
+                      </span>
+                    </div>
+                  ) : form.rewardType === "credit_back" ? (
+                    <div className="sm:col-span-2">
+                      <label className="block max-w-[12rem]">
+                        <span className={hintClass}>Store credit (₹)</span>
                         <input
                           className={fieldClass}
                           inputMode="numeric"
-                          value={form[key] || ""}
-                          placeholder={key === "maxSets" ? "No limit" : ""}
+                          value={form.creditAmount || ""}
                           onChange={(e) =>
                             set(
-                              key,
+                              "creditAmount",
                               Number(e.target.value.replace(/\D/g, "")) || 0,
                             )
                           }
                         />
                       </label>
-                    ))}
-                  </div>
-                  {/* ★ SAYS WHAT THE BASKET ACTUALLY COSTS, in the shape a
-                      merchant is picturing. "A set is 1 + 1 = 2 items" is the
-                      mechanism; "4 items — the customer pays for 2" is the
-                      outcome, and the outcome is what they came to check. */}
-                  <span className={hintClass}>
-                    A set is {form.buyQuantity || 0} + {form.getQuantity || 0} ={" "}
-                    {setSize} items — so a basket of {setSize * 2} means the
-                    customer pays for {(form.buyQuantity || 0) * 2} and{" "}
-                    {(form.getQuantity || 0) * 2} come free. The cheapest
-                    qualifying items are the discounted ones, counted across the
-                    whole basket.{" "}
-                    {form.maxSets > 0 ? (
-                      <>
-                        <strong>
-                          Your limit of {form.maxSets}{" "}
-                          {form.maxSets === 1 ? "set" : "sets"} caps that
-                        </strong>{" "}
-                        — however many they buy, only{" "}
-                        {(form.getQuantity || 0) * form.maxSets} can ever be
-                        free.
-                      </>
-                    ) : (
-                      <>
-                        It repeats for as long as the basket allows. To bound
-                        what you give away, set a <strong>total budget</strong>{" "}
-                        under Limits — it stops the offer at a rupee figure you
-                        choose, rather than changing what it means.
-                      </>
-                    )}
-                  </span>
+                      <span className={hintClass}>
+                        The customer pays full price today and receives store
+                        credit afterwards. It does not reduce the order total,
+                        change the tax or appear on the invoice, because nothing
+                        about what they paid has changed.
+                      </span>
+                      <p className="mt-2 text-xs text-[#b45309]">
+                        This is money you owe. Unlike a discount, which costs
+                        you once, credit sits on the customer&rsquo;s account
+                        until they spend it — set a budget if you want a ceiling
+                        on how much you issue.
+                      </p>
+                    </div>
+                  ) : form.rewardType === "free_item" ? (
+                    <div className="sm:col-span-2">
+                      <label className="block">
+                        <span className={hintClass}>The gift</span>
+                        <select
+                          className={fieldClass}
+                          value={form.giftProductId}
+                          onChange={(e) => set("giftProductId", e.target.value)}
+                        >
+                          <option value="">Choose a product…</option>
+                          {products.map((pr) => (
+                            <option key={pr.id} value={pr.id}>
+                              {pr.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="mt-3 block max-w-[10rem]">
+                        <span className={hintClass}>How many</span>
+                        <input
+                          className={fieldClass}
+                          inputMode="numeric"
+                          value={form.giftQuantity || ""}
+                          onChange={(e) =>
+                            set(
+                              "giftQuantity",
+                              Number(e.target.value.replace(/\D/g, "")) || 0,
+                            )
+                          }
+                        />
+                      </label>
+                      {/* ★★ THE TWO THINGS A MERCHANT WOULD OTHERWISE DISCOVER THE
+                                  HARD WAY, said before they save rather than after. */}
+                      <span className={hintClass}>
+                        The gift is added to the order at ₹0 and its stock is
+                        reserved like any sold item, so it is taken off your
+                        shelf and appears on the order and the receipt. The
+                        offer stops applying on its own when the gift runs out —
+                        customers are never promised one you cannot send.
+                      </span>
+                      <p className="mt-2 text-xs text-[#b45309]">
+                        Tax on free goods: the line records the gift&rsquo;s own
+                        tax class, and tax on a zero value is zero. Whether GST
+                        is due on a free item given with a sale depends on your
+                        circumstances — check with your accountant before
+                        relying on this for a return.
+                      </p>
+                    </div>
+                  ) : form.rewardType === "tiered" ||
+                    form.rewardType === "volume_break" ? (
+                    <LadderEditor form={form} setForm={setForm} />
+                  ) : form.rewardType === "buy_x_get_y" ? (
+                    <div className="sm:col-span-2">
+                      {/* ★ PRESETS OVER FOUR NUMBER BOXES. "Buy 1 get 1 free" is what
+                                  a merchant is thinking; buy/get/percent is how it is
+                                  stored. The boxes stay visible and editable underneath, so
+                                  an unusual combination is still reachable — a preset is a
+                                  shortcut, not a restriction. */}
+                      <span className={hintClass}>Common offers</span>
+                      <div className="mb-3 mt-1 flex flex-wrap gap-2">
+                        {BXGY_PRESETS.map((preset) => {
+                          const active =
+                            form.buyQuantity === preset.buy &&
+                            form.getQuantity === preset.get &&
+                            form.getPercent === preset.pct;
+                          return (
+                            <button
+                              key={preset.label}
+                              type="button"
+                              onClick={() =>
+                                setForm((f) => ({
+                                  ...f,
+                                  buyQuantity: preset.buy,
+                                  getQuantity: preset.get,
+                                  getPercent: preset.pct,
+                                }))
+                              }
+                              className={`rounded-full border px-3 py-1 text-xs ${
+                                active
+                                  ? "border-[#4f46e5] bg-[#eef2ff] text-[#4f46e5]"
+                                  : "border-[#e5e7eb] text-[#6b7280]"
+                              }`}
+                            >
+                              {preset.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      {/* ★ TWO ACROSS BEFORE FOUR. Four numeric fields in one
+                          row is fine on a desktop and unusable at 640px, where
+                          each is barely wider than the two digits it holds —
+                          and this is the row a merchant most needs to read
+                          back ("buy 1, get 1, 100% off, no limit"). */}
+                      <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
+                        {(
+                          [
+                            ["buyQuantity", "Buy"],
+                            ["getQuantity", "Get"],
+                            ["getPercent", "% off the free ones"],
+                            ["maxSets", "Max sets per order"],
+                          ] as const
+                        ).map(([key, label]) => (
+                          <label key={key} className="block">
+                            <span className={hintClass}>{label}</span>
+                            <input
+                              className={fieldClass}
+                              inputMode="numeric"
+                              value={form[key] || ""}
+                              placeholder={key === "maxSets" ? "No limit" : ""}
+                              onChange={(e) =>
+                                set(
+                                  key,
+                                  Number(e.target.value.replace(/\D/g, "")) ||
+                                    0,
+                                )
+                              }
+                            />
+                          </label>
+                        ))}
+                      </div>
+                      {/* ★ SAYS WHAT THE BASKET ACTUALLY COSTS, in the shape a
+                                  merchant is picturing. "A set is 1 + 1 = 2 items" is the
+                                  mechanism; "4 items — the customer pays for 2" is the
+                                  outcome, and the outcome is what they came to check. */}
+                      <span className={hintClass}>
+                        A set is {form.buyQuantity || 0} +{" "}
+                        {form.getQuantity || 0} = {setSize} items — so a basket
+                        of {setSize * 2} means the customer pays for{" "}
+                        {(form.buyQuantity || 0) * 2} and{" "}
+                        {(form.getQuantity || 0) * 2} come free. The cheapest
+                        qualifying items are the discounted ones, counted across
+                        the whole basket.{" "}
+                        {form.maxSets > 0 ? (
+                          <>
+                            <strong>
+                              Your limit of {form.maxSets}{" "}
+                              {form.maxSets === 1 ? "set" : "sets"} caps that
+                            </strong>{" "}
+                            — however many they buy, only{" "}
+                            {(form.getQuantity || 0) * form.maxSets} can ever be
+                            free.
+                          </>
+                        ) : (
+                          <>
+                            It repeats for as long as the basket allows. To
+                            bound what you give away, set a{" "}
+                            <strong>total budget</strong> under Limits — it
+                            stops the offer at a rupee figure you choose, rather
+                            than changing what it means.
+                          </>
+                        )}
+                      </span>
+                    </div>
+                  ) : form.rewardType === "fixed_price" ? (
+                    <label className="block">
+                      <span className={hintClass}>Price per item (₹)</span>
+                      <input
+                        className={fieldClass}
+                        inputMode="numeric"
+                        value={form.unitPrice || ""}
+                        onChange={(e) =>
+                          set(
+                            "unitPrice",
+                            Number(e.target.value.replace(/\D/g, "")) || 0,
+                          )
+                        }
+                      />
+                      <span className={hintClass}>
+                        Items already cheaper than this are left alone.
+                      </span>
+                    </label>
+                  ) : isCouponReward ? (
+                    /* ★ THE COUPON'S OWN TYPE, beside its value. One control
+                               decides which of the two shapes this is, and the field next
+                               to it changes label and unit to match — so the pair reads as
+                               one decision ("₹200 off" / "20% off") rather than as two
+                               dropdown entries a merchant has to choose between before
+                               they have seen either. */
+                    <>
+                      <label className="block">
+                        <span className={hintClass}>Coupon type</span>
+                        <select
+                          className={fieldClass}
+                          value={form.rewardType}
+                          onChange={(e) =>
+                            set("rewardType", e.target.value as OfferRewardType)
+                          }
+                        >
+                          <option value="percent_off">A percentage off</option>
+                          <option value="amount_off">A fixed amount off</option>
+                        </select>
+                      </label>
+                      <label className="block">
+                        <span className={hintClass}>
+                          {form.rewardType === "amount_off"
+                            ? "Amount (₹)"
+                            : "Percentage"}
+                        </span>
+                        <input
+                          className={fieldClass}
+                          inputMode="numeric"
+                          value={
+                            (form.rewardType === "amount_off"
+                              ? form.amount
+                              : form.percent) || ""
+                          }
+                          onChange={(e) =>
+                            set(
+                              form.rewardType === "amount_off"
+                                ? "amount"
+                                : "percent",
+                              Number(e.target.value.replace(/\D/g, "")) || 0,
+                            )
+                          }
+                        />
+                      </label>
+                    </>
+                  ) : (
+                    <label className="block">
+                      <span className={hintClass}>Percentage</span>
+                      <input
+                        className={fieldClass}
+                        inputMode="numeric"
+                        value={form.percent || ""}
+                        onChange={(e) =>
+                          set(
+                            "percent",
+                            Number(e.target.value.replace(/\D/g, "")) || 0,
+                          )
+                        }
+                      />
+                    </label>
+                  )}
                 </div>
-              ) : form.rewardType === "fixed_price" ? (
-                <label className="block">
-                  <span className={hintClass}>Price per item (₹)</span>
-                  <input
-                    className={fieldClass}
-                    inputMode="numeric"
-                    value={form.unitPrice || ""}
-                    onChange={(e) =>
-                      set(
-                        "unitPrice",
-                        Number(e.target.value.replace(/\D/g, "")) || 0,
-                      )
-                    }
-                  />
-                  <span className={hintClass}>
-                    Items already cheaper than this are left alone.
-                  </span>
-                </label>
-              ) : isCouponReward ? (
-                /* ★ THE COUPON'S OWN TYPE, beside its value. One control
-                   decides which of the two shapes this is, and the field next
-                   to it changes label and unit to match — so the pair reads as
-                   one decision ("₹200 off" / "20% off") rather than as two
-                   dropdown entries a merchant has to choose between before
-                   they have seen either. */
-                <>
+              </OfferCard>
+
+              {(needsScope || scopeSet) && (
+                <OfferCard
+                  title={
+                    scopeIsReward
+                      ? "Applies to — which items are discounted"
+                      : "Applies to — which items qualify"
+                  }
+                  subtitle={
+                    scopeCount > 0
+                      ? `${scopeCount} selected`
+                      : "Nothing chosen yet"
+                  }
+                >
+                  {/* ★ THE SAME PICKER MEANS TWO DIFFERENT THINGS, and saying which
+                            is the difference between an offer that works and one that
+                            surprises the merchant. The reward level decides it:
+                              · "% off chosen items" / "set price"  → these get discounted
+                              · "% off the order" + a basket condition → these QUALIFY the
+                                offer, and the whole basket is discounted once it does. */}
+                  <p className={`${hintClass} mb-2`}>
+                    {scopeIsReward
+                      ? "Only these lines are discounted. The rest of the basket is charged as normal."
+                      : "The basket has to include one of these. Once it does, the discount applies to the whole basket."}
+                  </p>
+
+                  {categories.length > 0 && (
+                    <div className="mb-3">
+                      <span className={hintClass}>Categories</span>
+                      <div className="mt-1 flex flex-wrap gap-3">
+                        {categories.map((c) => (
+                          <label
+                            key={c.id}
+                            className="flex items-center gap-2 text-sm"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={form.categoryIds.includes(c.id)}
+                              onChange={() =>
+                                set(
+                                  "categoryIds",
+                                  toggle(form.categoryIds, c.id),
+                                )
+                              }
+                            />
+                            {c.name}
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {products.length > 0 && (
+                    <div>
+                      <span className={hintClass}>
+                        Products
+                        {products.length >= PRODUCT_PICKER_LIMIT &&
+                          ` (first ${PRODUCT_PICKER_LIMIT}; pick a category for a wider range)`}
+                      </span>
+                      <input
+                        className={`${fieldClass} mt-1`}
+                        placeholder="Filter products…"
+                        value={productFilter}
+                        onChange={(e) => setProductFilter(e.target.value)}
+                      />
+                      <div className="mt-2 max-h-56 overflow-y-auto rounded-md border border-[#e5e7eb] p-2">
+                        {shownProducts.length === 0 ? (
+                          <p className={hintClass}>Nothing matches that.</p>
+                        ) : (
+                          shownProducts.map((pr) => (
+                            <label
+                              key={pr.id}
+                              className="flex items-center gap-2 py-0.5 text-sm"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={form.productIds.includes(pr.id)}
+                                onChange={() =>
+                                  set(
+                                    "productIds",
+                                    toggle(form.productIds, pr.id),
+                                  )
+                                }
+                              />
+                              {pr.name}
+                            </label>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {needsScope && !scopeSet && (
+                    <p className="mt-2 text-[11px] text-amber-700">
+                      Choose at least one, or this offer cannot be saved.
+                    </p>
+                  )}
+                </OfferCard>
+              )}
+
+              <OfferCard
+                title="Minimum requirements"
+                subtitle={describeTrigger(form.triggerType, form.minSubtotal, {
+                  scopeCount,
+                })}
+              >
+                <div className="mt-2 grid gap-4 sm:grid-cols-2">
                   <label className="block">
-                    <span className={hintClass}>Coupon type</span>
+                    <span className={hintClass}>Condition</span>
                     <select
                       className={fieldClass}
-                      value={form.rewardType}
+                      value={form.triggerType}
                       onChange={(e) =>
-                        set("rewardType", e.target.value as OfferRewardType)
+                        set("triggerType", e.target.value as OfferTriggerType)
                       }
                     >
-                      <option value="percent_off">A percentage off</option>
-                      <option value="amount_off">A fixed amount off</option>
+                      <option value="always">Any order</option>
+                      <option value="min_subtotal">
+                        Orders over an amount
+                      </option>
+                      <option value="contains_category">
+                        Baskets containing a chosen category
+                      </option>
+                      <option value="contains_product">
+                        Baskets containing a chosen product
+                      </option>
                     </select>
                   </label>
+                  {form.triggerType === "min_subtotal" && (
+                    <label className="block">
+                      <span className={hintClass}>Minimum order (₹)</span>
+                      <input
+                        className={fieldClass}
+                        inputMode="numeric"
+                        value={form.minSubtotal || ""}
+                        onChange={(e) =>
+                          set(
+                            "minSubtotal",
+                            Number(e.target.value.replace(/\D/g, "")) || 0,
+                          )
+                        }
+                      />
+                      <span className={hintClass}>
+                        Measured on the order value before any discount.
+                      </span>
+                    </label>
+                  )}
+                </div>
+              </OfferCard>
+
+              {groups.length > 0 && (
+                <OfferCard
+                  title="Customer eligibility"
+                  subtitle={
+                    form.groupIds.length > 0
+                      ? `${form.groupIds.length} customer group${
+                          form.groupIds.length === 1 ? "" : "s"
+                        }`
+                      : "Everyone"
+                  }
+                >
+                  <p className={`${hintClass} mb-2`}>
+                    {allowsGroups
+                      ? "Leave all unticked to offer it to everyone. A restricted offer is never suggested to shoppers who cannot use it."
+                      : "Restricting an offer to customer groups is available on Basic and Pro."}
+                  </p>
+                  <div className="flex flex-wrap gap-3">
+                    {groups.map((g) => (
+                      <label
+                        key={g.id}
+                        className={`flex items-center gap-2 text-sm ${allowsGroups ? "" : "opacity-50"}`}
+                      >
+                        <input
+                          type="checkbox"
+                          disabled={!allowsGroups}
+                          checked={form.groupIds.includes(g.id)}
+                          onChange={() =>
+                            set("groupIds", toggle(form.groupIds, g.id))
+                          }
+                        />
+                        {g.name}
+                      </label>
+                    ))}
+                  </div>
+                </OfferCard>
+              )}
+
+              <OfferCard title="Maximum uses" subtitle={limitsSummary}>
+                <p className={`${hintClass} mb-2`}>
+                  When several offers could apply, the one that saves the
+                  customer most wins — so a budget is the safest way to bound a
+                  new offer.
+                </p>
+                <div className="mt-2 grid gap-4 sm:grid-cols-3">
                   <label className="block">
-                    <span className={hintClass}>
-                      {form.rewardType === "amount_off"
-                        ? "Amount (₹)"
-                        : "Percentage"}
-                    </span>
+                    <span className={hintClass}>Total budget (₹)</span>
                     <input
                       className={fieldClass}
                       inputMode="numeric"
-                      value={
-                        (form.rewardType === "amount_off"
-                          ? form.amount
-                          : form.percent) || ""
-                      }
+                      value={form.budget || ""}
+                      placeholder="No limit"
                       onChange={(e) =>
                         set(
-                          form.rewardType === "amount_off"
-                            ? "amount"
-                            : "percent",
+                          "budget",
+                          Number(e.target.value.replace(/\D/g, "")) || 0,
+                        )
+                      }
+                    />
+                    <span className={hintClass}>
+                      Stops once this much is given away.
+                    </span>
+                  </label>
+                  <label className="block">
+                    <span className={hintClass}>Total uses</span>
+                    <input
+                      className={fieldClass}
+                      inputMode="numeric"
+                      value={form.maxRedemptions || ""}
+                      placeholder="No limit"
+                      onChange={(e) =>
+                        set(
+                          "maxRedemptions",
                           Number(e.target.value.replace(/\D/g, "")) || 0,
                         )
                       }
                     />
                   </label>
-                </>
-              ) : (
-                <label className="block">
-                  <span className={hintClass}>Percentage</span>
-                  <input
-                    className={fieldClass}
-                    inputMode="numeric"
-                    value={form.percent || ""}
-                    onChange={(e) =>
-                      set(
-                        "percent",
-                        Number(e.target.value.replace(/\D/g, "")) || 0,
-                      )
-                    }
-                  />
-                </label>
-              )}
-            </div>
-          </fieldset>
-          {(needsScope || scopeSet) && (
-            <fieldset className="mb-5">
-              <legend className={labelClass}>
-                {scopeIsReward
-                  ? "Which items are discounted"
-                  : "Which items qualify"}
-              </legend>
-              {/* ★ THE SAME PICKER MEANS TWO DIFFERENT THINGS, and saying which
-                  is the difference between an offer that works and one that
-                  surprises the merchant. The reward level decides it:
-                    · "% off chosen items" / "set price"  → these get discounted
-                    · "% off the order" + a basket condition → these QUALIFY the
-                      offer, and the whole basket is discounted once it does. */}
-              <p className={`${hintClass} mb-2`}>
-                {scopeIsReward
-                  ? "Only these lines are discounted. The rest of the basket is charged as normal."
-                  : "The basket has to include one of these. Once it does, the discount applies to the whole basket."}
-              </p>
+                  <label className="block">
+                    <span className={hintClass}>Uses per customer</span>
+                    <input
+                      className={fieldClass}
+                      inputMode="numeric"
+                      value={form.maxPerCustomer || ""}
+                      placeholder="No limit"
+                      onChange={(e) =>
+                        set(
+                          "maxPerCustomer",
+                          Number(e.target.value.replace(/\D/g, "")) || 0,
+                        )
+                      }
+                    />
+                    <span className={hintClass}>
+                      Needs a signed-in customer.
+                    </span>
+                  </label>
+                </div>
+              </OfferCard>
 
-              {categories.length > 0 && (
-                <div className="mb-3">
-                  <span className={hintClass}>Categories</span>
-                  <div className="mt-1 flex flex-wrap gap-3">
-                    {categories.map((c) => (
+              {locations.length > 1 && (
+                <OfferCard
+                  title="Locations"
+                  subtitle={
+                    form.locationIds.length > 0
+                      ? `${form.locationIds.length} of ${locations.length} tills`
+                      : "Every till"
+                  }
+                >
+                  <p className={`${hintClass} mb-2`}>
+                    Leave all unticked to run at every till. Online orders are
+                    never location-limited.
+                  </p>
+                  <div className="flex flex-wrap gap-3">
+                    {locations.map((l) => (
                       <label
-                        key={c.id}
+                        key={l.id}
                         className="flex items-center gap-2 text-sm"
                       >
                         <input
                           type="checkbox"
-                          checked={form.categoryIds.includes(c.id)}
+                          checked={form.locationIds.includes(l.id)}
                           onChange={() =>
-                            set("categoryIds", toggle(form.categoryIds, c.id))
+                            set("locationIds", toggle(form.locationIds, l.id))
                           }
                         />
-                        {c.name}
+                        {l.name}
                       </label>
                     ))}
                   </div>
-                </div>
+                </OfferCard>
               )}
 
-              {products.length > 0 && (
-                <div>
-                  <span className={hintClass}>
-                    Products
-                    {products.length >= PRODUCT_PICKER_LIMIT &&
-                      ` (first ${PRODUCT_PICKER_LIMIT}; pick a category for a wider range)`}
-                  </span>
-                  <input
-                    className={`${fieldClass} mt-1`}
-                    placeholder="Filter products…"
-                    value={productFilter}
-                    onChange={(e) => setProductFilter(e.target.value)}
-                  />
-                  <div className="mt-2 max-h-56 overflow-y-auto rounded-md border border-[#e5e7eb] p-2">
-                    {shownProducts.length === 0 ? (
-                      <p className={hintClass}>Nothing matches that.</p>
-                    ) : (
-                      shownProducts.map((pr) => (
-                        <label
-                          key={pr.id}
-                          className="flex items-center gap-2 py-0.5 text-sm"
-                        >
-                          <input
-                            type="checkbox"
-                            checked={form.productIds.includes(pr.id)}
-                            onChange={() =>
-                              set("productIds", toggle(form.productIds, pr.id))
-                            }
-                          />
-                          {pr.name}
-                        </label>
-                      ))
-                    )}
+              <OfferCard
+                title="Combinations"
+                subtitle="Extra rules that must ALL be true. They narrow the offer, never widen it."
+              >
+                <ConditionsEditor form={form} setForm={setForm} />
+              </OfferCard>
+
+              <OfferCard
+                title="Active dates"
+                subtitle="Leave both blank to run until you pause it."
+              >
+                <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                  <label className="block">
+                    <span className={hintClass}>Starts (optional)</span>
+                    <input
+                      type="date"
+                      className={fieldClass}
+                      value={form.validFrom}
+                      onChange={(e) => set("validFrom", e.target.value)}
+                    />
+                  </label>
+                  <label className="block">
+                    <span className={hintClass}>Ends (optional)</span>
+                    <input
+                      type="date"
+                      className={fieldClass}
+                      value={form.validUntil}
+                      onChange={(e) => set("validUntil", e.target.value)}
+                    />
+                  </label>
+                </div>
+              </OfferCard>
+            </div>
+
+            {/* ★ PINNED, so the offer stays readable while a field at the bottom of
+            the form is being edited — which is the whole reason it is a column
+            rather than a banner. Below `lg` it drops under the cards, where a
+            sticky panel would eat half a phone screen. */}
+            <aside className="lg:sticky lg:top-4">
+              <OfferCard title="Summary">
+                <p className="text-sm font-medium">
+                  {form.name.trim() || "Untitled offer"}
+                </p>
+                <p className="mt-1 text-[13px] leading-relaxed text-[var(--dash-ink-2)]">
+                  {summary}
+                </p>
+                <div className="mt-4 border-t border-[var(--dash-border)] pt-4">
+                  <div className="mb-5 mt-5 flex flex-wrap items-end gap-4">
+                    <label className="block">
+                      <span className={labelClass}>Status</span>
+                      <select
+                        className={fieldClass}
+                        value={form.status}
+                        onChange={(e) =>
+                          set(
+                            "status",
+                            e.target.value === "active" ? "active" : "disabled",
+                          )
+                        }
+                      >
+                        <option value="disabled">Paused</option>
+                        <option value="active">Active</option>
+                      </select>
+                    </label>
+                    <label className="block">
+                      <span className={labelClass}>Priority</span>
+                      <input
+                        className={`${fieldClass} w-24`}
+                        inputMode="numeric"
+                        value={form.priority || ""}
+                        placeholder="0"
+                        onChange={(e) =>
+                          set("priority", Number(e.target.value) || 0)
+                        }
+                      />
+                      <span className={hintClass}>
+                        Only decides ties. A better saving always wins.
+                      </span>
+                    </label>
                   </div>
                 </div>
-              )}
-
-              {needsScope && !scopeSet && (
-                <p className="mt-2 text-[11px] text-amber-700">
-                  Choose at least one, or this offer cannot be saved.
-                </p>
-              )}
-            </fieldset>
-          )}
-        </OfferSection>
-
-        <OfferSection
-          title="When it applies"
-          summary={whenSummary}
-          defaultOpen={openWhen}
-        >
-          <fieldset className="mb-5">
-            <legend className="sr-only">When it applies</legend>
-            <div className="mt-2 grid gap-4 sm:grid-cols-2">
-              <label className="block">
-                <span className={hintClass}>Condition</span>
-                <select
-                  className={fieldClass}
-                  value={form.triggerType}
-                  onChange={(e) =>
-                    set("triggerType", e.target.value as OfferTriggerType)
-                  }
-                >
-                  <option value="always">Any order</option>
-                  <option value="min_subtotal">Orders over an amount</option>
-                  <option value="contains_category">
-                    Baskets containing a chosen category
-                  </option>
-                  <option value="contains_product">
-                    Baskets containing a chosen product
-                  </option>
-                </select>
-              </label>
-              {form.triggerType === "min_subtotal" && (
-                <label className="block">
-                  <span className={hintClass}>Minimum order (₹)</span>
-                  <input
-                    className={fieldClass}
-                    inputMode="numeric"
-                    value={form.minSubtotal || ""}
-                    onChange={(e) =>
-                      set(
-                        "minSubtotal",
-                        Number(e.target.value.replace(/\D/g, "")) || 0,
-                      )
-                    }
-                  />
-                  <span className={hintClass}>
-                    Measured on the order value before any discount.
-                  </span>
-                </label>
-              )}
-            </div>
-          </fieldset>
-          <ConditionsEditor form={form} setForm={setForm} />
-        </OfferSection>
-
-        <OfferSection
-          title="Where and how it runs"
-          summary={howSummary}
-          defaultOpen
-        >
-          <fieldset className="mb-5">
-            <legend className="sr-only">How customers get it</legend>
-            <div className="mt-2 grid gap-4 sm:grid-cols-2">
-              <label className="block">
-                <span className={hintClass}>Delivery</span>
-                <select
-                  className={fieldClass}
-                  value={form.delivery}
-                  onChange={(e) =>
-                    set("delivery", e.target.value as OfferDelivery)
-                  }
-                >
-                  <option value="automatic">Automatically</option>
-                  <option value="code">With a discount code</option>
-                  <option value="link">From a shareable link</option>
-                </select>
-                {form.delivery === "automatic" && !autoApplyOn && (
-                  <span className="mt-1 block text-[11px] text-amber-700">
-                    Your store has automatic offers switched off, so this will
-                    not apply to anything — online or at the till — however you
-                    set it up here. Turn on{" "}
-                    <Link
-                      href="/dashboard/offers/settings"
-                      className="underline"
-                    >
-                      “Apply offers automatically”
-                    </Link>{" "}
-                    to let it run, or give it a discount code instead.
-                  </span>
-                )}
-              </label>
-              {form.delivery !== "automatic" && (
-                <label className="block">
-                  <span className={hintClass}>Code</span>
-                  <input
-                    className={`${fieldClass} font-mono uppercase`}
-                    value={form.code}
-                    onChange={(e) => set("code", e.target.value)}
-                    placeholder="LAUNCH10"
-                  />
-                  <span className={hintClass}>
-                    Not case-sensitive. Spaces are removed.
-                  </span>
-                </label>
-              )}
-            </div>
-
-            {/* ★★ ONLY FOR A COUPON ON A CODE. Publishing a code puts it in front
-              of every visitor, and the cart can only preview an order-level
-              percentage or amount — so a buy-X-get-Y on a code would be
-              advertised, typed in, and refused. §23's rule: rather than a
-              checkbox that sometimes produces a broken code, the control is
-              absent — and `buildRow` forces the column false regardless,
-              because a hidden field is not a boundary.
-
-              ★ OFF BY DEFAULT, and that is the meaningful default rather than
-              the timid one: a code is usually targeted — emailed to a segment,
-              printed on a flyer — and listing it for every visitor destroys
-              exactly the targeting the merchant set up. */}
-            {form.delivery !== "automatic" && isCouponReward && (
-              <label className="mt-3 flex items-start gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  className="mt-0.5"
-                  checked={form.showOnStorefront}
-                  onChange={(e) => set("showOnStorefront", e.target.checked)}
-                />
-                <span>
-                  Show this coupon on my storefront
-                  <span className={hintClass}>
-                    Lists the code in the cart under &ldquo;Available
-                    coupons&rdquo;, so any shopper can apply it in one tap.
-                    Leave it off for a code you only want to send to particular
-                    customers.
-                  </span>
-                </span>
-              </label>
-            )}
-            <div className="mt-3 flex flex-wrap gap-4">
-              {(["storefront", "pos"] as OfferChannel[]).map((ch) => (
-                <label key={ch} className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={
-                      form.channels.length === 0 || form.channels.includes(ch)
-                    }
-                    onChange={() => {
-                      // Empty means "everywhere", so unticking one has to write
-                      // the OTHER explicitly rather than leaving an empty list
-                      // that silently means both.
-                      const current =
-                        form.channels.length === 0
-                          ? (["storefront", "pos"] as OfferChannel[])
-                          : form.channels;
-                      const next = toggle(current, ch) as OfferChannel[];
-                      set("channels", next);
-                    }}
-                  />
-                  {ch === "pos" ? "Point of sale" : "Online store"}
-                </label>
-              ))}
-            </div>
-            {form.channels.length === 0 && (
-              <span className={hintClass}>Runs everywhere you sell.</span>
-            )}
-          </fieldset>
-          {locations.length > 1 && (
-            <fieldset className="mb-5">
-              <legend className={labelClass}>Locations (optional)</legend>
-              <p className={`${hintClass} mb-2`}>
-                Leave all unticked to run at every till. Online orders are never
-                location-limited.
-              </p>
-              <div className="flex flex-wrap gap-3">
-                {locations.map((l) => (
-                  <label key={l.id} className="flex items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={form.locationIds.includes(l.id)}
-                      onChange={() =>
-                        set("locationIds", toggle(form.locationIds, l.id))
-                      }
-                    />
-                    {l.name}
-                  </label>
-                ))}
-              </div>
-            </fieldset>
-          )}
-          {groups.length > 0 && (
-            <fieldset className="mb-5">
-              <legend className={labelClass}>Customer groups (optional)</legend>
-              <p className={`${hintClass} mb-2`}>
-                {allowsGroups
-                  ? "Leave all unticked to offer it to everyone. A restricted offer is never suggested to shoppers who cannot use it."
-                  : "Restricting an offer to customer groups is available on Basic and Pro."}
-              </p>
-              <div className="flex flex-wrap gap-3">
-                {groups.map((g) => (
-                  <label
-                    key={g.id}
-                    className={`flex items-center gap-2 text-sm ${allowsGroups ? "" : "opacity-50"}`}
-                  >
-                    <input
-                      type="checkbox"
-                      disabled={!allowsGroups}
-                      checked={form.groupIds.includes(g.id)}
-                      onChange={() =>
-                        set("groupIds", toggle(form.groupIds, g.id))
-                      }
-                    />
-                    {g.name}
-                  </label>
-                ))}
-              </div>
-            </fieldset>
-          )}
-        </OfferSection>
-
-        <OfferSection
-          title="Limits"
-          summary={limitsSummary}
-          defaultOpen={openLimits}
-        >
-          <fieldset className="mb-5">
-            <legend className="sr-only">Limits</legend>
-            <p className={`${hintClass} mb-2`}>
-              When several offers could apply, the one that saves the customer
-              most wins — so a budget is the safest way to bound a new offer.
-            </p>
-            <div className="mt-2 grid gap-4 sm:grid-cols-3">
-              <label className="block">
-                <span className={hintClass}>Total budget (₹)</span>
-                <input
-                  className={fieldClass}
-                  inputMode="numeric"
-                  value={form.budget || ""}
-                  placeholder="No limit"
-                  onChange={(e) =>
-                    set(
-                      "budget",
-                      Number(e.target.value.replace(/\D/g, "")) || 0,
-                    )
-                  }
-                />
-                <span className={hintClass}>
-                  Stops once this much is given away.
-                </span>
-              </label>
-              <label className="block">
-                <span className={hintClass}>Total uses</span>
-                <input
-                  className={fieldClass}
-                  inputMode="numeric"
-                  value={form.maxRedemptions || ""}
-                  placeholder="No limit"
-                  onChange={(e) =>
-                    set(
-                      "maxRedemptions",
-                      Number(e.target.value.replace(/\D/g, "")) || 0,
-                    )
-                  }
-                />
-              </label>
-              <label className="block">
-                <span className={hintClass}>Uses per customer</span>
-                <input
-                  className={fieldClass}
-                  inputMode="numeric"
-                  value={form.maxPerCustomer || ""}
-                  placeholder="No limit"
-                  onChange={(e) =>
-                    set(
-                      "maxPerCustomer",
-                      Number(e.target.value.replace(/\D/g, "")) || 0,
-                    )
-                  }
-                />
-                <span className={hintClass}>Needs a signed-in customer.</span>
-              </label>
-            </div>
-            <div className="mt-4 grid gap-4 sm:grid-cols-2">
-              <label className="block">
-                <span className={hintClass}>Starts (optional)</span>
-                <input
-                  type="date"
-                  className={fieldClass}
-                  value={form.validFrom}
-                  onChange={(e) => set("validFrom", e.target.value)}
-                />
-              </label>
-              <label className="block">
-                <span className={hintClass}>Ends (optional)</span>
-                <input
-                  type="date"
-                  className={fieldClass}
-                  value={form.validUntil}
-                  onChange={(e) => set("validUntil", e.target.value)}
-                />
-              </label>
-            </div>
-          </fieldset>
-        </OfferSection>
-
-        <div className="mb-5 mt-5 flex flex-wrap items-end gap-4">
-          <label className="block">
-            <span className={labelClass}>Status</span>
-            <select
-              className={fieldClass}
-              value={form.status}
-              onChange={(e) =>
-                set(
-                  "status",
-                  e.target.value === "active" ? "active" : "disabled",
-                )
-              }
-            >
-              <option value="disabled">Paused</option>
-              <option value="active">Active</option>
-            </select>
-          </label>
-          <label className="block">
-            <span className={labelClass}>Priority</span>
-            <input
-              className={`${fieldClass} w-24`}
-              inputMode="numeric"
-              value={form.priority || ""}
-              placeholder="0"
-              onChange={(e) => set("priority", Number(e.target.value) || 0)}
-            />
-            <span className={hintClass}>
-              Only decides ties. A better saving always wins.
-            </span>
-          </label>
-        </div>
-
-        <div className="flex gap-2">
-          <button
-            type="button"
-            className="dash-btn dash-btn-primary"
-            disabled={pending}
-            onClick={submit}
-          >
-            {pending ? "Saving…" : offer ? "Save offer" : "Create offer"}
-          </button>
-          <Link href="/dashboard/offers" className="dash-btn">
-            Cancel
-          </Link>
-        </div>
-      </div>
+              </OfferCard>
+            </aside>
+          </div>
+        </>
+      )}
     </div>
   );
 }
