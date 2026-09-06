@@ -7544,6 +7544,15 @@ export const offers = pgTable(
      * same reason the reward's do.
      */
     conditions: jsonb().default([]).notNull(),
+    /**
+     * Opt in to listing this code in the storefront cart.
+     *
+     * ★ ONLY MEANINGFUL FOR CODE DELIVERY, and only ever read behind a narrow
+     * service-scoped filter: `offers.code` itself stays revoked from anon and
+     * authenticated (migration 0059), because shipping every active code to
+     * anyone who opens the network tab is the leak that grant prevents.
+     */
+    showOnStorefront: boolean("show_on_storefront").default(false).notNull(),
     /** Empty = every channel. */
     channels: text().array().default([]).notNull(),
     validFrom: timestamp("valid_from", { withTimezone: true, mode: "string" }),

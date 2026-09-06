@@ -232,6 +232,149 @@ describe("coupon-actions", () => {
       expect(result.error).toMatch(/invalid or expired/i);
     });
 
+    // ★★ A CODE MAY BE AN OFFER RATHER THAN A COUPON, and until this existed it
+    // could not be applied AT ALL. Offers replaced coupons but this read never
+    // left the legacy table, so a code created in the Offers UI was rejected as
+    // invalid here — and since `placeOrder` only ever receives
+    // `cart.appliedCoupon?.code`, the cart gate blocked it before the offer
+    // engine (which honours it) was ever asked. Migrated coupons kept working
+    // because they still have a `coupons` row; anything newer did not.
+    describe("falling back to a code offer", () => {
+      const offerRow = {
+        id: "off-1",
+        code: "SAVE10",
+        reward_type: "percent_off",
+        reward_config: { percent: 10 },
+        trigger_type: "always",
+        trigger_config: {},
+        valid_from: null,
+        valid_until: null,
+        max_redemptions: null,
+        redemption_count: 0,
+      };
+
+      it("resolves a percentage code offer", async () => {
+        dbHolder.current = makeDbMock({
+          selectByTable: { coupons: [[]], offers: [[offerRow]] },
+        });
+        const result = await validateCoupon("SAVE10", 500);
+        expect(result.coupon).toMatchObject({
+          code: "SAVE10",
+          discountType: "percentage",
+          discountValue: 10,
+        });
+      });
+
+      it("resolves a fixed-amount code offer", async () => {
+        dbHolder.current = makeDbMock({
+          selectByTable: {
+            coupons: [[]],
+            offers: [
+              [
+                {
+                  ...offerRow,
+                  reward_type: "amount_off",
+                  reward_config: { amount: 200 },
+                },
+              ],
+            ],
+          },
+        });
+        const result = await validateCoupon("SAVE10", 500);
+        expect(result.coupon).toMatchObject({
+          discountType: "fixed",
+          discountValue: 200,
+        });
+      });
+
+      // ★ THE COUPON WINS WHERE BOTH EXIST. A migrated pair shares an id and a
+      // code across both tables, so an existing code must resolve exactly as it
+      // did before — the offers read is a fallback, not a merge.
+      it("never reaches the offers table when a coupon matches", async () => {
+        dbHolder.current = makeDbMock({
+          selectByTable: {
+            coupons: [[{ ...okRow, code: "SAVE10", discount_value: 25 }]],
+            offers: [[offerRow]],
+          },
+        });
+        const result = await validateCoupon("SAVE10", 500);
+        expect(result.coupon?.discountValue).toBe(25);
+      });
+
+      // ★ A REWARD THE CART CANNOT PREVIEW IS REAL, NOT INVALID. Saying
+      // "invalid" would send a shopper to support over a code that is working
+      // exactly as the merchant configured it.
+      it("explains a reward it cannot preview instead of calling it invalid", async () => {
+        dbHolder.current = makeDbMock({
+          selectByTable: {
+            coupons: [[]],
+            offers: [
+              [
+                {
+                  ...offerRow,
+                  reward_type: "buy_x_get_y",
+                  reward_config: { buyQuantity: 1, getQuantity: 1 },
+                },
+              ],
+            ],
+          },
+        });
+        const result = await validateCoupon("B1G1", 500);
+        expect(result.error).toMatch(/applied automatically at checkout/i);
+        expect(result.coupon).toBeUndefined();
+      });
+
+      it("applies the offer's own minimum-subtotal trigger", async () => {
+        dbHolder.current = makeDbMock({
+          selectByTable: {
+            coupons: [[]],
+            offers: [
+              [
+                {
+                  ...offerRow,
+                  trigger_type: "min_subtotal",
+                  trigger_config: { minSubtotal: 1000 },
+                },
+              ],
+            ],
+          },
+        });
+        const result = await validateCoupon("SAVE10", 500);
+        expect(result.error).toMatch(/Add ₹500 more/i);
+      });
+
+      it("refuses one that has reached its redemption cap", async () => {
+        dbHolder.current = makeDbMock({
+          selectByTable: {
+            coupons: [[]],
+            offers: [
+              [{ ...offerRow, max_redemptions: 5, redemption_count: 5 }],
+            ],
+          },
+        });
+        const result = await validateCoupon("SAVE10", 500);
+        expect(result.error).toMatch(/usage limit/i);
+      });
+
+      it("refuses an expired one", async () => {
+        dbHolder.current = makeDbMock({
+          selectByTable: {
+            coupons: [[]],
+            offers: [
+              [
+                {
+                  ...offerRow,
+                  valid_until: new Date(Date.now() - 86400_000).toISOString(),
+                },
+              ],
+            ],
+          },
+        });
+        const result = await validateCoupon("SAVE10", 500);
+        expect(result.error).toMatch(/expired/i);
+      });
+    });
+
     // valid_from in the future → not yet active.
     it("rejects when not yet active (valid_from in the future)", async () => {
       dbHolder.current = makeDbMock({

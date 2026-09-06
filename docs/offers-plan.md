@@ -750,13 +750,107 @@ a soft downgrade, whereas removing a type breaks live offers.
 
 Group **Offers**, section `promotions` — the existing permission key (§2).
 
-| Key                              | Type    | Default | Notes                                                                                                                                                                                                                                                                   |
-| -------------------------------- | ------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `offers.autoApply`               | boolean | `false` | ★ **backfills OFF.** Invariant 1: a migration may not change what a live store does, and a store that has only ever had codes must not wake up applying discounts by itself. New stores get it ON at signup — a creation default and a backfill are different questions |
-| `offers.showBadges`              | boolean | `true`  | "20% off" flashes on product cards and the PDP                                                                                                                                                                                                                          |
-| `offers.showNearMiss`            | boolean | `true`  | the "₹200 away from free delivery" nudge (§14b)                                                                                                                                                                                                                         |
-| `offers.onSalePrice`             | select  | `best`  | `best` \| `skip` \| `stack` — how an offer treats a line already on `special_price` (§14). ★ The option list IS the validation                                                                                                                                          |
-| `offers.maxTotalDiscountPercent` | number  | `50`    | 0–100. The per-order depth ceiling §10 requires. ★ A real `0` means "no offer may discount anything" and must survive the fallback — read it with `typeof === "number"`, never `Number(x) \|\| 50`, which is the `pos.maxDiscountPercent` trap                          |
+| Key                              | Type    | Default | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| -------------------------------- | ------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `offers.autoApply`               | boolean | `true`  | ★ **ON since 2026-09-06.** It shipped `false` on invariant-1 grounds (a live store that only ran codes must not wake up discounting by itself) and NOTHING ever wrote it true, so every store had it off and every automatic offer was inert — see the incident note below. A deliberate exception to invariant 1: measured on both databases first, exactly one store had an active automatic offer. An explicit stored `false` still wins |
+| `offers.showBadges`              | boolean | `true`  | "20% off" flashes on product cards and the PDP                                                                                                                                                                                                                                                                                                                                                                                              |
+| `offers.showNearMiss`            | boolean | `true`  | the "₹200 away from free delivery" nudge (§14b)                                                                                                                                                                                                                                                                                                                                                                                             |
+| `offers.onSalePrice`             | select  | `best`  | `best` \| `skip` \| `stack` — how an offer treats a line already on `special_price` (§14). ★ The option list IS the validation                                                                                                                                                                                                                                                                                                              |
+| `offers.maxTotalDiscountPercent` | number  | `50`    | 0–100. The per-order depth ceiling §10 requires. ★ A real `0` means "no offer may discount anything" and must survive the fallback — read it with `typeof === "number"`, never `Number(x) \|\| 50`, which is the `pos.maxDiscountPercent` trap                                                                                                                                                                                              |
+
+#### ⚠ Incident — a code offer could not be applied online (2026-09-07)
+
+`validateCoupon` selects `from(coupons)` and offers never joined it. A code
+created in the Offers UI has no `coupons` row, so the cart rejected it as
+invalid — and since `placeOrder` only ever receives `cart.appliedCoupon?.code`,
+the cart gate blocked it before the offer engine, which honours a code perfectly
+well, was ever asked. **Codes migrated from the coupon era kept working** (they
+still have a `coupons` row), so the failure was invisible on any store that
+predated the migration; every code created afterwards was dead online.
+
+`validateCodeOffer` is the fallback, coupons first so a migrated pair resolves
+exactly as before. Order-level percent/amount only: the cart previews a coupon
+with its own arithmetic, and anything the engine alone can price is refused with
+"applied automatically at checkout, not here" rather than "invalid".
+
+`offers.show_on_storefront` (migration 0085) then lets a merchant publish one,
+default false — most codes are targeted, and listing one publicly undoes the
+targeting. `marketing.showAllCoupons` deliberately does not reach offers.
+
+#### ⚠ Incident — an offer was invisible on every storefront surface (2026-09-06)
+
+Found immediately after the `autoApply` incident above, while explaining to a
+merchant how their buy-1-get-1 works. Turning the switch on fixed the CHARGE and
+would have changed almost nothing on screen, because three separate surfaces
+each dropped the offer for a different reason:
+
+1. **Checkout summary.** `useCartOffers` was wired to the near-miss nudge only.
+   The total was `cart.total + shipping`, and `cart.total` is
+   `subtotal − couponDiscount` — `CartProvider` has no concept of offers. The
+   tax preview got only the coupon. `placeOrder` meanwhile applied the offer, so
+   the screen said ₹140 and the charge was ₹70.
+2. **Product cards and pages.** The only marker was `offerBadgeFor`, a
+   ONE-UNIT price probe. Buy-X-get-Y, bundles and volume breaks correctly score
+   zero there, so the entire family showed nothing — and the product page had no
+   marker at all.
+3. **The nudge.** `collectUnitNearMiss` ignored `maxSets`, so a spent set cap
+   still produced "add 1 more and one is free".
+4. **`maxSets` defaulted to 1** in a field whose placeholder reads "No
+   limit", so "Buy 1, get 1 free" on a basket of four gave one free item
+   rather than two. Default is blank now; the budget is the guard rail,
+   because it bounds exposure in rupees instead of redefining the offer.
+
+Fixed by splitting `useCartTax` into `useCartTaxRates` + the pure `cartTaxFrom`
+(as one hook it is a cycle), adding `offerTagFor` as a TERMS marker distinct
+from the price badge, and honouring `maxSets` in the nudge. The checkout mirrors
+`placeOrder`'s offers-win-coupon-fallback precedence exactly.
+
+Two display bugs surfaced in the same pass:
+
+- The offers LIST described every reward type added after Phase B as
+  **"0% off"** — a three-branch stub that was never extended, while the editor
+  had the full version as a nested ternary. Both now share
+  `lib/offers/describe.ts`, with an exhaustive `switch`.
+- `getCartTaxRates` returns **no `lines`** when a store has tax disabled
+  (`if (!billing.taxEnabled) return empty`), and `useCartOffers` takes its
+  categories and pre-sale prices from exactly that array. So on a tax-off store
+  the cart preview cannot price a category-scoped offer or detect a sale price.
+  ⚠ **Not fixed** — the charge is still correct and the preview under-reports,
+  which is the safe direction, but it should return the lines regardless.
+
+Help guide updated by migration `20260906_0082_offers_visibility_help`.
+
+#### ⚠ Incident — every automatic offer was inert (found 2026-09-06)
+
+`offers.autoApply` defaulted `false` and **nothing anywhere ever wrote it
+`true`**. `createStore` wrote `settings` with `template`, `brand`, `launched`
+and `business` and no `features` key; the row above already promised the signup
+default, and so did the registry's own comment, but neither was implemented. So
+every store had it off, and `disqualify` refused every `delivery: "automatic"`
+offer with `auto_apply_off` before the engine valued it.
+
+What made it expensive: **there was no error**. Checkout charged full price, the
+till charged full price, no badge appeared on the PDP, nothing was logged, and
+the Offers list reported the offer as **Active** — the one word a merchant
+checks when the storefront disagrees with the dashboard.
+
+Fixed in two halves:
+
+- **The registry default is `true`.** The first attempt seeded `true` at store
+  CREATION and left the default off — which protects existing stores and leaves
+  the switch hidden from everyone who already had one, i.e. fixes nobody's
+  actual problem. Flipping the default is a deliberate exception to invariant 1,
+  taken after measuring both databases: exactly ONE store has an active
+  automatic offer, and it is the store the bug was reported from. A merchant who
+  deliberately switched it off keeps that — a stored value beats the default.
+  The creation seed was removed with the flip; two mechanisms writing one value
+  is what this codebase keeps warning about.
+- The dashboard stops saying "Active" for an offer that cannot fire: an amber
+  **Not applying** badge, a counted banner linking to the settings page, and a
+  warning in the offer editor beside the Delivery select.
+
+Both directions are tested, and the badge is mutation-checked. Help guide
+updated by migration `20260906_0081_offers_auto_apply_help`.
 
 ---
 

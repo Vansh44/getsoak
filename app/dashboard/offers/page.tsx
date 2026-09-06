@@ -5,11 +5,12 @@ import {
   coupons,
   products,
   storeLocations,
+  stores,
   userGroups,
 } from "@/drizzle/schema";
+import { resolveStoreSettings } from "@/lib/settings/registry";
 import { requireSectionAccess, getActingStoreId } from "../lib/access";
 import { listOffers, getOfferCapacity } from "@/app/actions/offer-actions";
-import { getStoreSettingsForEditor } from "@/app/actions/store-settings";
 import { OffersView } from "./offers-view";
 
 /** ★ Bounded read, matching the picker's own cap. A store on the unlimited
@@ -36,25 +37,23 @@ export default async function OffersPage() {
   const canManage = access.can("promotions", "manage");
   const storeId = await getActingStoreId();
 
-  const [{ offers, error }, capacity, settings, locations] = await Promise.all([
-    listOffers(),
-    getOfferCapacity(),
-    // The offers group carries the policy every offer is priced under — the
-    // per-order ceiling especially, since best-offer-wins makes it the brake.
-    // Rendered through the SHARED settings card (convention #9), not a second
-    // editor of its own.
-    getStoreSettingsForEditor("Offers").catch(() => ({
-      plan: "free",
-      settings: [],
-    })),
-    withService((db) =>
-      db
-        .select({ id: storeLocations.id, name: storeLocations.name })
-        .from(storeLocations)
-        .where(eq(storeLocations.storeId, storeId))
-        .orderBy(asc(storeLocations.name)),
-    ).catch(() => []),
-  ]);
+  const [{ offers, error }, capacity, autoApplyOn, locations] =
+    await Promise.all([
+      listOffers(),
+      getOfferCapacity(),
+      // ★ ONLY THE ONE SETTING THIS PAGE NEEDS. The whole Offers group used to
+      // be loaded here to render a settings card below the table; that card is
+      // its own page now (`offers/settings`), so all that is left is the
+      // switch the "Not applying" badge depends on.
+      loadOffersAutoApply(storeId),
+      withService((db) =>
+        db
+          .select({ id: storeLocations.id, name: storeLocations.name })
+          .from(storeLocations)
+          .where(eq(storeLocations.storeId, storeId))
+          .orderBy(asc(storeLocations.name)),
+      ).catch(() => []),
+    ]);
 
   // ★★ WHICH OFFERS CAN ACTUALLY BE EMAILED.
   //
@@ -89,17 +88,45 @@ export default async function OffersPage() {
 
   return (
     <OffersView
+      autoApplyOn={autoApplyOn}
       emailableOfferIds={emailableOfferIds}
       offers={offers}
       loadError={error}
       limit={capacity.limit}
       activeCount={capacity.active}
-      plan={settings.plan}
-      settings={settings.settings}
       locationCount={locations.length}
       canManage={canManage}
     />
   );
+}
+
+/**
+ * The store's `offers.autoApply` switch, for the new/edit forms.
+ *
+ * ★ SCOPED TO THE ACTING STORE rather than the host, so it is correct for a
+ * platform operator too — the pattern `app/dashboard/inventory/data.ts` uses
+ * for its threshold read.
+ *
+ * ★ FAILS TO TRUE. An unreadable setting must not put a warning on an offer
+ * that works; silence returns the form to exactly what it did before.
+ */
+export async function loadOffersAutoApply(storeId: string): Promise<boolean> {
+  try {
+    return await withService(async (db) => {
+      const rows = await db
+        .select({ settings: stores.settings, plan: stores.plan })
+        .from(stores)
+        .where(eq(stores.id, storeId))
+        .limit(1);
+      const values = resolveStoreSettings(
+        rows[0]?.settings as Record<string, unknown>,
+        rows[0]?.plan,
+      );
+      return values["offers.autoApply"] === true;
+    });
+  } catch {
+    return true;
+  }
 }
 
 /** Shared by the new/edit pages so the form's pickers cannot drift from here. */
