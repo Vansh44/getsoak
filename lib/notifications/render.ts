@@ -415,6 +415,13 @@ export function renderNotification(
         url: str(p.store_url) || "/dashboard/settings/domain",
       };
 
+    case "store.comp_ended":
+      return {
+        title: `Your free ${str(p.comp_plan) || "plan"} upgrade has ended`,
+        body: `You're back on ${str(p.plan) || "your usual plan"}.`,
+        url: "/dashboard/plans",
+      };
+
     case "store.domain_reverted":
       return {
         title: `${subject ?? "Your domain"} has stopped working`,

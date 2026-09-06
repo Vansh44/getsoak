@@ -21,7 +21,7 @@ import {
 } from "@/lib/billing/credit-invoice";
 import { aiCreditLedger, aiCreditPurchases, stores } from "@/drizzle/schema";
 import { getManagerUserId, getActingStoreId } from "@/app/dashboard/lib/access";
-import { effectivePlan } from "@/lib/plans";
+import { effectivePlan, NO_COMP } from "@/lib/plans";
 import { CREDIT_PACKS, getCreditPack } from "@/lib/ai/credits";
 import { getAiUsage, type AiUsageSummary } from "@/lib/ai/quota";
 import { getPlatformRazorpayCreds } from "@/lib/payments/provider";
@@ -53,6 +53,22 @@ export interface AiUsagePageData {
   planExpiresAt: string | null;
   /** How the plan was granted: comp / paid / trial (or null). */
   planSource: string | null;
+  /**
+   * A comped plan the operator has offered but the merchant has NOT accepted.
+   * Null once accepted — the window is what makes it `compActive` instead.
+   */
+  compOffer: { plan: string; durationDays: number } | null;
+  /** A comped plan currently running (docs/comped-plans-spec.md). */
+  compActive: { plan: string; expiresAt: string } | null;
+  /**
+   * The plan UNDERNEATH any comp — what they pay for and fall back to.
+   *
+   * ★ `plan` above is the EFFECTIVE plan, which during a comp IS the comped
+   * one. The offer copy promises "your Basic plan continues", so it needs the
+   * paid entitlement specifically; deriving it in the component would mean a
+   * second copy of the resolution rule.
+   */
+  paidPlan: string;
   /** Whether this store's plan may buy credits (basic+). */
   canBuyCredits: boolean;
   /** Whether the platform's payment account is configured at all. */
@@ -189,6 +205,10 @@ export async function getAiUsagePageData(): Promise<AiUsagePageData> {
           .select({
             plan: stores.plan,
             plan_expires_at: stores.planExpiresAt,
+            comp_plan: stores.compPlan,
+            comp_expires_at: stores.compExpiresAt,
+            comp_duration_days: stores.compDurationDays,
+            comp_starts_at: stores.compStartsAt,
             plan_source: stores.planSource,
           })
           .from(stores)
@@ -218,11 +238,25 @@ export async function getAiUsagePageData(): Promise<AiUsagePageData> {
   const ledger = dbResult.ledgerRows as AiLedgerEntry[];
 
   const plan = effectivePlan(store ?? {});
+  // The same resolver with the overlay switched off — never a separate rule.
+  const paidPlan = effectivePlan({ ...(store ?? {}), ...NO_COMP });
   return {
     usage,
     plan,
+    paidPlan,
     planExpiresAt: store?.plan_expires_at ?? null,
     planSource: store?.plan_source ?? null,
+    // ★ An offer and a running comp are mutually exclusive by construction:
+    // accepting is the write that fills the window, and `offerCompPlan` refuses
+    // while one is open. Splitting them here keeps that out of the component.
+    compOffer:
+      store?.comp_plan && store.comp_duration_days && !store.comp_starts_at
+        ? { plan: store.comp_plan, durationDays: store.comp_duration_days }
+        : null,
+    compActive:
+      store?.comp_plan && store.comp_starts_at && store.comp_expires_at
+        ? { plan: store.comp_plan, expiresAt: store.comp_expires_at }
+        : null,
     canBuyCredits: true,
     purchasesAvailable: getPlatformRazorpayCreds() !== null,
     ledger,

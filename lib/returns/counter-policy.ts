@@ -52,6 +52,8 @@ export async function getCounterReturnPolicy(
             settings: stores.settings,
             plan: stores.plan,
             plan_expires_at: stores.planExpiresAt,
+            comp_plan: stores.compPlan,
+            comp_expires_at: stores.compExpiresAt,
           })
           .from(stores)
           .where(eq(stores.id, storeId))
@@ -75,6 +77,8 @@ export async function getCounterReturnPolicy(
     const plan = effectivePlan({
       plan: store.plan,
       plan_expires_at: store.plan_expires_at,
+      comp_plan: store.comp_plan,
+      comp_expires_at: store.comp_expires_at,
     });
     const settings = resolveStoreSettings(
       store.settings as Record<string, unknown> | null,

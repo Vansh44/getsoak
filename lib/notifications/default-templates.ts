@@ -392,6 +392,17 @@ const BESPOKE: Record<string, { subject: string; body: string }> = {
   // Bad news, and it has to lead with what is still WORKING. A generated fact
   // list would open with "Domain: acme.com" and leave the merchant to work out
   // whether their shop is down — which is the only question they have.
+  // ★ Bespoke, because the generated fact list would open with
+  // "Comp plan: Pro" and leave the merchant to work out whether they have just
+  // lost something they were paying for — which is their only question.
+  "store.comp_ended": {
+    subject: "Your free {{comp_plan}} upgrade has ended",
+    body: [
+      "<p><strong>Nothing is switched off that you pay for.</strong> Your free {{comp_plan}} upgrade has run its course, and your store is back on <strong>{{plan}}</strong> — the plan you were on all along.</p>",
+      "<p>Your billing is unchanged: the free upgrade never replaced your own plan, so there is nothing to restart and nothing extra to pay.</p>",
+      "<p>If you'd like to keep {{comp_plan}}, you can upgrade any time from Plans &amp; Billing.</p>",
+    ].join("\n"),
+  },
   "store.domain_reverted": {
     subject: "Action needed: {{domain}} has stopped working",
     body: [

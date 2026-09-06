@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { revalidateTag } from "next/cache";
-import { and, gt, inArray, lte, ne } from "drizzle-orm";
+import { and, gt, inArray, lte, ne, sql } from "drizzle-orm";
 import { withService } from "@/lib/db/client";
 import { planEvents, stores } from "@/drizzle/schema";
 import { STORE_TAG } from "@/lib/store/resolve";
@@ -42,6 +42,15 @@ async function handle(request: Request) {
   }
 
   const nowIso = new Date().toISOString();
+
+  // ★★ THE COMP SWEEP IS A SEPARATE PASS OVER DISJOINT COLUMNS, and it must
+  // never touch `plan` / `plan_expires_at`. Clearing the overlay IS the whole
+  // operation: the paid entitlement underneath was never modified, so the store
+  // falls back to it automatically (docs/comped-plans-spec.md §8.3).
+  //
+  // Run FIRST so a store losing both in the same tick is audited falling from
+  // the plan it was actually on.
+  const compsEnded = await endLapsedComps(nowIso);
 
   let lapsed: { id: string; plan: string }[];
   let flippedIds: Set<string>;
@@ -85,7 +94,11 @@ async function handle(request: Request) {
   }
 
   if (!lapsed.length) {
-    return NextResponse.json({ ok: true, expired: 0 });
+    // ⚠ Warnings are deliberately NOT sent here. That is a pre-existing defect
+    // (pinned by "does NOT warn anyone on a day when no plan lapsed"), left
+    // exactly as it was: fixing it as a side effect of the comp sweep would
+    // change who gets emailed, which is not this change's business.
+    return NextResponse.json({ ok: true, expired: 0, compsEnded });
   }
 
   const events = lapsed
@@ -129,7 +142,117 @@ async function handle(request: Request) {
 
   const warned = await warnExpiringPlans(nowIso);
 
-  return NextResponse.json({ ok: true, expired: events.length, warned });
+  return NextResponse.json({
+    ok: true,
+    expired: events.length,
+    compsEnded,
+    warned,
+  });
+}
+
+/**
+ * Clear every comped-plan overlay whose window has closed.
+ *
+ * ★★ IT WRITES ONLY THE `comp_*` COLUMNS. The paid entitlement is untouched, so
+ * a merchant whose free Pro month ends falls back to the Basic they have been
+ * paying for all along — the failure the overlay design exists to prevent
+ * (docs/comped-plans-spec.md §3.2), where the old shape would have written
+ * `plan = 'free'` over a live subscription.
+ *
+ * ★ The fall-back plan is read AFTER the clear so the notification names what
+ * they actually land on. Reusing `plan.changed` would tell a Basic subscriber
+ * they had been downgraded; this is its own event.
+ */
+async function endLapsedComps(nowIso: string): Promise<number> {
+  let ended: { id: string; compPlanBefore: string | null; plan: string }[];
+  try {
+    ended = await withService(async (db) => {
+      // ★★ ONE STATEMENT, WITH A SNAPSHOT OF THE OLD ROW.
+      //
+      // Postgres RETURNING yields the row AFTER the update, so a plain
+      // `returning({ compPlan })` comes back NULL — the sweep would clear the
+      // comp and then be unable to name the plan that ended, which is half the
+      // notification. The `FROM stores old` self-join is the snapshot: `old.*`
+      // is the pre-update row, while the SET applies to the target.
+      //
+      // Still a single conditional claim, so a concurrent run cannot double-
+      // notify: the second one matches zero rows.
+      const res = await db.execute(sql`
+        update stores s
+           set comp_plan = null,
+               comp_duration_days = null,
+               comp_offered_at = null,
+               comp_starts_at = null,
+               comp_expires_at = null
+          from stores old
+         where old.id = s.id
+           and s.comp_expires_at is not null
+           and s.comp_expires_at <= ${nowIso}::timestamptz
+        returning s.id,
+                  old.comp_plan as comp_plan_before,
+                  -- Untouched by this UPDATE: the entitlement they fall back to.
+                  s.plan
+      `);
+      const rows = (res as unknown as { rows?: Record<string, unknown>[] })
+        .rows;
+      return (rows ?? []).map((r) => ({
+        id: String(r.id),
+        compPlanBefore:
+          r.comp_plan_before == null ? null : String(r.comp_plan_before),
+        plan: String(r.plan ?? "free"),
+      }));
+    });
+  } catch (err) {
+    console.error(
+      "plan-expiry (comp sweep):",
+      err instanceof Error ? err.message : err,
+    );
+    return 0;
+  }
+  if (!ended.length) return 0;
+
+  revalidateTag(STORE_TAG, "max");
+
+  try {
+    await withService((db) =>
+      db.insert(planEvents).values(
+        ended.map((s) => ({
+          storeId: s.id,
+          fromPlan: null,
+          toPlan: normalizePlan(s.plan),
+          source: "system",
+          actor: "plan-expiry-cron",
+          note: "comped plan ended",
+        })),
+      ),
+    );
+  } catch (auditErr) {
+    console.error(
+      "plan-expiry (comp audit):",
+      auditErr instanceof Error ? auditErr.message : auditErr,
+    );
+  }
+
+  // ★★ NAME THE PLAN THEY LAND ON, not the one they lost. `row.plan` is the
+  // PAID entitlement, untouched by the clear above — for a paying merchant that
+  // is the plan they have been paying for all along, and telling them they
+  // "moved to Free" would be flatly wrong. This is why it is its own event and
+  // not `plan.changed`.
+  //
+  // recordEvent, not emitEvent: a cron response is already gone by the time
+  // after() would run.
+  for (const store of ended) {
+    await recordEvent({
+      type: "store.comp_ended",
+      storeId: store.id,
+      payload: {
+        comp_plan: PLAN_META[normalizePlan(store.compPlanBefore)].name,
+        plan: PLAN_META[normalizePlan(store.plan)].name,
+      },
+    });
+  }
+
+  return ended.length;
 }
 
 // Warn merchants BEFORE a timed plan lapses. The horizons and the 24-hour-band

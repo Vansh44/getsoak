@@ -68,7 +68,12 @@ const STORE = "store-1";
 const NOW = new Date("2026-09-01T00:00:00.000Z");
 /** 15 days left of a 30-day cycle — exactly half. */
 const PERIOD_END = "2026-09-16T00:00:00.000Z";
-const PRO = { plan: "pro", plan_expires_at: null };
+const PRO = {
+  plan: "pro",
+  plan_expires_at: null,
+  comp_plan: null,
+  comp_expires_at: null,
+};
 const PRICE = { monthlyInr: 1000, yearlyInr: 10000 };
 
 function subRow(over: Record<string, unknown> = {}) {
@@ -186,7 +191,12 @@ describe("getLocationBillingState", () => {
     seed([[subRow()], [{ n: 1 }]]);
     const s = await getLocationBillingState({
       storeId: STORE,
-      store: { plan: "basic", plan_expires_at: null },
+      store: {
+        plan: "basic",
+        plan_expires_at: null,
+        comp_plan: null,
+        comp_expires_at: null,
+      },
       locationPrice: PRICE,
       now: NOW,
     });
@@ -425,6 +435,20 @@ describe("confirmLocationPurchase", () => {
   function seedConfirm(target: number | null = 2) {
     seed([[{ target }], [{ id: "att-1", providerOrderId: "order_1" }], []]);
   }
+
+  it("★★ FINALIZES BEFORE SETTLING — settling a DRAFT leaves a paid invoice unpaid", async () => {
+    // Same regression as confirmEnrolment, same cause, same cost. See the note
+    // in lib/billing/enrol.ts: `syncInvoiceStatus` can only claim the move to
+    // paid from "open" or "processing", so settling while the invoice is still a
+    // DRAFT captures the money and leaves an unpaid invoice behind it — silently.
+    seedConfirm();
+    await confirmLocationPurchase(args);
+    expect(store.finalizeInvoice).toHaveBeenCalled();
+    expect(collect.settleAttempt).toHaveBeenCalled();
+    expect(store.finalizeInvoice.mock.invocationCallOrder[0]).toBeLessThan(
+      collect.settleAttempt.mock.invocationCallOrder[0],
+    );
+  });
 
   it("grants the count recorded on the invoice", async () => {
     seedConfirm(2);

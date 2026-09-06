@@ -4,7 +4,13 @@ import { after } from "next/server";
 import { and, eq, sql } from "drizzle-orm";
 import { withService } from "@/lib/db/client";
 import { aiCreditBalances, aiUsage, stores } from "@/drizzle/schema";
-import { effectivePlan, limitsFor, planAllows, PLAN_META } from "@/lib/plans";
+import {
+  effectivePlan,
+  limitsFor,
+  planAllows,
+  PLAN_META,
+  NO_COMP,
+} from "@/lib/plans";
 import { recordEvent } from "@/lib/notifications/record";
 
 // Per-store AI generation quota — the first real enforcement of a plan limit.
@@ -41,11 +47,23 @@ export interface QuotaResult {
  * Call BEFORE the Gemini request in every AI action.
  */
 export async function consumeAiQuota(storeId: string): Promise<QuotaResult> {
-  let storeRow: { plan: string; plan_expires_at: string | null } | undefined;
+  let storeRow:
+    | {
+        plan: string;
+        plan_expires_at: string | null;
+        comp_plan: string | null;
+        comp_expires_at: string | null;
+      }
+    | undefined;
   try {
     [storeRow] = await withService((db) =>
       db
-        .select({ plan: stores.plan, plan_expires_at: stores.planExpiresAt })
+        .select({
+          plan: stores.plan,
+          plan_expires_at: stores.planExpiresAt,
+          comp_plan: stores.compPlan,
+          comp_expires_at: stores.compExpiresAt,
+        })
         .from(stores)
         .where(eq(stores.id, storeId))
         .limit(1),
@@ -58,7 +76,7 @@ export async function consumeAiQuota(storeId: string): Promise<QuotaResult> {
     return { allowed: true };
   }
 
-  const plan = effectivePlan(storeRow ?? {});
+  const plan = effectivePlan(storeRow ?? NO_COMP);
   const cap = limitsFor(plan).aiGenerationsPerMonth;
   if (cap === null) return { allowed: true, source: "plan" }; // unlimited
 
@@ -183,7 +201,12 @@ export async function getAiUsage(storeId: string): Promise<AiUsageSummary> {
   try {
     return await withService(async (db) => {
       const storeRows = await db
-        .select({ plan: stores.plan, plan_expires_at: stores.planExpiresAt })
+        .select({
+          plan: stores.plan,
+          plan_expires_at: stores.planExpiresAt,
+          comp_plan: stores.compPlan,
+          comp_expires_at: stores.compExpiresAt,
+        })
         .from(stores)
         .where(eq(stores.id, storeId))
         .limit(1);

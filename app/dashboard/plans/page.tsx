@@ -6,8 +6,10 @@ import {
 } from "@/app/actions/subscribe-actions";
 import { CREDIT_PACKS } from "@/lib/ai/credits";
 import { getPlanPricingLive } from "@/lib/plans/pricing";
+import { PLAN_META, normalizePlan } from "@/lib/plans";
 import { PlansBillingClient } from "./plans-client";
 import { OpenInvoices } from "./open-invoices";
+import { CompActiveNotice, CompOfferCard } from "./comp-offer";
 
 export const metadata = { title: "Plans & Billing" };
 
@@ -29,9 +31,22 @@ export default async function PlansBillingPage() {
     getPayableInvoices(),
   ]);
   const canManage = access.can("ai", "manage");
+  const paidPlanName = PLAN_META[normalizePlan(data.paidPlan)].name;
   return (
     <div className="space-y-6">
       <OpenInvoices invoices={invoices} canManage={canManage} />
+      {/* A comped plan is a gift, not a bill — it sits below what they OWE and
+          above the rest of the page. Offer and active state are mutually
+          exclusive (docs/comped-plans-spec.md). */}
+      {data.compActive ? (
+        <CompActiveNotice comp={data.compActive} paidPlanName={paidPlanName} />
+      ) : data.compOffer ? (
+        <CompOfferCard
+          offer={data.compOffer}
+          currentPlanName={paidPlanName}
+          canManage={canManage}
+        />
+      ) : null}
       <PlansBillingClient
         initialData={data}
         subscription={subscription}

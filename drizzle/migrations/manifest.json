@@ -3142,6 +3142,155 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260906_0077_comped_plan_overlay",
+      "description": "Add the comped-plan entitlement overlay columns so a free grant never mutates the paid plan",
+      "file": "sql/20260906_0077_comped_plan_overlay.sql",
+      "checksum": "b3b4b1b94792a81e18dca84b8903818b16fa539b5ed25973b0fc07eefd15be5b",
+      "transaction": true,
+      "requires": ["20260906_0076_subscription_autopay_contact_help"],
+      "verify": {
+        "columns": [
+          "stores.comp_plan",
+          "stores.comp_duration_days",
+          "stores.comp_offered_at",
+          "stores.comp_starts_at",
+          "stores.comp_expires_at"
+        ],
+        "constraints": [
+          "stores_comp_plan_check",
+          "stores_comp_duration_check",
+          "stores_comp_window_complete"
+        ],
+        "queries": [
+          {
+            "name": "a comp window cannot be half-written",
+            "sql": "select count(*)::text from pg_constraint where conname = 'stores_comp_window_complete' and conrelid = 'public.stores'::regclass and pg_get_constraintdef(oid) like '%comp_expires_at > comp_starts_at%'",
+            "equals": "1"
+          },
+          {
+            "name": "no store holds a half-written comp window",
+            "sql": "select count(*)::text from public.stores where (comp_starts_at is null) <> (comp_expires_at is null)",
+            "equals": "0"
+          }
+        ]
+      },
+      "applyVerify": {
+        "columns": [
+          "stores.comp_plan",
+          "stores.comp_duration_days",
+          "stores.comp_offered_at",
+          "stores.comp_starts_at",
+          "stores.comp_expires_at"
+        ],
+        "constraints": [
+          "stores_comp_plan_check",
+          "stores_comp_duration_check",
+          "stores_comp_window_complete"
+        ],
+        "queries": [
+          {
+            "name": "a comp window cannot be half-written",
+            "sql": "select count(*)::text from pg_constraint where conname = 'stores_comp_window_complete' and conrelid = 'public.stores'::regclass and pg_get_constraintdef(oid) like '%comp_expires_at > comp_starts_at%'",
+            "equals": "1"
+          },
+          {
+            "name": "no store holds a half-written comp window",
+            "sql": "select count(*)::text from public.stores where (comp_starts_at is null) <> (comp_expires_at is null)",
+            "equals": "0"
+          },
+          {
+            "name": "the overlay starts empty - no store is comped by the migration itself",
+            "sql": "select count(*)::text from public.stores where comp_plan is not null",
+            "equals": "0"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "columns": [
+          "stores.comp_plan",
+          "stores.comp_duration_days",
+          "stores.comp_offered_at",
+          "stores.comp_starts_at",
+          "stores.comp_expires_at"
+        ],
+        "constraints": [
+          "stores_comp_plan_check",
+          "stores_comp_duration_check",
+          "stores_comp_window_complete"
+        ],
+        "queries": [
+          {
+            "name": "a comp window cannot be half-written",
+            "sql": "select count(*)::text from pg_constraint where conname = 'stores_comp_window_complete' and conrelid = 'public.stores'::regclass and pg_get_constraintdef(oid) like '%comp_expires_at > comp_starts_at%'",
+            "equals": "1"
+          },
+          {
+            "name": "no store holds a half-written comp window",
+            "sql": "select count(*)::text from public.stores where (comp_starts_at is null) <> (comp_expires_at is null)",
+            "equals": "0"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260906_0078_drop_subscription_comp_exemption",
+      "description": "Stop exempting comped subscriptions from downgrade; a comp is an overlay, not a billing state",
+      "file": "sql/20260906_0078_drop_subscription_comp_exemption.sql",
+      "checksum": "1d067345ebbe37b871d7d813490dc4990ea43ccb17adb25b88de706bb90a2105",
+      "transaction": true,
+      "requires": ["20260906_0077_comped_plan_overlay"],
+      "verify": {
+        "functions": ["billing_claim_downgrade"],
+        "queries": [
+          {
+            "name": "the downgrade claim no longer exempts a comped subscription",
+            "sql": "select count(*)::text from pg_proc where proname = 'billing_claim_downgrade' and pg_get_functiondef(oid) not like '%plan_source%'",
+            "equals": "1"
+          },
+          {
+            "name": "the rest of the downgrade claim is intact",
+            "sql": "select count(*)::text from pg_proc where proname = 'billing_claim_downgrade' and pg_get_functiondef(oid) like '%grace_ends_at < p_now%' and pg_get_functiondef(oid) like '%cycle_seq = s.current_cycle_seq%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "applyVerify": {
+        "functions": ["billing_claim_downgrade"],
+        "queries": [
+          {
+            "name": "the downgrade claim no longer exempts a comped subscription",
+            "sql": "select count(*)::text from pg_proc where proname = 'billing_claim_downgrade' and pg_get_functiondef(oid) not like '%plan_source%'",
+            "equals": "1"
+          },
+          {
+            "name": "the rest of the downgrade claim is intact",
+            "sql": "select count(*)::text from pg_proc where proname = 'billing_claim_downgrade' and pg_get_functiondef(oid) like '%grace_ends_at < p_now%' and pg_get_functiondef(oid) like '%cycle_seq = s.current_cycle_seq%'",
+            "equals": "1"
+          },
+          {
+            "name": "no subscription was relying on the exemption",
+            "sql": "select count(*)::text from billing_subscriptions where plan_source = 'comp'",
+            "equals": "0"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "functions": ["billing_claim_downgrade"],
+        "queries": [
+          {
+            "name": "the downgrade claim no longer exempts a comped subscription",
+            "sql": "select count(*)::text from pg_proc where proname = 'billing_claim_downgrade' and pg_get_functiondef(oid) not like '%plan_source%'",
+            "equals": "1"
+          },
+          {
+            "name": "the rest of the downgrade claim is intact",
+            "sql": "select count(*)::text from pg_proc where proname = 'billing_claim_downgrade' and pg_get_functiondef(oid) like '%grace_ends_at < p_now%' and pg_get_functiondef(oid) like '%cycle_seq = s.current_cycle_seq%'",
+            "equals": "1"
+          }
+        ]
+      }
     }
   ]
 }

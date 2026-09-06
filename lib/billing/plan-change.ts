@@ -460,6 +460,33 @@ export async function confirmPlanChange(input: {
     return { ok: false, error: observedPayment.error };
   }
 
+  // ★★ FINALIZE BEFORE SETTLING. THE ORDER IS LOAD-BEARING, AND GETTING IT
+  // WRONG BILLS A MERCHANT FOR MONEY THEY HAVE ALREADY PAID.
+  //
+  // `settleAttempt` → `syncInvoiceStatus` claims the move to paid with
+  // `inArray(status, ["open", "processing"])`. A draft invoice is in NEITHER
+  // list, so settling first claims ZERO rows: the attempt goes `captured`, the
+  // invoice stays unpaid, `paid_at` stays null and NO receipt is sent — all
+  // silently, because a zero-row claim is indistinguishable from "already done".
+  // `finalizeInvoice` then sets `status: "open"`, producing an OPEN invoice
+  // standing behind a CAPTURED payment: phantom debt that dunning chases and the
+  // downgrade clock runs against.
+  //
+  // MEASURED ON PRODUCTION (2026-09-06). Store `echos` paid for a plan change on
+  // 2026-08-16 16:50:11Z (attempt captured, pay_TQVs5DiqE6giOW). The invoice's
+  // `paid_at` was 2026-09-05 21:15:41Z — a lag of **20 days 4 hours** — because
+  // it was only claimed when the merchant clicked "Pay now" on a bill they did
+  // not owe, and `syncInvoiceStatus` recomputed over the old captured attempt.
+  // That click also fired the receipt, so they received "Payment received" for a
+  // payment they had just CANCELLED. Had they completed it, they would have paid
+  // twice.
+  //
+  // ⚠ Finalizing first does NOT weaken "a number is spent only on an invoice
+  // that was really paid" (§34): both the checkout signature and
+  // `verifyCapturedCheckoutPayment` have already passed above, so the money is
+  // confirmed captured at the gateway before this line runs.
+  await finalizeInvoice(input.invoiceId, now);
+
   const settled = await settleAttempt(found.attemptId, "captured", {
     providerPaymentId: input.providerPaymentId,
     now,
@@ -467,8 +494,6 @@ export async function confirmPlanChange(input: {
   if (settled && settled !== "captured") {
     return { ok: false, error: "That payment didn't complete." };
   }
-
-  await finalizeInvoice(input.invoiceId, now);
 
   const applied = await applyNow(input.storeId, {
     plan: input.targetPlan,

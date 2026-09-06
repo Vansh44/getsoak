@@ -22,6 +22,7 @@ import {
 } from "@/lib/platform/store-detail";
 import { canManage, requireOperator } from "../../require-operator";
 import { StoreManageBar } from "./store-manage";
+import { CompGrantCard } from "./comp-grant";
 
 const ROOT_DOMAIN = process.env.NEXT_PUBLIC_ROOT_DOMAIN ?? "storemink.com";
 
@@ -365,6 +366,16 @@ export default async function StoreDetailPage({
                     ] as [string, React.ReactNode][])),
               ]}
             />
+            {/* A comp sits BELOW the billing facts, because it is not one: it
+                changes nothing about what this store is charged, only what it
+                can do (docs/comped-plans-spec.md). */}
+            <div className="mt-4">
+              <CompGrantCard
+                storeId={store.id}
+                comp={store.comp}
+                canManage={canManage(viewer)}
+              />
+            </div>
           </Card>
 
           <Card title="Channels" icon={<CreditCard className="h-4 w-4" />}>
