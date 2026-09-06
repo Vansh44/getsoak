@@ -306,15 +306,17 @@ export async function startEnrolment(input: {
     return { ok: false, error: "Couldn't work out what's due." };
   }
 
-  const attempt = await beginAttempt({
+  const attemptInput = {
     invoiceId: invoice.id,
     storeId: input.storeId,
     amountPaise: amountDue,
-    mode: "manual",
+    mode: "manual" as const,
     // Durable before checkout. Confirmation copies this exact value into the
     // mandate rather than trusting the browser or recomputing after a reprice.
     mandateMaxPaise: mandateMax,
-  });
+  };
+  const mandateMethod = normalizeMandateMethod(input.mandateMethod);
+  let attempt = await beginAttempt(attemptInput);
 
   // ★★ REFUSED BY `billing_payment_attempts_one_in_flight` — and this used to be
   // a DEAD END. Dismissing the Razorpay modal leaves the attempt `processing`
@@ -327,18 +329,58 @@ export async function startEnrolment(input: {
   // one. No staleness guess, no duplicate charge, and a resumed tab simply works.
   if (!attempt) {
     const resumable = await resumableAttempt(invoice.id, input.storeId);
-    if (resumable) {
-      // ★ THE RAIL IS FIXED ON THE EXISTING ORDER, so a merchant who picked a
-      // different one this time cannot be given it — the order is what stays
-      // payable, and minting a second one is the duplicate charge this branch
-      // exists to prevent. Read it back and report it truthfully rather than
-      // echoing the request; the caller says so on screen.
-      const existing = await rzpFetchOrder(creds, resumable.providerOrderId);
-      // A failed read is a label problem, not a correctness one — every order
-      // created before this change omitted `method`, which Razorpay treats as
-      // card, so that is the honest fallback.
-      const resumedMethod: MandateMethod =
-        existing.ok && existing.data.method === "upi" ? "upi" : "card";
+    if (!resumable) {
+      // In flight but with no order to resume — a race between two Subscribe
+      // clicks, caught before either reached the gateway. Waiting IS the answer.
+      return {
+        ok: false,
+        error: "A payment is already in progress. Give it a moment.",
+      };
+    }
+
+    // ★ THE RAIL IS FIXED ON THE EXISTING ORDER, so resuming normally hands
+    // back whatever rail that order was created with — the order is what stays
+    // payable, and minting a second one is the duplicate charge this branch
+    // exists to prevent. Read it back rather than echoing the request.
+    const existing = await rzpFetchOrder(creds, resumable.providerOrderId);
+    // A failed read is a label problem, not a correctness one — every order
+    // created before the rail was declared omitted `method`, which Razorpay
+    // treats as card, so that is the honest fallback.
+    const resumedMethod: MandateMethod =
+      existing.ok && existing.data.method === "upi" ? "upi" : "card";
+
+    // ★★ BUT AN ORDER NOBODY EVER PAID AGAINST IS NOT WORTH PINNING A RAIL TO.
+    // Dismissing Checkout leaves the attempt `processing` with nothing to say a
+    // modal was closed, so without this a merchant who once opened a card
+    // authorisation is served cards for the next 72 hours — however many times
+    // they pick UPI Autopay — until reconciliation gives up on that attempt.
+    // The rail is chosen once and cannot be edited afterwards, so serving the
+    // wrong one is not a cosmetic mismatch: it is the wrong mandate.
+    //
+    // Replacement is allowed ONLY on the gateway's own word that the order is
+    // untouched — `created`, zero attempts, nothing paid. That is proof no
+    // payment instrument has ever been presented against it, which is exactly
+    // the condition under which abandoning it cannot cost anyone money. An
+    // unreadable order is NOT untouched: we resume and report the truth.
+    const untouched =
+      existing.ok &&
+      existing.data.status === "created" &&
+      (existing.data.attempts ?? 0) === 0 &&
+      !existing.data.amount_paid;
+
+    if (resumedMethod !== mandateMethod && untouched) {
+      const dropped = await settleAttempt(resumable.id, "failed", {
+        providerOrderId: resumable.providerOrderId,
+        failureCode: "rail_changed",
+        failureReason: `Abandoned an unpaid ${resumedMethod} authorisation; the merchant chose ${mandateMethod}.`,
+        now,
+      });
+      // Only a settled attempt frees the one-in-flight index. If the claim lost
+      // a race the merchant simply resumes, which is the safe outcome.
+      if (dropped === "failed") attempt = await beginAttempt(attemptInput);
+    }
+
+    if (!attempt) {
       return {
         ok: true,
         data: {
@@ -355,12 +397,6 @@ export async function startEnrolment(input: {
         },
       };
     }
-    // In flight but with no order to resume — a race between two Subscribe
-    // clicks, caught before either reached the gateway. Waiting IS the answer.
-    return {
-      ok: false,
-      error: "A payment is already in progress. Give it a moment.",
-    };
   }
 
   const notes = {
@@ -370,7 +406,6 @@ export async function startEnrolment(input: {
     // match it even if we never see the response.
     sm_billing_key: attempt.idempotencyKey,
   };
-  const mandateMethod = normalizeMandateMethod(input.mandateMethod);
   const order = await rzpCreateAuthorizationOrder(creds, {
     amountPaise: amountDue,
     customerId,

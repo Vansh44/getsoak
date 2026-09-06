@@ -7543,6 +7543,22 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       second charge. ⚠ Only a `processing` attempt is resumable: the index also
       covers `created` (no order exists yet) and `authorized` (money already
       authorized — re-opening checkout would invite a second authorization).
+    - **★★ BUT RESUMING PINNED THE MANDATE RAIL, WHICH IS NOT A LABEL.** The
+      rail is fixed when the authorisation order is created and cannot be edited
+      afterwards, so handing a card order back to a merchant who has just chosen
+      UPI Autopay registers the WRONG MANDATE — and because the stale attempt
+      only dies when reconciliation gives up on it (72h), every retry in between
+      does it again. Found in production 2026-09-06: an order created before the
+      rail was declared carried `method: null` and Checkout offered cards only,
+      however many times UPI was picked. `startEnrolment` now abandons the old
+      order and mints a fresh one on the chosen rail — but ONLY on the gateway's
+      own word that the order is untouched: status `created`, zero attempts,
+      nothing paid. That is proof no payment instrument has ever been presented
+      against it, and it is the only state in which abandoning one cannot cost
+      anyone money. ⚠ An UNREADABLE order is NOT untouched — "we could not
+      check" is not "nobody paid" — and an order with even one attempt is
+      resumed on its original rail and reported truthfully. Pinned in all three
+      directions, and both guards mutation-tested.
     - **★★ EXTRA LOCATIONS ARE BOUGHT ON THE NEW SYSTEM** (`lib/billing/locations.ts`,
       `supabase/billing_07_addon_invoices.sql`). The old path called
       `rzpUpdateSubscription`, which Razorpay does not support for UPI or

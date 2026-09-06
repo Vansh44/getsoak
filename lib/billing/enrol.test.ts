@@ -121,6 +121,12 @@ beforeEach(() => {
   // ⚠ clearAllMocks clears CALLS, not IMPLEMENTATIONS — and this default
   // matters: a missing token after money moved must still grant the paid plan.
   rzp.rzpFetchPayment.mockResolvedValue({ ok: true, data: { id: "pay_1" } });
+  // Same trap: the rail tests below override this, and without restoring it
+  // here the override leaks into whichever test `test:shuffle` runs next.
+  rzp.rzpFetchOrder.mockResolvedValue({
+    ok: true,
+    data: { id: "order_1", method: "card" },
+  });
   rzp.verifyCapturedCheckoutPayment.mockResolvedValue({
     ok: true,
     gatewayRead: true,
@@ -352,6 +358,92 @@ describe("startEnrolment", () => {
     });
     // ★ And it must NOT open a second order at the gateway.
     expect(rzp.rzpCreateOrder).not.toHaveBeenCalled();
+  });
+
+  it("★★ REPLACES an untouched order when the merchant picks a different rail", async () => {
+    // The rail is fixed when the order is created and cannot be edited after.
+    // So resuming a card order for someone who just chose UPI Autopay does not
+    // merely mislabel the screen — it registers the WRONG MANDATE, and until
+    // reconciliation gives up on the stale attempt (72h) every retry does it
+    // again. Abandoning an order the gateway says nobody has ever paid against
+    // costs nothing, which is the only condition under which this is allowed.
+    collect.beginAttempt
+      .mockResolvedValueOnce(null) // refused by the one-in-flight index
+      .mockResolvedValueOnce({ attemptId: "att-new", idempotencyKey: "key-2" });
+    collect.settleAttempt.mockResolvedValue("failed");
+    rzp.rzpFetchOrder.mockResolvedValue({
+      ok: true,
+      data: {
+        id: "order_old",
+        method: "card",
+        status: "created",
+        attempts: 0,
+        amount_paid: 0,
+      },
+    });
+    seed([
+      [], // currentState: no subscription
+      [{ id: "att-old", providerOrderId: "order_old", amountPaise: 5_000_00 }],
+    ]);
+
+    const res = await startEnrolment({ ...args, mandateMethod: "upi" });
+
+    expect(collect.settleAttempt).toHaveBeenCalledWith(
+      "att-old",
+      "failed",
+      expect.objectContaining({ failureCode: "rail_changed" }),
+    );
+    expect(rzp.rzpCreateAuthorizationOrder.mock.calls[0][1].method).toBe("upi");
+    expect(res.ok && res.data.mandateMethod).toBe("upi");
+    expect(res.ok && res.data.attemptId).toBe("att-new");
+  });
+
+  it("★★ resumes rather than replaces once a payment has been TRIED", async () => {
+    // `attempts > 0` means a payment instrument has been presented against that
+    // order. Abandoning it then risks a second payable order for the same
+    // invoice, which is the duplicate charge the resume branch exists to stop —
+    // so the merchant keeps the old rail and is told so.
+    collect.beginAttempt.mockResolvedValue(null);
+    rzp.rzpFetchOrder.mockResolvedValue({
+      ok: true,
+      data: {
+        id: "order_old",
+        method: "card",
+        status: "created",
+        attempts: 1,
+        amount_paid: 0,
+      },
+    });
+    seed([
+      [],
+      [{ id: "att-old", providerOrderId: "order_old", amountPaise: 5_000_00 }],
+    ]);
+
+    const res = await startEnrolment({ ...args, mandateMethod: "upi" });
+
+    expect(collect.settleAttempt).not.toHaveBeenCalled();
+    expect(rzp.rzpCreateAuthorizationOrder).not.toHaveBeenCalled();
+    expect(res.ok && res.data.mandateMethod).toBe("card");
+  });
+
+  it("★ an UNREADABLE order is never treated as untouched", async () => {
+    // "We could not check" is not "nobody paid". A gateway blip must not become
+    // permission to abandon an order that may already carry a payment.
+    collect.beginAttempt.mockResolvedValue(null);
+    rzp.rzpFetchOrder.mockResolvedValue({
+      ok: false,
+      error: "timeout",
+      outcome: "unknown",
+    });
+    seed([
+      [],
+      [{ id: "att-old", providerOrderId: "order_old", amountPaise: 5_000_00 }],
+    ]);
+
+    const res = await startEnrolment({ ...args, mandateMethod: "upi" });
+
+    expect(collect.settleAttempt).not.toHaveBeenCalled();
+    expect(res.ok && res.data.providerOrderId).toBe("order_old");
   });
 
   it("★ asks them to wait when the in-flight attempt has NO order to resume", async () => {
