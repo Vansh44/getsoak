@@ -54,6 +54,7 @@ import {
   startEnrolment,
   type EnrolmentStart,
 } from "@/lib/billing/enrol";
+import { normalizeMandateMethod } from "@/lib/billing/mandate-types";
 
 type BillingPeriod = "monthly" | "yearly";
 
@@ -102,13 +103,28 @@ function isPaidPlan(plan: unknown): plan is Plan {
 export async function startSubscribe(
   plan: unknown,
   period: unknown,
+  /**
+   * Which rail to authorise the mandate on — "card" or "upi".
+   *
+   * ★ Accepting this from the browser is safe in a way an amount would not be:
+   * it selects a payment RAIL, every figure is still computed server-side, and
+   * `normalizeMandateMethod` coerces anything unrecognised to "card". It has to
+   * be a parameter because Razorpay fixes the rail on the ORDER, so Checkout
+   * cannot offer the choice itself.
+   */
+  mandateMethod?: unknown,
 ): Promise<SubscribeStart> {
   // Paid enrolment begins only after the dashboard has resolved both the
   // signed-in manager and the store tenant from the store host.
   const userId = await getManagerUserId("ai");
   if (!userId)
     return { ok: false, error: "You don't have permission to do this." };
-  return startSubscribeForStore(await getActingStoreId(), plan, period);
+  return startSubscribeForStore(
+    await getActingStoreId(),
+    plan,
+    period,
+    mandateMethod,
+  );
 }
 
 /**
@@ -120,6 +136,7 @@ async function startSubscribeForStore(
   storeId: string,
   plan: unknown,
   period: unknown,
+  mandateMethod?: unknown,
 ): Promise<SubscribeStart> {
   if (!isPaidPlan(plan) || !PLAN_IDS.includes(plan)) {
     return { ok: false, error: "Choose a paid plan." };
@@ -135,6 +152,7 @@ async function startSubscribeForStore(
     storeId,
     plan,
     period: billingPeriod,
+    mandateMethod: normalizeMandateMethod(mandateMethod),
     priceFor,
   });
   if (!started.ok) return { ok: false, error: started.error };

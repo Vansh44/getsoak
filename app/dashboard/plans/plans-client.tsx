@@ -43,6 +43,10 @@ import type { SubscriptionView } from "@/lib/billing/invoice-types";
 import type { CreditPack } from "@/lib/ai/credits";
 import { openRazorpayModal } from "@/lib/payments/razorpay-client";
 import {
+  MANDATE_METHOD_CHOICES,
+  type MandateMethod,
+} from "@/lib/billing/mandate-types";
+import {
   PLAN_IDS,
   PLAN_LIMITS,
   PLAN_META,
@@ -855,6 +859,9 @@ function UpgradeModal({
   );
   const [selectedPackId, setSelectedPackId] = useState<string | null>(null);
   const [working, setWorking] = useState(false);
+  // Card is the default: it is the rail every existing mandate uses, so a
+  // merchant who does not read this box gets exactly what they got before.
+  const [mandateMethod, setMandateMethod] = useState<MandateMethod>("card");
   const meta = PLAN_META[selectedPlan];
   const selectedPack = packs.find((pack) => pack.id === selectedPackId) ?? null;
   const price =
@@ -947,11 +954,26 @@ function UpgradeModal({
 
   async function subscribe() {
     setWorking(true);
-    const start = await startSubscribe(selectedPlan, selectedPeriod);
+    const start = await startSubscribe(
+      selectedPlan,
+      selectedPeriod,
+      mandateMethod,
+    );
     if (!start.ok) {
       toast.error(start.error);
       setWorking(false);
       return;
+    }
+    if (start.mandateMethod !== mandateMethod) {
+      // ★ A payment window left open earlier is resumed rather than replaced
+      // (that is what stops a duplicate charge), and its rail was fixed when
+      // that order was created. Say so instead of opening a Checkout that
+      // quietly contradicts the choice just made.
+      toast.info(
+        start.mandateMethod === "upi"
+          ? "Resuming your earlier UPI Autopay authorisation."
+          : "Resuming your earlier card authorisation.",
+      );
     }
     const opened = await openRazorpayModal({
       keyId: start.keyId,
@@ -1273,6 +1295,50 @@ function UpgradeModal({
                     </span>
                   </div>
                 </div>
+                {/* ★★ THE RAIL IS CHOSEN HERE, not at Checkout, because
+                    Razorpay fixes it on the ORDER — omitting it is what made
+                    every enrolment a card mandate while UPI Autopay sat enabled
+                    on the account. See rzpCreateAuthorizationOrder. */}
+                <fieldset className="mt-5">
+                  <legend className="text-sm font-semibold text-[#111827]">
+                    How should renewals be charged?
+                  </legend>
+                  <p className="mt-1 text-xs text-[#5b6472]">
+                    You authorise this once. The first payment is taken now.
+                  </p>
+                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                    {MANDATE_METHOD_CHOICES.map((choice) => {
+                      const active = mandateMethod === choice.id;
+                      return (
+                        <label
+                          key={choice.id}
+                          className={`flex cursor-pointer gap-3 rounded-xl border p-4 transition ${
+                            active
+                              ? "border-[#4f39f6] bg-[#f5f3ff]"
+                              : "border-[#e5e7eb] bg-white hover:bg-[#fafafa]"
+                          }`}
+                        >
+                          <input
+                            type="radio"
+                            name="mandate-method"
+                            value={choice.id}
+                            checked={active}
+                            onChange={() => setMandateMethod(choice.id)}
+                            className="mt-0.5 h-4 w-4 accent-[#4f39f6]"
+                          />
+                          <span className="min-w-0">
+                            <span className="block text-sm font-semibold text-[#111827]">
+                              {choice.label}
+                            </span>
+                            <span className="mt-0.5 block text-xs leading-4 text-[#5b6472]">
+                              {choice.detail}
+                            </span>
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </fieldset>
                 {selectedPack && (
                   <div className="mt-4 rounded-lg border border-indigo-100 bg-indigo-50 p-4 text-sm text-indigo-900">
                     Two secure payment windows will open: the subscription
