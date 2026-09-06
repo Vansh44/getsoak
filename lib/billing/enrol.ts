@@ -1,5 +1,11 @@
 import "server-only";
 
+// ★ The mandate rail lives in a client-safe module: this file is `server-only`,
+// so a client component importing even the TYPE from here fails the build.
+import { normalizeMandateMethod, type MandateMethod } from "./mandate-types";
+export { MANDATE_METHODS, normalizeMandateMethod } from "./mandate-types";
+export type { MandateMethod } from "./mandate-types";
+
 /**
  * Enrolment — a merchant's first paid cycle, and the mandate for later ones.
  *
@@ -37,6 +43,7 @@ import { logError, logWarn } from "@/lib/observability/logger";
 import { getPlatformRazorpayCreds } from "@/lib/payments/provider";
 import {
   rzpCreateAuthorizationOrder,
+  rzpFetchOrder,
   rzpCreateCustomer,
   rzpFetchPayment,
   verifyCapturedCheckoutPayment,
@@ -86,6 +93,8 @@ export interface EnrolmentStart {
   suggestedMandateMaxPaise: number;
   /** The Razorpay customer Checkout must bind to the recurring authorisation. */
   providerCustomerId: string;
+  /** The rail the order was created for; Checkout must be opened to match. */
+  mandateMethod: MandateMethod;
 }
 
 export type EnrolmentResult<T> =
@@ -160,6 +169,8 @@ export async function startEnrolment(input: {
   storeId: string;
   plan: Plan;
   period: BillingPeriod;
+  /** Card unless the merchant chose UPI Autopay on the review step. */
+  mandateMethod?: MandateMethod;
   priceFor: (
     plan: Plan,
     period: BillingPeriod,
@@ -317,9 +328,21 @@ export async function startEnrolment(input: {
   if (!attempt) {
     const resumable = await resumableAttempt(invoice.id, input.storeId);
     if (resumable) {
+      // ★ THE RAIL IS FIXED ON THE EXISTING ORDER, so a merchant who picked a
+      // different one this time cannot be given it — the order is what stays
+      // payable, and minting a second one is the duplicate charge this branch
+      // exists to prevent. Read it back and report it truthfully rather than
+      // echoing the request; the caller says so on screen.
+      const existing = await rzpFetchOrder(creds, resumable.providerOrderId);
+      // A failed read is a label problem, not a correctness one — every order
+      // created before this change omitted `method`, which Razorpay treats as
+      // card, so that is the honest fallback.
+      const resumedMethod: MandateMethod =
+        existing.ok && existing.data.method === "upi" ? "upi" : "card";
       return {
         ok: true,
         data: {
+          mandateMethod: resumedMethod,
           invoiceId: invoice.id,
           attemptId: resumable.id,
           providerOrderId: resumable.providerOrderId,
@@ -347,9 +370,13 @@ export async function startEnrolment(input: {
     // match it even if we never see the response.
     sm_billing_key: attempt.idempotencyKey,
   };
+  const mandateMethod = normalizeMandateMethod(input.mandateMethod);
   const order = await rzpCreateAuthorizationOrder(creds, {
     amountPaise: amountDue,
     customerId,
+    // ★ Declared on the ORDER, not left to Checkout — omitting it is what made
+    // every enrolment a card mandate regardless of what the merchant wanted.
+    method: mandateMethod,
     terms: {
       maxAmountPaise: mandateMax,
       // The mandate outlives the cycle it was authorised in; Razorpay wants
@@ -386,6 +413,7 @@ export async function startEnrolment(input: {
   return {
     ok: true,
     data: {
+      mandateMethod,
       invoiceId: invoice.id,
       attemptId: attempt.attemptId,
       providerOrderId: order.data.id,

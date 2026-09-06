@@ -26,6 +26,8 @@ export interface RzpOrder {
   currency: string;
   receipt: string | null;
   status: string;
+  /** Set on a recurring authorisation order: the rail the mandate is bound to. */
+  method?: string | null;
 }
 
 export interface RzpPayment {
@@ -196,8 +198,21 @@ export async function rzpCreateAuthorizationOrder(
     amountPaise: number;
     customerId: string;
     terms: RzpMandateTerms;
-    /** Omit to let the customer pick at checkout. "upi" pins UPI Autopay. */
-    method?: "upi" | "card" | "emandate" | "nach";
+    /**
+     * ★★ REQUIRED FOR A RECURRING AUTHORISATION ORDER, and the rail cannot be
+     * left to the customer at Checkout.
+     *
+     * This used to read "omit to let the customer pick at checkout", which is
+     * simply not how Razorpay works: its recurring docs declare the rail on the
+     * ORDER — `"method": "card"` for a card mandate, `"method": "upi"` for UPI
+     * Autopay — and omitting it yields a CARD mandate. That is why the merchant
+     * saw a Cards-only Checkout with UPI Autopay fully enabled on the account
+     * (`recurring.upi_autopay → collect, intent` in Checkout's own preferences).
+     *
+     * So the rail has to be chosen BEFORE the order exists, which is why it is
+     * a step in the review dialog rather than a Checkout affordance.
+     */
+    method: "upi" | "card" | "emandate" | "nach";
     receipt?: string;
     description?: string;
     notes?: Record<string, string>;
@@ -216,7 +231,7 @@ export async function rzpCreateAuthorizationOrder(
       amount: params.amountPaise,
       currency: "INR",
       customer_id: params.customerId,
-      ...(params.method ? { method: params.method } : {}),
+      method: params.method,
       token: {
         max_amount: params.terms.maxAmountPaise,
         expire_at: params.terms.expireAtUnix,
@@ -354,6 +369,23 @@ export async function verifyCapturedCheckoutPayment(
  * permission to debit them; reading it from the payment we have just verified
  * removes the question entirely. Same rule as every price in this codebase.
  */
+/**
+ * Read one order back.
+ *
+ * ★ Needed because a recurring authorisation order's RAIL is fixed when the
+ * order is created and we do not persist it. A resumed enrolment hands the
+ * merchant the SAME order (see startEnrolment), so the only way to tell them
+ * truthfully which rail they are about to authorise on is to ask.
+ */
+export async function rzpFetchOrder(
+  creds: RazorpayCreds,
+  orderId: string,
+): Promise<RzpResult<RzpOrder>> {
+  return rzpFetch<RzpOrder>(creds, `/orders/${encodeURIComponent(orderId)}`, {
+    method: "GET",
+  });
+}
+
 export async function rzpFetchPayment(
   creds: RazorpayCreds,
   paymentId: string,

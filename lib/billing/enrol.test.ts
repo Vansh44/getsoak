@@ -33,6 +33,11 @@ vi.mock("@/lib/payments/provider", () => provider);
 const rzp = vi.hoisted(() => ({
   rzpCreateOrder: vi.fn(),
   rzpCreateAuthorizationOrder: vi.fn(),
+  // The resumable branch reads the existing order back to learn its rail.
+  rzpFetchOrder: vi.fn<(...a: unknown[]) => Promise<unknown>>(async () => ({
+    ok: true,
+    data: { id: "order_1", method: "card" },
+  })),
   rzpCreateCustomer: vi.fn(),
   // Read on every confirm to learn whether the checkout registered a mandate.
   // Default deliberately has no token to cover the post-payment anomaly path.
@@ -162,6 +167,40 @@ describe("startEnrolment", () => {
     priceFor,
     now: NOW,
   };
+
+  it("★★ DECLARES THE RAIL ON THE ORDER — omitting it is what hid UPI", async () => {
+    // Razorpay fixes the mandate rail on the ORDER: "card" for a card mandate,
+    // "upi" for UPI Autopay. Omitting `method` yields a CARD mandate, which is
+    // why a merchant saw a Cards-only Checkout while UPI Autopay was fully
+    // enabled on the account. Checkout cannot offer the choice itself, so the
+    // order has to carry it.
+    await startEnrolment({ ...args, mandateMethod: "upi" });
+    expect(rzp.rzpCreateAuthorizationOrder.mock.calls[0][1].method).toBe("upi");
+  });
+
+  it("defaults to card, so an absent choice behaves exactly as before", async () => {
+    await startEnrolment(args);
+    expect(rzp.rzpCreateAuthorizationOrder.mock.calls[0][1].method).toBe(
+      "card",
+    );
+  });
+
+  it("★ coerces an unrecognised rail rather than passing it through", async () => {
+    // The value reaches the server from the browser. It picks a RAIL, never an
+    // amount — but it still may not reach Razorpay unvalidated.
+    await startEnrolment({
+      ...args,
+      mandateMethod: "netbanking" as unknown as "card",
+    });
+    expect(rzp.rzpCreateAuthorizationOrder.mock.calls[0][1].method).toBe(
+      "card",
+    );
+  });
+
+  it("reports the rail back so the caller can open Checkout honestly", async () => {
+    const res = await startEnrolment({ ...args, mandateMethod: "upi" });
+    expect(res.ok && res.data.mandateMethod).toBe("upi");
+  });
 
   it("★★ offers a mandate while the autopay rollout is enabled", async () => {
     await startEnrolment(args);
