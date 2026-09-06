@@ -7803,6 +7803,93 @@ way — an entry there is a deliberate act, not a way to silence the guard.
         what makes "exactly one" true. ⚠ That claim also fixed a quieter bug:
         `paid_at` used to be rewritten on every later sync, so a second attempt
         settling days afterwards moved the timestamp on an already-paid invoice.
+      - **★★ A COMPED PLAN IS AN ENTITLEMENT OVERLAY, NEVER A BILLING OPERATION**
+        (spec: `docs/comped-plans-spec.md`; migration
+        `20260906_0077_comped_plan_overlay`). Giving a store a free month of Pro
+        must not disturb the Basic it already pays for, and the obvious design —
+        flip the plan, start a cycle, raise a ₹0 invoice — fails three ways. A ₹0
+        subscription invoice is UNPAYABLE (`manual-pay.ts` refuses a non-positive
+        amount due; Razorpay rejects ₹0 orders) so it sits open until the
+        downgrade claim fires. `/api/cron/plan-expiry` flips any expired non-free
+        plan to free WITHOUT consulting `billing_subscriptions`, so the comp
+        lapsing drops a live paid subscriber to Free. And writing a cycle puts the
+        expiry cron and the renewal worker both in charge of `stores.plan`.
+      - **★ `stores.plan_expires_at` IS ALREADY OVERLOADED** — grant end for a
+        comp, CYCLE end for a paid plan (`enrol.ts` sets it to the cycle end on
+        every activation) — which is why a comp needs its own columns. `stores`
+        gains `comp_plan`, `comp_duration_days`, `comp_offered_at`,
+        `comp_starts_at` and `comp_expires_at`, and `effectivePlan` returns the
+        higher-ranked of the paid entitlement and an active comp. **★★ THAT MAKES
+        EXPIRY FREE:** nothing writes the comp into `plan`, so when the window
+        closes the paid entitlement underneath is what remains — no "put them back
+        on Basic" step to forget.
+      - **★ GRANT AND WINDOW ARE SEPARATE.** The operator sets the duration; the
+        merchant's acceptance sets the window, so a free month counts from the day
+        it is taken up. `app/actions/comp-plan-actions.ts`: `offerCompPlan`
+        (superadmin, duration only), `withdrawCompOffer` (unaccepted offers only —
+        there is no mid-window revocation), and **`activateCompPlan()`, which
+        TAKES NO ARGUMENTS** — plan, duration and both timestamps come from the
+        stored grant or the DATABASE clock, because an action shaped
+        `activateComp(plan)` lets a merchant post "pro" and self-grant (the
+        `confirmLocationPurchase` rule). One conditional claim on a null
+        `comp_starts_at` makes a double-click and a withdrawn offer report rather
+        than repeat.
+      - **★ COLLECTION CONTINUES DURING A COMP.** It is a free upgrade, not a
+        payment holiday: the merchant keeps paying their own subscription, and the
+        offer copy says so. A comp only ever RAISES — one at or below the paid
+        rank is inert. Junk on the comp side fails CLOSED; junk on the paid side
+        fails OPEN.
+      - **★★ THE COMP FIELDS ARE REQUIRED ON `PlanEntitlement`.** 18 of
+        `effectivePlan`'s 40 call sites pass an object literal or an empty-object
+        fallback; optional fields would let every one silently ignore a comp —
+        merchant told Pro, gets Basic, no error anywhere. Requiring them turned
+        that into one build error per site (the `OrderInsert` technique).
+        `NO_COMP` is the explicit "I checked, there isn't one".
+      - **★ THE FALL-BACK NOTICE IS ITS OWN EVENT.** `store.comp_ended` (both
+        channels, not configurable) fires from the sweep and names the plan they
+        LAND ON, which for a paying merchant is the plan they were paying all
+        along — reusing `plan.changed` would tell a Basic subscriber they had been
+        downgraded. ⚠ Postgres RETURNING yields the row AFTER the update, so the
+        plan that ENDED cannot be read from it: the sweep is one raw UPDATE with a
+        `FROM stores old` self-join supplying the pre-update snapshot. Still a
+        single conditional claim, so a concurrent run cannot double-notify.
+      - **⚠ NO `comp_note` OR `comp_granted_by` COLUMN:** the "Read stores" policy
+        grants SELECT to `public`, so who comped a store and why lives in
+        `plan_events` (service-role only), audited with an `operator` source — NOT
+        `comp`, which belongs to `stores.plan_source` and is rejected by that CHECK
+        (§15). **⚠ STILL TO DO:** the hand-reviewed backfill of the remaining
+        production comped store, and only then removing the renewal worker's comp
+        exemption (spec §7, §10).
+      - **★★ FINALIZE BEFORE SETTLING, OR A PAID INVOICE STAYS UNPAID** (fixed
+        2026-09-06; `enrol.ts`, `plan-change.ts`, `locations.ts`). All three
+        confirm paths called `settleAttempt(captured)` and only THEN
+        `finalizeInvoice`. But `syncInvoiceStatus` claims the move to paid with
+        `inArray(status, ["open","processing"])`, and an unfinalized invoice is
+        `draft` — in NEITHER list. So the claim matched zero rows: the attempt
+        went `captured`, the invoice stayed unpaid, `paid_at` stayed null and NO
+        receipt was sent. `finalizeInvoice` then set `status: "open"`, leaving an
+        OPEN invoice behind a CAPTURED payment — phantom debt that dunning chases
+        and the downgrade clock runs against. ⚠ The ordering was doubly wrong:
+        `finalizeInvoice` sets `status: "open"` unconditionally (guarded only on a
+        null `finalized_at`), so even a successful paid claim would have been
+        clobbered back to open. MEASURED ON PRODUCTION: store `echos` paid its ₹15
+        cycle-1 invoice on 2026-08-16 16:50:11Z (attempt captured) and the
+        invoice's `paid_at` was 2026-09-05 21:15:41Z — a lag of 20 days 4 hours.
+        It settled only because the merchant clicked "Pay now" on a bill they did
+        not owe: that created a second attempt, and `syncInvoiceStatus` recomputed
+        over the OLD captured one. The same click fired the receipt, so they got
+        "Payment received" for a payment they then CANCELLED — and had they
+        completed it, they would have paid twice. Finalizing first does not weaken
+        "a number is spent only on an invoice that was really paid": the checkout
+        signature and `verifyCapturedCheckoutPayment` both pass above it. Pinned
+        in all three suites by an `invocationCallOrder` assertion.
+      - **★★ A ZERO-ROW PAID CLAIM IS NOW LOUD.** The bug above survived because
+        `syncInvoiceStatus` could not tell "another settle won" (benign) from "the
+        invoice is in a status this claim cannot reach" (money taken, bill still
+        open). There was no log and no failed request — the only trace was a null
+        `paid_at` beside a captured attempt. It now re-reads the row on a missed
+        paid claim and logs `billing.invoice_paid_claim_missed` unless the invoice
+        is already paid.
       - **★ A CREDIT PURCHASE GETS NO SUBSCRIPTION RECEIPT.** A mail reading
         "your Pro plan is active" for a ₹59 credit pack is wrong; credits have
         their own confirmation (`ai.credits_purchased`).

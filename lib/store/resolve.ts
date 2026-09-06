@@ -35,6 +35,11 @@ export interface Store {
   /** Timed plans: ISO timestamp the plan lapses (null = indefinite). Resolve
    *  entitlements via effectivePlan(store), never raw `plan`. */
   plan_expires_at: string | null;
+  /** The comped-plan OVERLAY (docs/comped-plans-spec.md). Separate from `plan`
+   *  above, which is the PAID entitlement — `effectivePlan` resolves the two by
+   *  rank, so a comp can only ever raise and its expiry needs no revert. */
+  comp_plan: string | null;
+  comp_expires_at: string | null;
   custom_domain: string | null;
   settings: Record<string, unknown>;
 }
@@ -56,6 +61,8 @@ const STORE_COLUMNS = {
   status: stores.status,
   plan: stores.plan,
   plan_expires_at: stores.planExpiresAt,
+  comp_plan: stores.compPlan,
+  comp_expires_at: stores.compExpiresAt,
   custom_domain: stores.customDomain,
   settings: stores.settings,
 };
@@ -206,6 +213,8 @@ export async function getCurrentStore(): Promise<Store> {
     status: "active",
     plan: "pro",
     plan_expires_at: null,
+    comp_plan: null,
+    comp_expires_at: null,
     custom_domain: null,
     settings: {},
   };

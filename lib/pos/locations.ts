@@ -30,6 +30,10 @@ export interface PosStoreShape {
   settings?: Record<string, unknown> | null | unknown;
   plan?: unknown;
   plan_expires_at?: string | Date | null;
+  // Required, like PlanEntitlement's — a caller that drops these silently
+  // hides POS from a comped Pro store (docs/comped-plans-spec.md §6).
+  comp_plan: unknown;
+  comp_expires_at: string | Date | null;
 }
 
 /** Is POS switched on for this store? Resolves through the EFFECTIVE plan, so a

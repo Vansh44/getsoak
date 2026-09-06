@@ -390,6 +390,21 @@ const EVENT_VARIABLES: Partial<Record<EventKey, TemplateVariable[]>> = {
       sample: "www.acme.com",
     },
   ],
+  "store.comp_ended": [
+    {
+      name: "comp_plan",
+      description: "The free plan that has just ended.",
+      sample: "Pro",
+    },
+    {
+      // ★ THE POINT OF THE WHOLE MESSAGE. Resolved AFTER the comp is cleared,
+      // so it names the plan they actually land on — which for a paying
+      // merchant is the plan they have been paying for all along, not Free.
+      name: "plan",
+      description: "The plan the store is on now.",
+      sample: "Basic",
+    },
+  ],
   "store.domain_reverted": [
     {
       name: "domain",

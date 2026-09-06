@@ -116,6 +116,11 @@ async function reconcileStoreSource(input: {
   status: string;
   plan: string;
   plan_expires_at: string | null;
+  // storeOrigin() resolves the custom-domain entitlement through effectivePlan,
+  // so the overlay has to reach it or a comped Pro store publishes the wrong
+  // canonical host (docs/comped-plans-spec.md §6).
+  comp_plan: string | null;
+  comp_expires_at: string | null;
   custom_domain: string | null;
   settings: Record<string, unknown>;
   createdAt: string;
@@ -199,6 +204,8 @@ export async function reconcileStoreSearchSource(
         status: stores.status,
         plan: stores.plan,
         plan_expires_at: stores.planExpiresAt,
+        comp_plan: stores.compPlan,
+        comp_expires_at: stores.compExpiresAt,
         custom_domain: stores.customDomain,
         settings: stores.settings,
         createdAt: stores.createdAt,
@@ -306,6 +313,8 @@ export async function prepareSearchMetricWork(
         status: stores.status,
         plan: stores.plan,
         plan_expires_at: stores.planExpiresAt,
+        comp_plan: stores.compPlan,
+        comp_expires_at: stores.compExpiresAt,
         custom_domain: stores.customDomain,
         settings: stores.settings,
         createdAt: stores.createdAt,

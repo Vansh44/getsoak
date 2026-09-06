@@ -94,7 +94,12 @@ export async function getLiveStoreGateway(
     getStoreGateway(storeId),
     withService((db) =>
       db
-        .select({ plan: stores.plan, plan_expires_at: stores.planExpiresAt })
+        .select({
+          plan: stores.plan,
+          plan_expires_at: stores.planExpiresAt,
+          comp_plan: stores.compPlan,
+          comp_expires_at: stores.compExpiresAt,
+        })
         .from(stores)
         .where(eq(stores.id, storeId))
         .limit(1),
@@ -102,7 +107,12 @@ export async function getLiveStoreGateway(
       // Fails CLOSED, unlike getViewerLocations. An unreadable plan must not
       // be treated as an entitlement to charge cards.
       logError("payments.gateway_plan_load", err, { storeId });
-      return [] as { plan: unknown; plan_expires_at: string | null }[];
+      return [] as {
+        plan: unknown;
+        plan_expires_at: string | null;
+        comp_plan: string | null;
+        comp_expires_at: string | null;
+      }[];
     }),
   ]);
   const store = storeRows[0];

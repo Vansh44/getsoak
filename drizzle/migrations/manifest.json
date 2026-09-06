@@ -3142,6 +3142,97 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260906_0077_comped_plan_overlay",
+      "description": "Add the comped-plan entitlement overlay columns so a free grant never mutates the paid plan",
+      "file": "sql/20260906_0077_comped_plan_overlay.sql",
+      "checksum": "b3b4b1b94792a81e18dca84b8903818b16fa539b5ed25973b0fc07eefd15be5b",
+      "transaction": true,
+      "requires": ["20260906_0076_subscription_autopay_contact_help"],
+      "verify": {
+        "columns": [
+          "stores.comp_plan",
+          "stores.comp_duration_days",
+          "stores.comp_offered_at",
+          "stores.comp_starts_at",
+          "stores.comp_expires_at"
+        ],
+        "constraints": [
+          "stores_comp_plan_check",
+          "stores_comp_duration_check",
+          "stores_comp_window_complete"
+        ],
+        "queries": [
+          {
+            "name": "a comp window cannot be half-written",
+            "sql": "select count(*)::text from pg_constraint where conname = 'stores_comp_window_complete' and conrelid = 'public.stores'::regclass and pg_get_constraintdef(oid) like '%comp_expires_at > comp_starts_at%'",
+            "equals": "1"
+          },
+          {
+            "name": "no store holds a half-written comp window",
+            "sql": "select count(*)::text from public.stores where (comp_starts_at is null) <> (comp_expires_at is null)",
+            "equals": "0"
+          }
+        ]
+      },
+      "applyVerify": {
+        "columns": [
+          "stores.comp_plan",
+          "stores.comp_duration_days",
+          "stores.comp_offered_at",
+          "stores.comp_starts_at",
+          "stores.comp_expires_at"
+        ],
+        "constraints": [
+          "stores_comp_plan_check",
+          "stores_comp_duration_check",
+          "stores_comp_window_complete"
+        ],
+        "queries": [
+          {
+            "name": "a comp window cannot be half-written",
+            "sql": "select count(*)::text from pg_constraint where conname = 'stores_comp_window_complete' and conrelid = 'public.stores'::regclass and pg_get_constraintdef(oid) like '%comp_expires_at > comp_starts_at%'",
+            "equals": "1"
+          },
+          {
+            "name": "no store holds a half-written comp window",
+            "sql": "select count(*)::text from public.stores where (comp_starts_at is null) <> (comp_expires_at is null)",
+            "equals": "0"
+          },
+          {
+            "name": "the overlay starts empty - no store is comped by the migration itself",
+            "sql": "select count(*)::text from public.stores where comp_plan is not null",
+            "equals": "0"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "columns": [
+          "stores.comp_plan",
+          "stores.comp_duration_days",
+          "stores.comp_offered_at",
+          "stores.comp_starts_at",
+          "stores.comp_expires_at"
+        ],
+        "constraints": [
+          "stores_comp_plan_check",
+          "stores_comp_duration_check",
+          "stores_comp_window_complete"
+        ],
+        "queries": [
+          {
+            "name": "a comp window cannot be half-written",
+            "sql": "select count(*)::text from pg_constraint where conname = 'stores_comp_window_complete' and conrelid = 'public.stores'::regclass and pg_get_constraintdef(oid) like '%comp_expires_at > comp_starts_at%'",
+            "equals": "1"
+          },
+          {
+            "name": "no store holds a half-written comp window",
+            "sql": "select count(*)::text from public.stores where (comp_starts_at is null) <> (comp_expires_at is null)",
+            "equals": "0"
+          }
+        ]
+      }
     }
   ]
 }

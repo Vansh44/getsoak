@@ -371,6 +371,37 @@ async function syncInvoiceStatus(
     )
     .returning({ id: billingInvoices.id });
 
+  // ★★ A ZERO-ROW CLAIM ON A PAID TRANSITION IS EITHER NOTHING OR A DISASTER,
+  // AND THE SILENCE IS WHAT MADE THIS COST 20 DAYS.
+  //
+  // Claiming nothing normally means "another settle got there first", which is
+  // correct and boring. But it ALSO happens when the invoice is in a status this
+  // claim cannot reach — `draft`, in the incident that prompted this — and then
+  // the money is captured while the invoice stays unpaid, dunning keeps chasing
+  // it, and nothing anywhere reports a problem. There was no log, no error and
+  // no failed request: the only trace was `paid_at` being null on a row whose
+  // attempt said `captured`.
+  //
+  // So distinguish the two by re-reading the row. Already `paid` is the benign
+  // race; anything else means money has been taken against an invoice that does
+  // not know it, which is an operator-visible fault, not a warning.
+  if (next === "paid" && claimed.length === 0) {
+    const [row] = await db
+      .select({ status: billingInvoices.status })
+      .from(billingInvoices)
+      .where(eq(billingInvoices.id, invoiceId))
+      .limit(1);
+    if (row && row.status !== "paid") {
+      logError(
+        "billing.invoice_paid_claim_missed",
+        new Error(
+          `captured payment could not mark invoice paid (status ${row.status})`,
+        ),
+        { invoiceId, invoiceStatus: row.status },
+      );
+    }
+  }
+
   return { becamePaid: next === "paid" && claimed.length > 0 };
 }
 

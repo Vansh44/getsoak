@@ -384,6 +384,20 @@ describe("confirmPlanChange", () => {
     ]);
   }
 
+  it("★★ FINALIZES BEFORE SETTLING — settling a DRAFT leaves a paid invoice unpaid", async () => {
+    // Same regression as confirmEnrolment, same cause, same cost. See the note
+    // in lib/billing/enrol.ts: `syncInvoiceStatus` can only claim the move to
+    // paid from "open" or "processing", so settling while the invoice is still a
+    // DRAFT captures the money and leaves an unpaid invoice behind it — silently.
+    seedConfirm();
+    await confirmPlanChange(args);
+    expect(store.finalizeInvoice).toHaveBeenCalled();
+    expect(collect.settleAttempt).toHaveBeenCalled();
+    expect(store.finalizeInvoice.mock.invocationCallOrder[0]).toBeLessThan(
+      collect.settleAttempt.mock.invocationCallOrder[0],
+    );
+  });
+
   it("applies the plan on a verified payment", async () => {
     seedConfirm();
     const res = await confirmPlanChange(args);

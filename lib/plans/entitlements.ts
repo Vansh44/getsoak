@@ -30,13 +30,20 @@ async function planContextWithDb(
   storeId: string,
 ): Promise<StorePlanContext> {
   const [store] = await db
-    .select({ plan: stores.plan, expiresAt: stores.planExpiresAt })
+    .select({
+      plan: stores.plan,
+      expiresAt: stores.planExpiresAt,
+      compPlan: stores.compPlan,
+      compExpiresAt: stores.compExpiresAt,
+    })
     .from(stores)
     .where(eq(stores.id, storeId))
     .limit(1);
   const plan = effectivePlan({
     plan: store?.plan,
     plan_expires_at: store?.expiresAt,
+    comp_plan: store?.compPlan ?? null,
+    comp_expires_at: store?.compExpiresAt ?? null,
   });
   return { plan, limits: PLAN_LIMITS[plan] };
 }
