@@ -901,7 +901,7 @@
         "queries": [
           {
             "name": "plan guide contains exact product tiers and no-data-loss downgrade contract",
-            "sql": "select count(*)::text from public.help_articles where slug = 'manage-your-storemink-plan-and-subscription' and status = 'published' and body like '%<td>5</td><td>50</td><td>Unlimited</td>%' and body like '%does not delete store data because a plan becomes lower%' and body like '%Custom domain</td><td>\u2014</td><td>\u2014</td><td>Included%'",
+            "sql": "select count(*)::text from public.help_articles where slug = 'manage-your-storemink-plan-and-subscription' and status = 'published' and body like '%<td>5</td><td>50</td><td>Unlimited</td>%' and body like '%does not delete store data because a plan becomes lower%' and body like '%Custom domain</td><td>—</td><td>—</td><td>Included%'",
             "equals": "1"
           },
           {
@@ -915,7 +915,7 @@
         "queries": [
           {
             "name": "plan guide contains exact product tiers and no-data-loss downgrade contract",
-            "sql": "select count(*)::text from public.help_articles where slug = 'manage-your-storemink-plan-and-subscription' and status = 'published' and body like '%<td>5</td><td>50</td><td>Unlimited</td>%' and body like '%does not delete store data because a plan becomes lower%' and body like '%Custom domain</td><td>\u2014</td><td>\u2014</td><td>Included%'",
+            "sql": "select count(*)::text from public.help_articles where slug = 'manage-your-storemink-plan-and-subscription' and status = 'published' and body like '%<td>5</td><td>50</td><td>Unlimited</td>%' and body like '%does not delete store data because a plan becomes lower%' and body like '%Custom domain</td><td>—</td><td>—</td><td>Included%'",
             "equals": "1"
           },
           {
@@ -1188,7 +1188,7 @@
         "queries": [
           {
             "name": "the dashboard Mink AI alpha guide is published with limits and permissions",
-            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%This alpha is read only.%' and body like '%Products \u2192 View%' and body like '%does not debit AI credits%'",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%This alpha is read only.%' and body like '%Products → View%' and body like '%does not debit AI credits%'",
             "equals": "1"
           }
         ]
@@ -1298,7 +1298,7 @@
         "queries": [
           {
             "name": "the Mink dashboard guide documents Phase 1B tools permissions and reliability",
-            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%Analytics \u2192 View%' and body like '%Inventory \u2192 View%' and body like '%retries a transient model failure at most once%' and body like '%never displays prompts, answers, tool arguments, tool results or model reasoning%'",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%Analytics → View%' and body like '%Inventory → View%' and body like '%retries a transient model failure at most once%' and body like '%never displays prompts, answers, tool arguments, tool results or model reasoning%'",
             "equals": "1"
           }
         ]
@@ -1307,7 +1307,7 @@
         "queries": [
           {
             "name": "the Mink dashboard guide includes sales and low-stock permissions",
-            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%Analytics \u2192 View%' and body like '%Inventory \u2192 View%'",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%Analytics → View%' and body like '%Inventory → View%'",
             "equals": "1"
           }
         ]
@@ -1344,7 +1344,7 @@
         "queries": [
           {
             "name": "the Mink dashboard guide documents the invited beta cards privacy compaction feedback and shadow metering",
-            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%Cards, filters and dashboard context%' and body like '%Customers \u2192 View%' and body like '%bounded extractive summary%' and body like '%Shadow credits%'",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%Cards, filters and dashboard context%' and body like '%Customers → View%' and body like '%bounded extractive summary%' and body like '%Shadow credits%'",
             "equals": "1"
           }
         ]
@@ -1762,7 +1762,7 @@
           },
           {
             "name": "the Mink guide documents guarded delivery order-status transitions",
-            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%<h2>Advance one delivery order</h2>%' and body like '%pending \u2192 processing%' and body like '%Delivery order-status transitions%' and body like '%Pending or approved cancellation states and any refund activity block advancement%'",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%<h2>Advance one delivery order</h2>%' and body like '%pending → processing%' and body like '%Delivery order-status transitions%' and body like '%Pending or approved cancellation states and any refund activity block advancement%'",
             "equals": "1"
           }
         ]
@@ -3117,6 +3117,182 @@
       }
     },
     {
+      "id": "20260906_0076_subscription_autopay_contact_help",
+      "description": "Document the billing email and mobile a subscription needs before autopay can be prepared",
+      "file": "sql/20260906_0076_subscription_autopay_contact_help.sql",
+      "checksum": "b6d18c90ab10b08e36725d47f55838a6693e63604a1a79b964cf341b0e03605c",
+      "transaction": true,
+      "requires": ["20260904_0075_mink_offer_audit_resource_type"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "the plan guide states the autopay billing contact requirement",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and slug = 'manage-your-storemink-plan-and-subscription' and body like '%<h2>What a paid plan needs before you can pay</h2>%' and body like '%ten-digit Indian mobile%' and body like '%No payment is taken when that message appears%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "the plan guide already states the autopay billing contact requirement",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and slug = 'manage-your-storemink-plan-and-subscription' and body like '%<h2>What a paid plan needs before you can pay</h2>%' and body like '%ten-digit Indian mobile%' and body like '%No payment is taken when that message appears%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260906_0077_comped_plan_overlay",
+      "description": "Add the comped-plan entitlement overlay columns so a free grant never mutates the paid plan",
+      "file": "sql/20260906_0077_comped_plan_overlay.sql",
+      "checksum": "b3b4b1b94792a81e18dca84b8903818b16fa539b5ed25973b0fc07eefd15be5b",
+      "transaction": true,
+      "requires": ["20260906_0076_subscription_autopay_contact_help"],
+      "verify": {
+        "columns": [
+          "stores.comp_plan",
+          "stores.comp_duration_days",
+          "stores.comp_offered_at",
+          "stores.comp_starts_at",
+          "stores.comp_expires_at"
+        ],
+        "constraints": [
+          "stores_comp_plan_check",
+          "stores_comp_duration_check",
+          "stores_comp_window_complete"
+        ],
+        "queries": [
+          {
+            "name": "a comp window cannot be half-written",
+            "sql": "select count(*)::text from pg_constraint where conname = 'stores_comp_window_complete' and conrelid = 'public.stores'::regclass and pg_get_constraintdef(oid) like '%comp_expires_at > comp_starts_at%'",
+            "equals": "1"
+          },
+          {
+            "name": "no store holds a half-written comp window",
+            "sql": "select count(*)::text from public.stores where (comp_starts_at is null) <> (comp_expires_at is null)",
+            "equals": "0"
+          }
+        ]
+      },
+      "applyVerify": {
+        "columns": [
+          "stores.comp_plan",
+          "stores.comp_duration_days",
+          "stores.comp_offered_at",
+          "stores.comp_starts_at",
+          "stores.comp_expires_at"
+        ],
+        "constraints": [
+          "stores_comp_plan_check",
+          "stores_comp_duration_check",
+          "stores_comp_window_complete"
+        ],
+        "queries": [
+          {
+            "name": "a comp window cannot be half-written",
+            "sql": "select count(*)::text from pg_constraint where conname = 'stores_comp_window_complete' and conrelid = 'public.stores'::regclass and pg_get_constraintdef(oid) like '%comp_expires_at > comp_starts_at%'",
+            "equals": "1"
+          },
+          {
+            "name": "no store holds a half-written comp window",
+            "sql": "select count(*)::text from public.stores where (comp_starts_at is null) <> (comp_expires_at is null)",
+            "equals": "0"
+          },
+          {
+            "name": "the overlay starts empty - no store is comped by the migration itself",
+            "sql": "select count(*)::text from public.stores where comp_plan is not null",
+            "equals": "0"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "columns": [
+          "stores.comp_plan",
+          "stores.comp_duration_days",
+          "stores.comp_offered_at",
+          "stores.comp_starts_at",
+          "stores.comp_expires_at"
+        ],
+        "constraints": [
+          "stores_comp_plan_check",
+          "stores_comp_duration_check",
+          "stores_comp_window_complete"
+        ],
+        "queries": [
+          {
+            "name": "a comp window cannot be half-written",
+            "sql": "select count(*)::text from pg_constraint where conname = 'stores_comp_window_complete' and conrelid = 'public.stores'::regclass and pg_get_constraintdef(oid) like '%comp_expires_at > comp_starts_at%'",
+            "equals": "1"
+          },
+          {
+            "name": "no store holds a half-written comp window",
+            "sql": "select count(*)::text from public.stores where (comp_starts_at is null) <> (comp_expires_at is null)",
+            "equals": "0"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260906_0078_drop_subscription_comp_exemption",
+      "description": "Stop exempting comped subscriptions from downgrade; a comp is an overlay, not a billing state",
+      "file": "sql/20260906_0078_drop_subscription_comp_exemption.sql",
+      "checksum": "1d067345ebbe37b871d7d813490dc4990ea43ccb17adb25b88de706bb90a2105",
+      "transaction": true,
+      "requires": ["20260906_0077_comped_plan_overlay"],
+      "verify": {
+        "functions": ["billing_claim_downgrade"],
+        "queries": [
+          {
+            "name": "the downgrade claim no longer exempts a comped subscription",
+            "sql": "select count(*)::text from pg_proc where proname = 'billing_claim_downgrade' and pg_get_functiondef(oid) not like '%plan_source%'",
+            "equals": "1"
+          },
+          {
+            "name": "the rest of the downgrade claim is intact",
+            "sql": "select count(*)::text from pg_proc where proname = 'billing_claim_downgrade' and pg_get_functiondef(oid) like '%grace_ends_at < p_now%' and pg_get_functiondef(oid) like '%cycle_seq = s.current_cycle_seq%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "applyVerify": {
+        "functions": ["billing_claim_downgrade"],
+        "queries": [
+          {
+            "name": "the downgrade claim no longer exempts a comped subscription",
+            "sql": "select count(*)::text from pg_proc where proname = 'billing_claim_downgrade' and pg_get_functiondef(oid) not like '%plan_source%'",
+            "equals": "1"
+          },
+          {
+            "name": "the rest of the downgrade claim is intact",
+            "sql": "select count(*)::text from pg_proc where proname = 'billing_claim_downgrade' and pg_get_functiondef(oid) like '%grace_ends_at < p_now%' and pg_get_functiondef(oid) like '%cycle_seq = s.current_cycle_seq%'",
+            "equals": "1"
+          },
+          {
+            "name": "no subscription was relying on the exemption",
+            "sql": "select count(*)::text from billing_subscriptions where plan_source = 'comp'",
+            "equals": "0"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "functions": ["billing_claim_downgrade"],
+        "queries": [
+          {
+            "name": "the downgrade claim no longer exempts a comped subscription",
+            "sql": "select count(*)::text from pg_proc where proname = 'billing_claim_downgrade' and pg_get_functiondef(oid) not like '%plan_source%'",
+            "equals": "1"
+          },
+          {
+            "name": "the rest of the downgrade claim is intact",
+            "sql": "select count(*)::text from pg_proc where proname = 'billing_claim_downgrade' and pg_get_functiondef(oid) like '%grace_ends_at < p_now%' and pg_get_functiondef(oid) like '%cycle_seq = s.current_cycle_seq%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
       "id": "20260904_0076_mink_phase_7a_builder_context_help",
       "description": "Publish the secure read-only Website Builder context and validation-only sandbox contract for Mink Phase 7A",
       "file": "sql/20260904_0076_mink_phase_7a_builder_context_help.sql",
@@ -3501,182 +3677,6 @@
           {
             "name": "Business brief historical return index installed",
             "sql": "select count(*)::text from pg_indexes where schemaname = 'public' and tablename = 'order_returns' and indexname = 'mink_brief_returns_store_created_idx' and indexdef like '%(store_id, created_at)%'",
-            "equals": "1"
-          }
-        ]
-      }
-    },
-    {
-      "id": "20260906_0076_subscription_autopay_contact_help",
-      "description": "Document the billing email and mobile a subscription needs before autopay can be prepared",
-      "file": "sql/20260906_0076_subscription_autopay_contact_help.sql",
-      "checksum": "b6d18c90ab10b08e36725d47f55838a6693e63604a1a79b964cf341b0e03605c",
-      "transaction": true,
-      "requires": ["20260904_0075_mink_offer_audit_resource_type"],
-      "verify": {},
-      "applyVerify": {
-        "queries": [
-          {
-            "name": "the plan guide states the autopay billing contact requirement",
-            "sql": "select count(*)::text from public.help_articles where status = 'published' and slug = 'manage-your-storemink-plan-and-subscription' and body like '%<h2>What a paid plan needs before you can pay</h2>%' and body like '%ten-digit Indian mobile%' and body like '%No payment is taken when that message appears%'",
-            "equals": "1"
-          }
-        ]
-      },
-      "adoptVerify": {
-        "queries": [
-          {
-            "name": "the plan guide already states the autopay billing contact requirement",
-            "sql": "select count(*)::text from public.help_articles where status = 'published' and slug = 'manage-your-storemink-plan-and-subscription' and body like '%<h2>What a paid plan needs before you can pay</h2>%' and body like '%ten-digit Indian mobile%' and body like '%No payment is taken when that message appears%'",
-            "equals": "1"
-          }
-        ]
-      }
-    },
-    {
-      "id": "20260906_0077_comped_plan_overlay",
-      "description": "Add the comped-plan entitlement overlay columns so a free grant never mutates the paid plan",
-      "file": "sql/20260906_0077_comped_plan_overlay.sql",
-      "checksum": "b3b4b1b94792a81e18dca84b8903818b16fa539b5ed25973b0fc07eefd15be5b",
-      "transaction": true,
-      "requires": ["20260906_0076_subscription_autopay_contact_help"],
-      "verify": {
-        "columns": [
-          "stores.comp_plan",
-          "stores.comp_duration_days",
-          "stores.comp_offered_at",
-          "stores.comp_starts_at",
-          "stores.comp_expires_at"
-        ],
-        "constraints": [
-          "stores_comp_plan_check",
-          "stores_comp_duration_check",
-          "stores_comp_window_complete"
-        ],
-        "queries": [
-          {
-            "name": "a comp window cannot be half-written",
-            "sql": "select count(*)::text from pg_constraint where conname = 'stores_comp_window_complete' and conrelid = 'public.stores'::regclass and pg_get_constraintdef(oid) like '%comp_expires_at > comp_starts_at%'",
-            "equals": "1"
-          },
-          {
-            "name": "no store holds a half-written comp window",
-            "sql": "select count(*)::text from public.stores where (comp_starts_at is null) <> (comp_expires_at is null)",
-            "equals": "0"
-          }
-        ]
-      },
-      "applyVerify": {
-        "columns": [
-          "stores.comp_plan",
-          "stores.comp_duration_days",
-          "stores.comp_offered_at",
-          "stores.comp_starts_at",
-          "stores.comp_expires_at"
-        ],
-        "constraints": [
-          "stores_comp_plan_check",
-          "stores_comp_duration_check",
-          "stores_comp_window_complete"
-        ],
-        "queries": [
-          {
-            "name": "a comp window cannot be half-written",
-            "sql": "select count(*)::text from pg_constraint where conname = 'stores_comp_window_complete' and conrelid = 'public.stores'::regclass and pg_get_constraintdef(oid) like '%comp_expires_at > comp_starts_at%'",
-            "equals": "1"
-          },
-          {
-            "name": "no store holds a half-written comp window",
-            "sql": "select count(*)::text from public.stores where (comp_starts_at is null) <> (comp_expires_at is null)",
-            "equals": "0"
-          },
-          {
-            "name": "the overlay starts empty - no store is comped by the migration itself",
-            "sql": "select count(*)::text from public.stores where comp_plan is not null",
-            "equals": "0"
-          }
-        ]
-      },
-      "adoptVerify": {
-        "columns": [
-          "stores.comp_plan",
-          "stores.comp_duration_days",
-          "stores.comp_offered_at",
-          "stores.comp_starts_at",
-          "stores.comp_expires_at"
-        ],
-        "constraints": [
-          "stores_comp_plan_check",
-          "stores_comp_duration_check",
-          "stores_comp_window_complete"
-        ],
-        "queries": [
-          {
-            "name": "a comp window cannot be half-written",
-            "sql": "select count(*)::text from pg_constraint where conname = 'stores_comp_window_complete' and conrelid = 'public.stores'::regclass and pg_get_constraintdef(oid) like '%comp_expires_at > comp_starts_at%'",
-            "equals": "1"
-          },
-          {
-            "name": "no store holds a half-written comp window",
-            "sql": "select count(*)::text from public.stores where (comp_starts_at is null) <> (comp_expires_at is null)",
-            "equals": "0"
-          }
-        ]
-      }
-    },
-    {
-      "id": "20260906_0078_drop_subscription_comp_exemption",
-      "description": "Stop exempting comped subscriptions from downgrade; a comp is an overlay, not a billing state",
-      "file": "sql/20260906_0078_drop_subscription_comp_exemption.sql",
-      "checksum": "1d067345ebbe37b871d7d813490dc4990ea43ccb17adb25b88de706bb90a2105",
-      "transaction": true,
-      "requires": ["20260906_0077_comped_plan_overlay"],
-      "verify": {
-        "functions": ["billing_claim_downgrade"],
-        "queries": [
-          {
-            "name": "the downgrade claim no longer exempts a comped subscription",
-            "sql": "select count(*)::text from pg_proc where proname = 'billing_claim_downgrade' and pg_get_functiondef(oid) not like '%plan_source%'",
-            "equals": "1"
-          },
-          {
-            "name": "the rest of the downgrade claim is intact",
-            "sql": "select count(*)::text from pg_proc where proname = 'billing_claim_downgrade' and pg_get_functiondef(oid) like '%grace_ends_at < p_now%' and pg_get_functiondef(oid) like '%cycle_seq = s.current_cycle_seq%'",
-            "equals": "1"
-          }
-        ]
-      },
-      "applyVerify": {
-        "functions": ["billing_claim_downgrade"],
-        "queries": [
-          {
-            "name": "the downgrade claim no longer exempts a comped subscription",
-            "sql": "select count(*)::text from pg_proc where proname = 'billing_claim_downgrade' and pg_get_functiondef(oid) not like '%plan_source%'",
-            "equals": "1"
-          },
-          {
-            "name": "the rest of the downgrade claim is intact",
-            "sql": "select count(*)::text from pg_proc where proname = 'billing_claim_downgrade' and pg_get_functiondef(oid) like '%grace_ends_at < p_now%' and pg_get_functiondef(oid) like '%cycle_seq = s.current_cycle_seq%'",
-            "equals": "1"
-          },
-          {
-            "name": "no subscription was relying on the exemption",
-            "sql": "select count(*)::text from billing_subscriptions where plan_source = 'comp'",
-            "equals": "0"
-          }
-        ]
-      },
-      "adoptVerify": {
-        "functions": ["billing_claim_downgrade"],
-        "queries": [
-          {
-            "name": "the downgrade claim no longer exempts a comped subscription",
-            "sql": "select count(*)::text from pg_proc where proname = 'billing_claim_downgrade' and pg_get_functiondef(oid) not like '%plan_source%'",
-            "equals": "1"
-          },
-          {
-            "name": "the rest of the downgrade claim is intact",
-            "sql": "select count(*)::text from pg_proc where proname = 'billing_claim_downgrade' and pg_get_functiondef(oid) like '%grace_ends_at < p_now%' and pg_get_functiondef(oid) like '%cycle_seq = s.current_cycle_seq%'",
             "equals": "1"
           }
         ]

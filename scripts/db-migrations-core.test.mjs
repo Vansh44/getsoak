@@ -22,10 +22,16 @@ describe("database migration controls", () => {
   it("loads the repository manifest and checksums the enrolled SQL", async () => {
     const loaded = await loadManifest();
     expect(loaded.baseline.id).toBe("baseline:cloudsql-2026-08-14");
+    // 75 shared + main's three billing migrations + dev's six Mink ones.
     expect(loaded.migrations).toHaveLength(84);
+    // ★ The tail is dev's, not main's. Both branches numbered from 0076, and the
+    // merge orders main's block FIRST because 20260906_0076 and _0077 are already
+    // applied in both databases — an applied migration sitting after a pending
+    // one is flagged out_of_order, and assertHealthyPlan then refuses to apply
+    // anything. Ordering is by what is applied, never by the number in the id.
     expect(loaded.migrations.at(-1)).toMatchObject({
-      id: "20260906_0078_drop_subscription_comp_exemption",
-      requires: ["20260906_0077_comped_plan_overlay"],
+      id: "20260905_0081_mink_phase_8a_business_briefs",
+      requires: ["20260905_0080_mink_builder_chat_help"],
       transaction: true,
     });
     expect(loaded.migrations[0]).toMatchObject({

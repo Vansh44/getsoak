@@ -9263,14 +9263,33 @@ way — an entry there is a deliberate act, not a way to silence the guard.
 
 ## 6. Commands
 
-> **Dev feels slow?** Read `docs/local-dev-performance.md` before tuning.
-> The runner preserves warm caches, chooses Webpack on ≤12 GB machines and
-> Turbopack above, and caps V8 old space at 2 GB / 3 GB on ≤12 GB / ≤20 GB.
-> Native allocations are outside that cap. Cache rotation is opt-in through
-> `DEV_CACHE_MAX_MB`; `.next/cache` is never automatically deleted. Swap warnings
-> are advisory: use current memory pressure and request compile/render timings.
-> Explicit `--no-fs-cache` / `--fs-cache` flags (or `DEV_FS_CACHE=0` / `1`)
-> control Turbopack's persistent cache without deleting files; defaults preserve it.
+> **Dev feels slow?** See `docs/local-dev-performance.md`. September's saved
+> trace contains 60 s login compilation and 43 s builder compilation: August's
+> fast timings must not be treated as a permanent diagnosis. The 8 GB Mac also
+> showed 6.4 GB swap used and 3.3 GB compressed RAM. Check current memory pressure
+> and separate compile time from render/database time. The runner limits V8's
+> old space, not total process memory. Warm caches are preserved by default;
+> `DEV_CACHE_MAX_MB` opts into size-based dev-cache rotation, and `dev:reset` is
+> for cache recovery, not routine speed tuning. `dev:all:webpack` provides an
+> explicit Webpack command with the same proxy and V8 heap policy. On ≤12 GB
+> RAM the runner now selects Webpack automatically; `dev:all:turbo` opts back in
+> to Turbopack. Development-only Webpack configuration limits parallel module
+> processing to 8 per compiler on ≤12 GB RAM (32 above; override through
+> `DEV_WEBPACK_PARALLELISM`) and disables output path comments. On ≤12 GB,
+> on-demand entries retain two recent pages with a 25 s inactivity threshold.
+> Next's source maps, loaders, chunking and caches are preserved. Production
+> config has no custom Webpack callback. See the performance doc for sources
+> and measured results; this is a memory/throughput tradeoff, not a RAM ceiling.
+> This is internal development tooling; customer flows and Help Centre content
+> are unchanged.
+> ★ When Turbopack IS the bundler on a small machine, its dev filesystem cache
+> (a default since Next 16.1) is switched off: its periodic write and compaction
+> of a multi-GB `.next/dev/cache` competes with the swap file for one SSD, and was
+> measured blocking a request for **101 seconds of framework time against 1.5 s of
+> application code**. `--fs-cache` forces it back on. ★★ When a request looks slow,
+> read its `next.js:` versus `application-code:` split before suspecting the
+> database — that one number separates a bundler-cache stall from the ~46 ms
+> Mumbai round trip.
 
 ```bash
 npm run dev         # Webpack on ≤12 GB RAM, Turbopack above; 2 GB heap on ≤12 GB,
@@ -9283,7 +9302,7 @@ npm run dev:lean    # force the 2 GB heap regardless of detected machine memory
 npm run dev:full    # explicitly disable the heap cap (for high-memory machines/debugging)
 npm run dev:reset   # delete generated .next/dev only; next launch recompiles cold once
 npm run dev -- --fs-cache     # force Turbopack's dev filesystem cache ON  (DEV_FS_CACHE=1)
-npm run dev -- --no-fs-cache  # force it OFF (DEV_FS_CACHE=0); default preserves cache
+npm run dev -- --no-fs-cache  # force it OFF (DEV_FS_CACHE=0); default is OFF on ≤12 GB RAM
 npm run dev:all     # ↑ dev + the Cloud SQL Auth Proxy together (concurrently) — one command
 npm run dev:all:lean # ↑ force the 2 GB heap + proxy (normally identical on this 8 GB Mac)
 npm run dev:all:full # ↑ uncapped dev + proxy

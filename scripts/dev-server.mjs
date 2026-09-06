@@ -7,6 +7,10 @@ import { fileURLToPath } from "node:url";
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(scriptDir, "..");
 const devCacheDir = path.join(projectRoot, ".next", "dev");
+// Turbopack's persistent dev cache is a SUBTREE of the above, and needs its own
+// name because it is reclaimed on its own when the filesystem cache is off —
+// the rest of .next/dev is this session's compiled output.
+const devFsCacheDir = path.join(devCacheDir, "cache");
 const nextBin = path.join(
   projectRoot,
   "node_modules",
@@ -91,6 +95,70 @@ async function ensureNoIndexMarkers() {
 await ensureNoIndexMarkers();
 
 const memoryGb = totalmem() / 1024 ** 3;
+
+// ★ THE BUNDLER IS CHOSEN BEFORE THE CACHE POLICY, because the policy is
+// Turbopack-only and would otherwise be applied to a Webpack run.
+const explicitBundler = process.argv
+  .slice(2)
+  .find((arg) => ["--webpack", "--turbopack", "--turbo"].includes(arg));
+const bundlerArgs = explicitBundler
+  ? []
+  : [memoryGb <= 12 ? "--webpack" : "--turbopack"];
+const usingTurbopack = explicitBundler
+  ? explicitBundler !== "--webpack"
+  : !bundlerArgs.includes("--webpack");
+
+// ★★ TURBOPACK'S DEV FILESYSTEM CACHE, WHICH IS A DEFAULT AS OF NEXT 16.1.
+//
+// It writes and periodically COMPACTS a database under `.next/dev/cache`, and
+// those writes are neither free nor fully in the background. Measured on an
+// 8 GB M2 with a 2.88 GB cache: a 2.5-MINUTE cache write, during which an
+// ordinary request logged `102s (next.js: 101s, application-code: 1564ms)`.
+// ★ READ THAT SPLIT — 101 s of framework against 1.5 s of app code, so it is
+// NOT the ~46 ms Mumbai round trip, which is the tempting and wrong lead.
+// The cost is disk IO, and on a small machine the SSD is already saturated by
+// macOS paging, so the cache amplifies the very thrash it is competing with.
+//
+// ⚠ ONLY MEANINGFUL UNDER TURBOPACK. On a ≤12 GB machine this runner now picks
+// WEBPACK by default (see above), so in practice this applies when Turbopack is
+// forced on a small machine, and it leaves the cache ON where there is RAM to
+// spare and no swap to compete with.
+const FS_CACHE_MIN_MEMORY_GB = 12;
+
+function resolveFsCache() {
+  if (!usingTurbopack) return { enabled: false, reason: "Webpack" };
+  if (process.argv.includes("--no-fs-cache"))
+    return { enabled: false, reason: "--no-fs-cache" };
+  if (process.argv.includes("--fs-cache"))
+    return { enabled: true, reason: "--fs-cache" };
+  const override = process.env.DEV_FS_CACHE;
+  if (override === "0" || override === "false")
+    return { enabled: false, reason: "DEV_FS_CACHE=0" };
+  if (override === "1" || override === "true")
+    return { enabled: true, reason: "DEV_FS_CACHE=1" };
+  return {
+    enabled: memoryGb > FS_CACHE_MIN_MEMORY_GB,
+    reason: `${memoryGb.toFixed(0)} GB RAM`,
+  };
+}
+
+const fsCache = resolveFsCache();
+
+// Nothing reads this subtree while the cache is off — under Webpack, nothing
+// reads it at all — so it is dead disk on the volume macOS grows swap on.
+if (!fsCache.enabled) {
+  const staleBytes = await directoryBytes(devFsCacheDir);
+  if (staleBytes > 0) {
+    // Announce it only when it is worth knowing about. A few stray bytes
+    // reported as "reclaiming 0.0 GB" is noise on every single start.
+    if (staleBytes > 64 * MB) {
+      console.log(
+        `[dev] reclaiming ${(staleBytes / MB / 1024).toFixed(1)} GB of .next/dev/cache (Turbopack filesystem cache, not in use).`,
+      );
+    }
+    await rm(devFsCacheDir, { recursive: true, force: true });
+  }
+}
 const explicitHeapMb = numericArg("--heap-mb=");
 const heapMb =
   explicitHeapMb ?? (memoryGb <= 12 ? 2048 : memoryGb <= 20 ? 3072 : 0);
@@ -105,19 +173,22 @@ const nodeOptions = [
   .filter(Boolean)
   .join(" ");
 const childEnv = { ...process.env };
+// next.config.ts is the only place the flag can be set, and it is evaluated
+// inside the Next process — so the decision travels as an env var rather than
+// being computed twice. Left UNSET under Webpack and for a bare `npx next dev`,
+// where Next's own default should stand.
+if (usingTurbopack) childEnv.NEXT_DEV_FS_CACHE = fsCache.enabled ? "1" : "0";
 if (nodeOptions) childEnv.NODE_OPTIONS = nodeOptions;
 else delete childEnv.NODE_OPTIONS;
-// Explicit overrides retain the default warm cache unless requested otherwise.
-if (process.argv.includes("--no-fs-cache")) childEnv.NEXT_DEV_FS_CACHE = "0";
-else if (process.argv.includes("--fs-cache")) childEnv.NEXT_DEV_FS_CACHE = "1";
-else if (["0", "false"].includes(process.env.DEV_FS_CACHE))
-  childEnv.NEXT_DEV_FS_CACHE = "0";
-else if (["1", "true"].includes(process.env.DEV_FS_CACHE))
-  childEnv.NEXT_DEV_FS_CACHE = "1";
-
 const nextArgs = process.argv
   .slice(2)
-  .filter((arg) => !arg.startsWith("--heap-mb=") && arg !== "--reset-cache");
+  .filter(
+    (arg) =>
+      !arg.startsWith("--heap-mb=") &&
+      arg !== "--reset-cache" &&
+      arg !== "--fs-cache" &&
+      arg !== "--no-fs-cache",
+  );
 
 // V8's old-space cap excludes native allocations and buffers. It is not a
 // process-wide RAM limit, especially with Turbopack's Rust module graph.
@@ -172,15 +243,27 @@ if (heapMb > 0) {
   );
 }
 
-const bundlerArgs = nextArgs.some((arg) =>
-  ["--webpack", "--turbopack", "--turbo"].includes(arg),
-)
-  ? []
-  : [memoryGb <= 12 ? "--webpack" : "--turbopack"];
-
 console.log(
-  `[dev] Bundler: ${[...bundlerArgs, ...nextArgs].includes("--webpack") ? "Webpack" : "Turbopack"}; preserving compilation caches.`,
+  `[dev] Bundler: ${usingTurbopack ? "Turbopack" : "Webpack"}; preserving compilation caches.`,
 );
+if (usingTurbopack) {
+  if (fsCache.enabled) {
+    console.log(
+      `[dev] Turbopack filesystem cache: ON (${fsCache.reason}).` +
+        (Number(process.env.DEV_CACHE_MAX_MB ?? 0) > 0
+          ? ` Rotated past ${Number(process.env.DEV_CACHE_MAX_MB)} MB.`
+          : ""),
+    );
+  } else {
+    console.log(
+      `[dev] Turbopack filesystem cache: OFF (${fsCache.reason}) — it stalls requests on a swapping machine.`,
+    );
+    console.log(
+      "[dev] Cold compiles after a restart cost a few seconds more; edit-refresh is unaffected.",
+    );
+    console.log("[dev] Force it back on with: npm run dev -- --fs-cache");
+  }
+}
 
 const child = spawn(
   process.execPath,
