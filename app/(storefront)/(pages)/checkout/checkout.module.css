@@ -553,6 +553,69 @@
   white-space: nowrap;
 }
 
+/* Quantity stepper in the order summary. ★ The same shape the cart drawer
+   uses, deliberately — a shopper who changed a quantity in the drawer should
+   not have to learn a second control two screens later. */
+.itemStepper {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-top: 6px;
+}
+
+.stepperBtn {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--sm-border);
+  border-radius: var(--sm-radius-sm);
+  background: var(--sm-surface);
+  color: var(--sm-ink);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease;
+}
+
+.stepperBtn:hover:not(:disabled) {
+  border-color: var(--sm-ink-faint);
+}
+
+.stepperBtn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.stepperValue {
+  min-width: 26px;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--sm-ink);
+}
+
+.itemMax {
+  margin-left: 6px;
+  font-size: 11px;
+  color: var(--sm-ink-faint);
+}
+
+/* Shown in place of the coupon field while an automatic offer is applying —
+   `placeOrder` runs offers OR a coupon, never both. */
+.couponNote {
+  margin: 0 0 16px;
+  padding: 10px 12px;
+  border-radius: var(--sm-radius-sm);
+  background: var(--sm-cream-deep, #f6f5f2);
+  color: var(--sm-ink-soft);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
 .rows {
   border-top: 1px solid var(--sm-border);
   padding-top: 16px;

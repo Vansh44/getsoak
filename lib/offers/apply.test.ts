@@ -2452,3 +2452,167 @@ describe("applyOffers — cashback", () => {
     expect(r.skipped).toContainEqual({ offerId: "a", reason: "outscored" });
   });
 });
+
+describe("near miss respects the merchant's set cap", () => {
+  // ★★ IT DID NOT, AND THE NUDGE LIED ON THE COMMONEST OFFER THERE IS. With
+  // "buy 1 get 1 free, max 1 set per order", a cart of three was told "add 1
+  // more and one is free" — and the fourth item earned nothing, because the
+  // one set the merchant allowed was already spent. A nudge is a promise about
+  // what happens if you add something; this one is made after the shopper has
+  // put the item in the basket, so getting it wrong is expensive.
+  const b1g1 = (maxSets?: number) =>
+    offer({
+      id: "b1g1",
+      reward: {
+        type: "buy_x_get_y",
+        buyQuantity: 1,
+        getQuantity: 1,
+        getPercent: 100,
+        maxSets,
+      },
+      productIds: ["p1"],
+    });
+
+  const cartOf = (quantity: number) => [
+    {
+      id: "l1",
+      productId: "p1",
+      variantId: null,
+      categoryId: null,
+      quantity,
+      unitPrice: 70,
+    },
+  ];
+
+  it("nudges an incomplete first set", () => {
+    const r = applyOffers({
+      lines: cartOf(1),
+      offers: [b1g1(1)],
+      context: ctx(),
+    });
+    expect(r.nearMiss).toHaveLength(1);
+    expect(r.nearMiss[0]).toMatchObject({ kind: "units", gap: 1 });
+  });
+
+  it("goes quiet once the cap is reached, because a further set earns nothing", () => {
+    const capped = applyOffers({
+      lines: cartOf(3),
+      offers: [b1g1(1)],
+      context: ctx(),
+    });
+    expect(capped.nearMiss).toEqual([]);
+    // And the engine agrees: a fourth item buys no more discount.
+    const three = applyOffers({
+      lines: cartOf(3),
+      offers: [b1g1(1)],
+      context: ctx(),
+    });
+    const four = applyOffers({
+      lines: cartOf(4),
+      offers: [b1g1(1)],
+      context: ctx(),
+    });
+    expect(four.discount).toBe(three.discount);
+  });
+
+  it("keeps nudging an uncapped offer, where the next set really is earned", () => {
+    const r = applyOffers({
+      lines: cartOf(3),
+      offers: [b1g1()],
+      context: ctx(),
+    });
+    expect(r.nearMiss).toHaveLength(1);
+    const three = applyOffers({
+      lines: cartOf(3),
+      offers: [b1g1()],
+      context: ctx(),
+    });
+    const four = applyOffers({
+      lines: cartOf(4),
+      offers: [b1g1()],
+      context: ctx(),
+    });
+    expect(four.discount).toBeGreaterThan(three.discount);
+  });
+});
+
+describe("a spend ladder is always worth saying", () => {
+  // ★★ THE FLOOR BIT WHERE IT WAS LEAST WANTED. `max(₹500, subtotal)` is right
+  // for a one-off threshold — a ₹100 basket does not want telling it is ₹4,900
+  // short — but "spend more, save more" IS an invitation to spend, and the
+  // ladder is the whole offer. On a 1,000 → 5% ladder a ₹490 basket saw
+  // nothing (gap ₹510 against a ₹500 allowance) while ₹560 saw the bar: same
+  // offer, one item apart, and the shopper further along was the one told.
+  const ladder = () =>
+    offer({
+      id: "ladder",
+      reward: {
+        type: "tiered",
+        tierMode: "percent",
+        tiers: [
+          { minSubtotal: 1000, value: 5 },
+          { minSubtotal: 2500, value: 10 },
+        ],
+      },
+    });
+
+  const at = (subtotal: number) =>
+    applyOffers({
+      lines: [
+        {
+          id: "l1",
+          productId: "p1",
+          variantId: null,
+          categoryId: null,
+          quantity: 1,
+          unitPrice: subtotal,
+        },
+      ],
+      offers: [ladder()],
+      context: ctx(),
+    });
+
+  it("nudges a basket that is further from the rung than the floor allows", () => {
+    const r = at(490); // gap ₹510, old allowance ₹500 — silently hidden
+    expect(r.nearMiss).toHaveLength(1);
+    expect(r.nearMiss[0]).toMatchObject({
+      kind: "spend",
+      gap: 510,
+      percent: 5,
+    });
+  });
+
+  it("nudges a small basket a long way off, which is the point of a ladder", () => {
+    expect(at(100).nearMiss[0]).toMatchObject({ gap: 900 });
+  });
+
+  it("still nudges the ones it always did", () => {
+    expect(at(560).nearMiss[0]).toMatchObject({ gap: 440 });
+  });
+
+  // ★ THE EXEMPTION IS THE LADDER'S ALONE. A one-off threshold keeps the floor,
+  // or every store with a "₹500 off over ₹5,000" offer starts telling empty
+  // baskets how far they are from something they were not going to buy.
+  it("leaves the floor in place for a one-off threshold", () => {
+    const threshold = offer({
+      id: "thresh",
+      trigger: { type: "min_subtotal", minSubtotal: 1000 },
+      reward: { type: "percent_off", percent: 10 },
+    });
+    const r = applyOffers({
+      lines: [
+        {
+          id: "l1",
+          productId: "p1",
+          variantId: null,
+          categoryId: null,
+          quantity: 1,
+          unitPrice: 490,
+        },
+      ],
+      offers: [threshold],
+      context: ctx(),
+    });
+    expect(r.nearMiss).toEqual([]);
+  });
+});

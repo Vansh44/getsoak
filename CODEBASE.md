@@ -8517,6 +8517,209 @@ way — an entry there is a deliberate act, not a way to silence the guard.
     Coupons were the only discount mechanism and were order-level only: a
     percentage or a rupee amount off the whole cart, on a code, online only.
     Offers replace that with one engine reaching both counters.
+    - **★★ AN AUTOMATIC OFFER NEEDS `offers.autoApply`, AND NOTHING EVER
+      TURNED IT ON.** `disqualify` refuses every `delivery: "automatic"` offer
+      with `auto_apply_off` before the engine values it, so a merchant's
+      buy-1-get-1 charged full price online AND at the till — no error at
+      checkout, none in the log, and the Offers list still reporting **Active**.
+      The registry's own comment claimed "new stores get it on at signup"; that
+      was never built. `createStore` wrote `settings` with `template`, `brand`,
+      `launched` and `business` and no `features` key at all, and grepping the
+      tree found no other writer — so the switch was off for **every store on
+      the platform**, and the whole automatic half of the feature was inert
+      from the day it shipped. Three parts:
+      - **★ THE DEFAULT STAYS `false`; CREATION WRITES `true`.** They answer
+        different questions and conflating them is what caused this. Off is the
+        right BACKFILL value — invariant 1, a store that has only ever had
+        discount CODES must not wake up discounting by itself — and flipping
+        the registry default would start giving discounts on every existing
+        store at once. `createStore` now writes
+        `features: { "offers.autoApply": true }` explicitly, the same split
+        `launched` makes two lines above it. Pinned by its own test in
+        `store-signup.test.ts`, separate from the whole-settings-blob
+        assertion, because that one reads as "the shape" and this is a
+        behaviour.
+      - **★★ AND THE DASHBOARD SAYS SO, because "Active" was the lie.** The
+        list renders a third state — an amber **Not applying** badge for an
+        active automatic offer while the switch is off — plus a banner counting
+        them and linking to `/dashboard/offers/settings`, because the switch is
+        on another page and a merchant who does not know it exists has to be
+        taken there. The offer editor warns next to the Delivery select, where
+        the choice is actually made. §23's rule: a control that always fails is
+        worse than no control, and this one did not even look like it was
+        failing. `offers-view.test.tsx` pins all three states in both
+        directions, and mutation-checks the badge.
+      - **★ IT FAILS TOWARD SILENCE.** `loadOffersAutoApply` returns `true` on
+        an unreadable setting and the list defaults the same way, because a
+        warning is a CLAIM: "this will not apply" on an offer that works is a
+        worse lie than the one it replaces. The list derives the value from the
+        `getStoreSettingsForEditor("Offers")` read it already makes; the
+        new/edit pages take the acting-store-scoped loader, so it is right for
+        a platform operator too (the `dashboard/inventory/data.ts` pattern).
+        ⚠ Demo stores (`platform.ts`, `scripts/seed-demo-store.ts`) deliberately
+        get no such seed — `applyTheme` seeds no offers, and `placeOrder` refuses
+        a demo store an order anyway.
+    - **★★ AN OFFER WAS INVISIBLE ON EVERY STOREFRONT SURFACE THAT MATTERS**,
+      each for a different reason, so fixing one would not have shown a
+      merchant their own offer working. All three found together:
+      - **THE CHECKOUT SUMMARY NEITHER SHOWED NOR SUBTRACTED IT.**
+        `useCartOffers` was wired to the near-miss nudge ALONE — its comment
+        said so — while `orderTotal` was `cart.total + shipping` and
+        `cart.total` is `subtotal − couponDiscount` (`CartProvider` has never
+        known offers exist), and the tax preview was handed only the coupon.
+        Meanwhile `placeOrder` applied the offer. The screen read ₹140 and the
+        server charged ₹70: nobody was overcharged, but the summary disagreed
+        with the order, and the discount was absent at exactly the moment it is
+        meant to persuade. `useCartTax` is now split into `useCartTaxRates`
+        (the fetch) + the pure `cartTaxFrom`, because as one hook it is a CYCLE
+        — tax needs the discount, the discount needs the rates, the rates
+        arrive with the tax. The checkout mirrors `placeOrder`'s own
+        precedence: **offers win, the legacy coupon is the fallback**, never
+        both, and the per-line offer discounts feed the tax base directly
+        rather than being spread. Free delivery and a free gift render as their
+        own lines, not as money off, since neither changes what the goods cost.
+      - **A PRODUCT WITH A BUY-X-GET-Y CARRIED NO MARKER AT ALL.** The only one
+        was `offerBadgeFor`, which prices a ONE-UNIT cart — correct, and
+        precisely why buy-X-get-Y, bundles and volume breaks score zero there:
+        none of them is a claim about buying one. So the whole family showed
+        nothing. **`offerTagFor` is a SECOND function, not a loosened first
+        one**: it quotes the offer's TERMS ("Buy 1, get 1 free"), which is
+        honest at any quantity, and it still proves the offer would apply by
+        pricing the smallest cart that could earn it — so every gate the cart
+        applies (channel, dates, auto-apply, conditions, sale-price mode,
+        scope) has been passed by anything that returns a tag. One marker per
+        product, price badge preferred. ⚠ The PRODUCT PAGE had no marker of any
+        kind and now shows one in both the classic and grocery layouts.
+      - **THE NUDGE LIED ABOUT A SPENT SET CAP.** `collectUnitNearMiss` ignored
+        `reward.maxSets`, so on "buy 1 get 1 free, max 1 set" a cart of three
+        was told "add 1 more and one is free" — and the fourth earned nothing.
+        A nudge is a promise about what happens if you add something, made
+        after the shopper has already put it in the basket.
+      - **★★ AND `maxSets` DEFAULTED TO 1, IN A FIELD READING "No limit".**
+        `offer-form.tsx` initialised `offer?.maxSets ?? 1`, so EVERY new
+        buy-X-get-Y offer arrived capped at one set: "Buy 1, get 1 free" on a
+        basket of four gave ONE free item, not two. The offer stopped meaning
+        what its own name says, with nothing on screen to explain it — and the
+        hint even read "Leave the limit blank only if you mean the offer to
+        repeat without end", which is written as though the field starts empty.
+        The guard rail it reached for is real (an uncapped buy-1-get-1 on a
+        hundred-unit basket gives away fifty), but **a set cap is the wrong
+        instrument**: it bounds each ORDER by redefining the offer, where the
+        thing a merchant needs bounded is total exposure. The BUDGET does that
+        directly, in rupees, claimed atomically by `reserve_offer_use` — which
+        is why the Limits section leads with it. Default is blank now (`0`,
+        which `rewardConfigFor` omits entirely), and both hints state the
+        outcome rather than the mechanism: "a basket of 4 means the customer
+        pays for 2 and 2 come free", or, when a cap IS set, what it costs.
+    - **★★ THE OFFERS LIST DESCRIBED EVERY MODERN REWARD AS "0% off".**
+      `rewardLabel` was a three-branch stub written when there were three
+      reward types and never extended, so everything Phases C–H added fell
+      through to `${percent ?? 0}% off` — a working buy-1-get-1, a bundle, a
+      gift, cashback and free delivery all listed as giving nothing. The offer
+      EDITOR had the complete version as a nested-ternary chain the whole time.
+      `lib/offers/describe.ts` is now the one implementation, shared by both,
+      with an exhaustive `switch` so the next reward type fails to COMPILE
+      rather than rendering as a wrong phrase. Client-safe by construction (the
+      `lib/logs/failure-types.ts` split); `rewardDescriptor` adapts the
+      engine's `OfferReward` (discriminant `type`) to the flat row/form shape
+      (`rewardType`), which is the whole of the difference between them.
+    - **★ THE OFFERS PAGE WAS ONE LONG SCROLL, TWICE OVER.** The list carried
+      NINE columns — three of which printed the same value on nearly every row
+      ("Any order", "Online & POS", "₹0") — and is six now, with each fact
+      folded into the cell that owns it and shown only when it is not the
+      default. The editor was TEN unlabelled fieldsets in one scroll, seven of
+      them optional and sitting at defaults on most offers; it is four named
+      **cards, laid out the way Shopify's discount editor is** — which is not
+      cargo-culting: the accordion that preceded it made the form shorter
+      without making it legible, because what the offer WAS lived across four
+      headers a merchant opened one at a time, and a section they had not
+      opened was a question they did not know they had answered. Three parts:
+      **type first** (the type decides which cards exist at all, so asking
+      inside the form changes the form's shape under the merchant while they
+      read it); **flat cards, one question each**, in answering order — how they
+      get it → what it gives → what it covers → who → how many → where → when;
+      and **a pinned Summary column**, which is what makes flat affordable, and
+      the thing the accordion could not do — the whole offer readable beside the
+      field being edited rather than a sentence at the top that scrolls away.
+      Each card still carries its VALUE as a subtitle ("on any order", "No
+      limits"), the same phrases the list and the summary use. **Back, Cancel
+      and Save share one PINNED header** — two columns leave the form no single
+      end, so a save button under either of them is somewhere a merchant has to
+      go looking for; it reuses `.dash-savebar`'s two sticky workarounds, both
+      load-bearing (negative side margins to span the scroll column, a negative
+      TOP inset because `top: 0` parks the bar below the container's padding
+      and lets content show above it). The picker is full width at three
+      columns, since a menu you scroll past the fold is one whose last options
+      are never read. On a phone the header tightens rather than stacking — a
+      pinned bar that wraps costs that height on every screen of the form. The
+      reward dropdown's eleven flat options are grouped by what the discount
+      acts on. `How offers behave` moved from the bottom of the page to **its
+      own route**, `/dashboard/offers/settings`. It was briefly a header dialog;
+      a page is better for the same reason the anchor was worse than the dialog
+      — the editor's auto-apply warning and the list banner both need to send a
+      merchant straight to that switch, and a route is an address where
+      `?settings=1` is a workaround. It is also what gives the section its
+      second child.
+    - **★ MARKETING IS RETIRED AS A DESTINATION** (`hiddenInNav`), the
+      `navigation` precedent. It had ONE child, so `/dashboard/marketing` was a
+      `redirect()` stub to `/dashboard/offers`: a parent you could click that
+      cost a round trip and landed on its only child. Offers is top-level now.
+      ⚠ **The SECTION stays** — `marketing` is a live permission key behind
+      coupon CRUD, coupon-email campaigns, the Mink `coupon_email`/
+      `coupon_create` draft gates, the coupons CSV resource and
+      `marketing.showAllCoupons`; removing it would revoke every saved role's
+      grant AND leave those checks pointing at a key nothing defines.
+    - **★★ A CODE CREATED IN THE OFFERS UI COULD NOT BE APPLIED AT ALL.**
+      `validateCoupon` selects `from(coupons)` and offers never joined it — so
+      a code with no `coupons` row was rejected in the cart as invalid, and
+      because `placeOrder` only ever receives `cart.appliedCoupon?.code`, the
+      cart gate blocked it before the engine (which honours a code perfectly
+      well) was ever asked. Codes MIGRATED from the coupon era kept working,
+      because they still have a `coupons` row; every code created after the
+      migration was dead online. `validateCodeOffer` is the fallback —
+      **coupons first**, so a migrated pair (same id, same code, both tables)
+      resolves exactly as before and nothing about an existing code changes.
+      - **★ ORDER-LEVEL PERCENT/AMOUNT ONLY.** The cart previews a coupon with
+        its own arithmetic; a buy-X-get-Y or a bundle on a code can only be
+        priced by the engine. Those still apply at ORDER time — `placeOrder`
+        passes the code through — but cannot be PREVIEWED, so they are refused
+        here with **"this code is applied automatically at checkout, not
+        here"** rather than "invalid", which would send a shopper to support
+        over a code working exactly as configured.
+      - **★ SERVICE SCOPE, AND THE FILTER IS THE BOUNDARY.** `offers.code` is
+        revoked from anon and authenticated (0059) so the API cannot be asked
+        to list every active code, which means this cannot run under
+        `withAnon`. It reads one row on an exact code the caller already
+        supplied, scoped to store + active + code delivery.
+    - **★ AND A MERCHANT CAN PUBLISH ONE** (`offers.show_on_storefront`,
+      migration 0085). `coupons.show_on_storefront` has driven the cart's
+      "Available coupons" list since the coupon era and offers never carried it
+      across. **Default false**, and not merely from caution: most codes are
+      targeted — emailed to a segment, printed on a flyer — and listing one
+      publicly undoes exactly the targeting the merchant set up. The checkbox
+      appears only for a coupon on a code, and `buildRow` forces the column
+      false for anything else regardless, because a hidden control is not a
+      boundary. ⚠ `marketing.showAllCoupons` deliberately does NOT reach
+      offers: on coupons it is a legacy convenience, and a store-wide switch
+      that silently published every targeted code is the opposite of what the
+      per-offer flag is for.
+    - **★ "COUPON" IS A UI FAMILY, NOT A STORED REWARD TYPE.** `percent_off`
+      and `amount_off` are one dropdown entry — _"A coupon — a percentage or an
+      amount off"_ — with a type control beside the value, because to a
+      merchant they are one thing and every other entry in that list describes
+      a mechanic. They stay two reward types in the column: the engine prices
+      them differently, and the schema is not the place to express a UI
+      grouping. The family is also the real boundary the storefront checkbox
+      hangs off, which is what keeps it from being a label.
+    - **★ A SPEND LADDER IS EXEMPT FROM THE NEAR-MISS FLOOR.** The floor hides
+      a gap bigger than `max(₹500, subtotal)` — right for a one-off threshold,
+      since telling a ₹100 basket it is ₹4,900 short is not encouragement. But
+      "spend more, save more" IS an invitation to spend and the ladder is the
+      whole offer. It bit exactly where it was least wanted: on a 1,000 → 5%
+      ladder a ₹490 basket (gap ₹510, allowance ₹500) saw nothing while ₹560
+      (gap ₹440, allowance ₹560) saw the bar — same offer, one item apart, and
+      the shopper further along was the one told. `tiered` only; every other
+      shape keeps the floor.
     - **★ A CODE IS A DELIVERY METHOD, NOT A KIND OF OFFER.** One `offers`
       table with `delivery` ∈ `automatic | code | link`; every coupon row
       migrated in place. Two systems would mean two engines, two stacking

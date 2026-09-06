@@ -5,13 +5,12 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Plus, Pause, Play, Trash2 } from "lucide-react";
+import { describeReward, describeTrigger } from "@/lib/offers/describe";
 import {
   deleteOffer,
   setOfferStatus,
   type OfferRow,
 } from "@/app/actions/offer-actions";
-import type { EditorSetting } from "@/app/actions/store-settings";
-import { FeatureToggles } from "../components/feature-toggles";
 import {
   Dialog,
   DialogContent,
@@ -24,23 +23,33 @@ import { Button } from "@/components/ui/button";
 
 const inr = (n: number) => `₹${n.toLocaleString("en-IN")}`;
 
-/** What the offer actually gives, in one phrase the merchant recognises. */
+/**
+ * What the offer gives.
+ *
+ * ★★ THIS USED TO BE A THREE-BRANCH STUB and it had gone badly stale: written
+ * when there were three reward types, never extended, so everything Phases C–H
+ * added fell through to `${percent ?? 0}% off` — a working "buy 1, get 1 free"
+ * was listed as **"0% off"**, and so were bundles, gifts, cashback and free
+ * delivery. It now shares `describeReward` with the offer editor, which had the
+ * complete version all along (`lib/offers/describe.ts`).
+ *
+ * ⚠ NO `scopeCount` HERE. The list does not load each offer's scope rows, and
+ * "(3 selected)" would be a lie if guessed. The editor passes it; this does not.
+ */
 function rewardLabel(o: OfferRow): string {
-  if (o.rewardType === "amount_off") return `${inr(o.amount ?? 0)} off`;
-  const scope = o.rewardType === "percent_off_items" ? " on items" : "";
-  return `${o.percent ?? 0}% off${scope}`;
+  return describeReward(o);
 }
 
-/** What has to be true for it to apply. */
-function triggerLabel(o: OfferRow): string {
-  return o.triggerType === "min_subtotal"
-    ? `Over ${inr(o.minSubtotal ?? 0)}`
-    : "Any order";
-}
-
-function channelLabel(channels: OfferRow["channels"]): string {
-  if (channels.length === 0 || channels.length === 2) return "Online & POS";
-  return channels[0] === "pos" ? "POS only" : "Online only";
+/**
+ * Only the channels worth SAYING.
+ *
+ * ★ "Online & POS" IS THE DEFAULT AND THEREFORE NOT NEWS. Printing it on every
+ * row spent a column restating what almost every offer does; the exceptions are
+ * the ones a merchant needs to spot.
+ */
+function channelNote(channels: OfferRow["channels"]): string | null {
+  if (channels.length === 0 || channels.length === 2) return null;
+  return channels[0] === "pos" ? "Point of sale only" : "Online store only";
 }
 
 /**
@@ -52,17 +61,40 @@ function deliveryLabel(o: OfferRow): string {
   return o.code ?? "Code";
 }
 
+/** A window, when the merchant set one. Most offers have none. */
+function scheduleNote(o: OfferRow): string | null {
+  const d = (iso: string) =>
+    new Date(iso).toLocaleDateString("en-IN", {
+      day: "numeric",
+      month: "short",
+    });
+  if (o.validFrom && o.validUntil)
+    return `${d(o.validFrom)} – ${d(o.validUntil)}`;
+  if (o.validFrom) return `From ${d(o.validFrom)}`;
+  if (o.validUntil) return `Until ${d(o.validUntil)}`;
+  return null;
+}
+
 export function OffersView({
+  autoApplyOn,
   emailableOfferIds,
   offers,
   loadError,
   limit,
   activeCount,
-  plan,
-  settings,
   locationCount,
   canManage,
 }: {
+  /**
+   * The store's `offers.autoApply` switch.
+   *
+   * ★★ WITH IT OFF, AN "ACTIVE" AUTOMATIC OFFER APPLIES TO NOTHING.
+   * `disqualify` refuses every `delivery: "automatic"` offer with
+   * `auto_apply_off` before the engine sees it, so this table was reporting
+   * Active for offers that could never fire — the one word a merchant checks
+   * when the storefront charges full price, and it was wrong.
+   */
+  autoApplyOn: boolean;
   /**
    * Offers with a `coupons` row behind them, so the campaign page can find one.
    *
@@ -75,8 +107,6 @@ export function OffersView({
   loadError?: string;
   limit: number | null;
   activeCount: number;
-  plan: string;
-  settings: EditorSetting[];
   locationCount: number;
   canManage: boolean;
 }) {
@@ -85,6 +115,17 @@ export function OffersView({
   const [confirmDelete, setConfirmDelete] = useState<OfferRow | null>(null);
 
   const atCap = limit !== null && activeCount >= limit;
+
+  /** Offers the merchant believes are running and which cannot apply. */
+  const inertCount = useMemo(
+    () =>
+      autoApplyOn
+        ? 0
+        : offers.filter(
+            (o) => o.status === "active" && o.delivery === "automatic",
+          ).length,
+    [autoApplyOn, offers],
+  );
   const emailable = useMemo(
     () => new Set(emailableOfferIds),
     [emailableOfferIds],
@@ -110,6 +151,12 @@ export function OffersView({
             your point of sale.
           </p>
         </div>
+        {/* ★ NO SETTINGS BUTTON HERE. It was the fix for settings being
+            stranded at the bottom of the page — but the section's own sidebar
+            panel now carries "Offer settings" beside "All offers", so a header
+            button is a second door to the same room, one of them permanently
+            visible and neither obviously the real one. The panel is where
+            every other section in this dashboard keeps its settings. */}
         {canManage && (
           <Link
             href="/dashboard/offers/new"
@@ -124,6 +171,33 @@ export function OffersView({
         <div className="dash-card mb-4 border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
           {loadError} Your offers are safe — this is a read problem, and nothing
           has changed.
+        </div>
+      )}
+
+      {inertCount > 0 && (
+        <div className="dash-card mb-4 border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+          <p className="font-medium">
+            {inertCount === 1
+              ? "One active offer is not applying to anything."
+              : `${inertCount} active offers are not applying to anything.`}
+          </p>
+          {/* ★ SAYS WHAT IS WRONG, WHERE, AND WHAT IT COSTS. The failure is
+              silent everywhere else — no error at checkout, no error at the
+              till, and the row itself said "Active" — so this is the only
+              place a merchant can find out. */}
+          <p className="mt-1">
+            They are set to apply automatically, but this store has automatic
+            offers switched off, so no discount is given online or at the till.
+            Turn on{" "}
+            <Link
+              href="/dashboard/offers/settings"
+              className="font-medium underline"
+            >
+              “Apply offers automatically”
+            </Link>{" "}
+            in offer settings to let them run. Offers with a discount code are
+            unaffected.
+          </p>
         </div>
       )}
 
@@ -162,14 +236,18 @@ export function OffersView({
           <div className="overflow-x-auto">
             <table className="dash-table dash-table-wide">
               <thead>
+                {/* ★★ SIX COLUMNS, DOWN FROM NINE. Offer · Gives · When ·
+                    How · Where · Used · Given away · Status · Actions made the
+                    table scroll sideways in the dashboard's own width, and
+                    three of those columns printed the SAME value on nearly
+                    every row ("Any order", "Online & POS", "₹0"). Each fact
+                    still appears — folded into the cell that owns it, and only
+                    when it is not the default. */}
                 <tr>
                   <th>Offer</th>
-                  <th>Gives</th>
-                  <th>When</th>
-                  <th>How</th>
-                  <th>Where</th>
+                  <th>What customers get</th>
+                  <th>How they get it</th>
                   <th>Used</th>
-                  <th>Given away</th>
                   <th>Status</th>
                   {canManage && <th className="dash-col-actions">Actions</th>}
                 </tr>
@@ -194,41 +272,80 @@ export function OffersView({
                         </div>
                       )}
                     </td>
-                    <td className="font-medium">{rewardLabel(o)}</td>
-                    <td>{triggerLabel(o)}</td>
-                    <td>{deliveryLabel(o)}</td>
-                    <td>{channelLabel(o.channels)}</td>
+                    {/* Gives + when. The trigger is a qualifier ON the
+                        reward, so it reads as one thought rather than as two
+                        columns a merchant has to join up by eye. */}
                     <td>
-                      {o.redemptionCount}
-                      {o.maxRedemptions !== null && ` / ${o.maxRedemptions}`}
-                      {o.maxPerCustomer !== null && (
+                      <div className="font-medium">{rewardLabel(o)}</div>
+                      <div className="text-xs text-[var(--dash-ink-2)]">
+                        {describeTrigger(o.triggerType, o.minSubtotal)}
+                      </div>
+                    </td>
+                    {/* Delivery + the exceptions: the channel only when it is
+                        not everywhere, the schedule only when there is one. */}
+                    <td>
+                      <div>{deliveryLabel(o)}</div>
+                      {(channelNote(o.channels) || scheduleNote(o)) && (
                         <div className="text-xs text-[var(--dash-ink-2)]">
-                          max {o.maxPerCustomer} each
+                          {[channelNote(o.channels), scheduleNote(o)]
+                            .filter(Boolean)
+                            .join(" · ")}
+                        </div>
+                      )}
+                    </td>
+                    {/* Usage against every ceiling that exists, in one cell.
+                        ★ The budget is the brake best-offer-wins makes
+                        load-bearing, so spend against it stays visible — but
+                        only for the offers that HAVE one, where it used to be
+                        a column reading "₹0" on every row that did not. */}
+                    <td>
+                      <div>
+                        {o.redemptionCount}
+                        {o.maxRedemptions !== null && ` / ${o.maxRedemptions}`}
+                        {o.maxRedemptions === null && " times"}
+                      </div>
+                      {(o.budget !== null || o.maxPerCustomer !== null) && (
+                        <div className="text-xs text-[var(--dash-ink-2)]">
+                          {[
+                            o.budget !== null
+                              ? `${inr(o.spent)} of ${inr(o.budget)}${
+                                  o.spent >= o.budget ? " · stopped" : ""
+                                }`
+                              : null,
+                            o.maxPerCustomer !== null
+                              ? `max ${o.maxPerCustomer} each`
+                              : null,
+                          ]
+                            .filter(Boolean)
+                            .join(" · ")}
                         </div>
                       )}
                     </td>
                     <td>
-                      {inr(o.spent)}
-                      {/* ★ The budget is the brake best-offer-wins makes
-                          load-bearing, so spend against it is a headline
-                          column rather than something to go looking for. */}
-                      {o.budget !== null && (
-                        <div className="text-xs text-[var(--dash-ink-2)]">
-                          of {inr(o.budget)}
-                          {o.spent >= o.budget && " · stopped"}
-                        </div>
+                      {/* ★ A THIRD STATE, because "Active" is precisely the
+                          lie: the row IS active and still cannot fire. Paused
+                          keeps its own word — a paused offer was switched off
+                          deliberately and needs no explaining. */}
+                      {o.status === "active" &&
+                      o.delivery === "automatic" &&
+                      !autoApplyOn ? (
+                        <span
+                          className="dash-badge dash-badge-amber"
+                          title="Active, but automatic offers are switched off for this store — see the note above."
+                        >
+                          Not applying
+                        </span>
+                      ) : (
+                        <span
+                          className={`dash-badge ${
+                            o.status === "active"
+                              ? "dash-badge-green"
+                              : "dash-badge-grey"
+                          }`}
+                        >
+                          {o.status === "active" ? "Active" : "Paused"}
+                        </span>
                       )}
-                    </td>
-                    <td>
-                      <span
-                        className={`dash-badge ${
-                          o.status === "active"
-                            ? "dash-badge-green"
-                            : "dash-badge-grey"
-                        }`}
-                      >
-                        {o.status === "active" ? "Active" : "Paused"}
-                      </span>
                     </td>
                     {canManage && (
                       <td className="dash-col-actions">
@@ -295,19 +412,6 @@ export function OffersView({
           </div>
         )}
       </div>
-
-      {settings.length > 0 && (
-        <div className="mt-6">
-          <FeatureToggles
-            title="How offers behave"
-            subtitle="These apply to every offer in your store."
-            successMessage="Offer settings saved."
-            plan={plan}
-            initialSettings={settings}
-            canManage={canManage}
-          />
-        </div>
-      )}
 
       {locationCount > 1 && (
         <p className="mt-4 text-xs text-[var(--dash-ink-2)]">

@@ -12,6 +12,9 @@ import {
 import { requireStorefrontStoreId } from "@/lib/store/resolve";
 import { getStorefrontLayout } from "@/lib/store/storefront-layout";
 import { getStoreSetting } from "@/lib/settings/resolve";
+import { effectivePricing } from "@/lib/pricing";
+import { loadOffersForStorefront } from "@/lib/offers/cart";
+import { offerBadgeFor, offerTagFor } from "@/lib/offers/badge";
 import { getStoreBrand } from "@/lib/store/brand";
 import { getStoreUrl } from "@/lib/site";
 import { getOgImageUrl } from "@/lib/og-image";
@@ -284,15 +287,50 @@ export default async function ProductDetailPage({ params }: PageProps) {
     notFound();
   }
 
-  const [related, reviews, layout, brand, siteUrl, lowStockThreshold] =
-    await Promise.all([
-      getRelated(product.category_id, product.id, storeId),
-      getReviews(product.id, storeId),
-      getStorefrontLayout(),
-      getStoreBrand(),
-      getStoreUrl(),
-      getStoreSetting("inventory.lowStockThreshold"),
-    ]);
+  const [
+    related,
+    reviews,
+    layout,
+    brand,
+    siteUrl,
+    lowStockThreshold,
+    showBadges,
+    offerBundle,
+  ] = await Promise.all([
+    getRelated(product.category_id, product.id, storeId),
+    getReviews(product.id, storeId),
+    getStorefrontLayout(),
+    getStoreBrand(),
+    getStoreUrl(),
+    getStoreSetting("inventory.lowStockThreshold"),
+    getStoreSetting("offers.showBadges"),
+    // Joins the same concurrent batch rather than adding a serial read, and
+    // fails open to no offers on its own — a page that cannot show a marker
+    // still sells. Same shape the shop listing uses.
+    loadOffersForStorefront(storeId, null, []),
+  ]);
+
+  // ★★ THE PRODUCT PAGE HAD NO OFFER MARKER AT ALL. The shop GRID showed one
+  // and the detail page — the screen a shopper reaches when they are actually
+  // deciding — showed nothing, so an offer got quieter the closer someone came
+  // to buying. Same two-step the grid uses: the per-unit saving where there is
+  // one, otherwise the offer's terms, which is the only honest thing to say
+  // about a buy-X-get-Y on a page showing a single item.
+  const offerMarker = (() => {
+    if (showBadges === false) return null;
+    const priced = effectivePricing(product as never);
+    const probe = {
+      productId: product.id,
+      categoryId: product.category_id ?? null,
+      unitPrice: priced.selling,
+      regularUnitPrice: priced.regularSelling,
+    };
+    const badge = offerBadgeFor(probe, offerBundle.offers, offerBundle.policy);
+    if (badge) return badge.label;
+    return (
+      offerTagFor(probe, offerBundle.offers, offerBundle.policy)?.label ?? null
+    );
+  })();
 
   // Product / Breadcrumb JSON-LD (rich results: price, availability, stars).
   // Effective per-variant selling prices → an Offer (single price) or
@@ -357,6 +395,7 @@ export default async function ProductDetailPage({ params }: PageProps) {
         reviews={reviews}
         grocery={layout.productDetail === "grocery"}
         storeLowStockThreshold={lowStockThreshold as number}
+        offerMarker={offerMarker}
       />
     </>
   );

@@ -1626,7 +1626,22 @@ function nudgeable(offer: Offer): boolean {
   return offer.delivery !== "code" && offer.groupIds.length === 0;
 }
 
-/** A rupee gap, subject to the shared proximity floor. */
+/**
+ * A rupee gap, subject to the shared proximity floor — except for a ladder.
+ *
+ * ★★ A SPEND LADDER IS ALWAYS WORTH SAYING, and it is the one shape where the
+ * floor got in the way. `max(₹500, subtotal)` hides a gap bigger than the cart,
+ * which is right for a one-off threshold: telling a ₹100 basket it is ₹4,900
+ * short is not encouragement. But "spend more, save more" IS an invitation to
+ * spend, and the ladder is the entire offer — a merchant who builds one wants
+ * every shopper to know it exists, not only those who happen to be within one
+ * basket's length of the bottom rung.
+ *
+ * The rule bit exactly where it was least wanted: on a 1,000 → 5% ladder, a
+ * ₹490 basket (gap ₹510, allowance ₹500) saw nothing, and ₹560 (gap ₹440,
+ * allowance ₹560) saw the bar. Same offer, same shopper, one item apart, and
+ * the version that showed it was the one further along.
+ */
 function pushSpendGap(
   offer: Offer,
   thresholdPaise: number,
@@ -1639,7 +1654,14 @@ function pushSpendGap(
   if (gap <= 0) return;
   // Close enough to be worth saying: within the floor, or within the size of
   // the cart itself (so a big basket is nudged toward a big threshold).
-  if (gap > Math.max(toPaise(NEAR_MISS_FLOOR), subtotalPaise)) return;
+  // ★ A LADDER IS EXEMPT — see above. Every other shape keeps the floor.
+  const alwaysWorthSaying = offer.reward.type === "tiered";
+  if (
+    !alwaysWorthSaying &&
+    gap > Math.max(toPaise(NEAR_MISS_FLOOR), subtotalPaise)
+  ) {
+    return;
+  }
 
   out.push({
     offerId: offer.id,
@@ -1762,6 +1784,18 @@ function collectUnitNearMiss(
   // A complete set is not a near miss, and neither is a cart with none of the
   // products.
   if (short === setSize || short <= 0) return;
+
+  // ★★ A SPENT SET CAP IS NOT A NEAR MISS. `maxSets` is the merchant's ceiling
+  // on how many times one order may earn the reward, and this ignored it — so
+  // on a "buy 1 get 1 free, max 1 set" offer a cart of THREE was told "add 1
+  // more and one is free", and the fourth earned nothing at all. The whole
+  // point of this nudge is that its promise comes from the engine rather than
+  // from arithmetic in the UI; a nudge the same engine then declines is worse
+  // than no nudge, because the shopper has already put the item in the basket.
+  const cap = offer.reward.maxSets;
+  if (typeof cap === "number" && Number.isFinite(cap)) {
+    if (Math.floor(have / setSize) >= Math.max(0, Math.trunc(cap))) return;
+  }
 
   out.push({
     offerId: offer.id,

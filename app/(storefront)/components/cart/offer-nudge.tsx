@@ -57,14 +57,21 @@ function insteadOf(offer: NearMissOffer): string {
   return "";
 }
 
-/** "one is free" / "two are half price" — what completing the set earns. */
+/**
+ * What completing the set earns, as the object of "…to get ___".
+ *
+ * ★★ IT READ "Add 1 more and one is free", WHICH IS NOT A SENTENCE ANYONE
+ * WRITES. Two clauses joined by "and" made the reward a separate statement of
+ * fact ("one is free") rather than the thing the action buys, so the line
+ * parsed as two half-thoughts. Phrased as a purpose — "Add 1 more to get one
+ * free" — it is the same information in the shape people actually say it.
+ */
 function setReward(offer: NearMissOffer): string {
   const n = offer.getQuantity ?? 1;
   const noun = n === 1 ? "one" : `${n}`;
-  const verb = n === 1 ? "is" : "are";
   return offer.percent && offer.percent < 100
-    ? `${noun} ${verb} ${offer.percent}% off`
-    : `${noun} ${verb} free`;
+    ? `${noun} at ${offer.percent}% off`
+    : `${noun} free`;
 }
 
 export function OfferNudge({
@@ -94,17 +101,17 @@ export function OfferNudge({
       offer.rewardType === "volume_break" ? (
         <>
           Add <strong>{offer.gap}</strong> more to get {rewardPhrase(offer)} on
-          each{insteadOf(offer)}.
+          each{insteadOf(offer)}
         </>
       ) : (
         <>
-          Add <strong>{offer.gap}</strong> more and {setReward(offer)}.
+          Add <strong>{offer.gap}</strong> more to get {setReward(offer)}
         </>
       )
     ) : (
       <>
         Add <strong>{inr(offer.gap)}</strong> more to get {rewardPhrase(offer)}
-        {insteadOf(offer)}.
+        {insteadOf(offer)}
       </>
     );
 
@@ -115,7 +122,13 @@ export function OfferNudge({
       // that interrupts on every quantity tap is worse than silence.
       aria-live="polite"
     >
-      {body}
+      {/* ★ DECORATIVE, AND MARKED AS SUCH. The sentence carries the whole
+          message; a screen reader announcing "sparkles" before it adds nothing
+          and interrupts a live region that already fires on every cart edit. */}
+      <span className="sm-offer-nudge-spark" aria-hidden>
+        ✨
+      </span>
+      <span>{body}</span>
     </p>
   );
 }

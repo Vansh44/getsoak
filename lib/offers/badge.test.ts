@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { offerBadgeFor, type BadgeProduct } from "./badge";
+import { offerBadgeFor, offerTagFor, type BadgeProduct } from "./badge";
 import type { Offer } from "./types";
 
 const policy = {
@@ -158,5 +158,114 @@ describe("★ the shop grid asks for the right price", () => {
     // `base` is the struck-through list price. Reaching for it here is the
     // exact regression above.
     expect(src).not.toContain("regularUnitPrice: priced.base");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// offerTagFor — the marker for offers that have no per-unit price to quote.
+//
+// ★★ THE GAP IT CLOSES. `offerBadgeFor` prices ONE unit, so buy-X-get-Y,
+// bundles and quantity breaks all score zero there — correctly, because none of
+// them is a claim about buying one. But the product grid's only marker WAS that
+// price badge, so a merchant's buy-1-get-1 was invisible to every shopper
+// browsing the shop, and invisible on the product page, which had no marker of
+// any kind.
+// ---------------------------------------------------------------------------
+
+const b1g1 = (over: Partial<Offer> = {}) =>
+  offer({
+    reward: {
+      type: "buy_x_get_y",
+      buyQuantity: 1,
+      getQuantity: 1,
+      getPercent: 100,
+    },
+    productIds: ["p1"],
+    ...over,
+  });
+
+describe("offerTagFor", () => {
+  it("tags a buy-1-get-1, which the price badge correctly cannot", () => {
+    expect(offerBadgeFor(product(), [b1g1()], policy, NOW)).toBeNull();
+    expect(offerTagFor(product(), [b1g1()], policy, NOW)).toMatchObject({
+      label: "Buy 1, get 1 free",
+      offerId: "o1",
+    });
+  });
+
+  it("tags a bundle and a quantity break at the quantity that earns them", () => {
+    const bundle = offer({
+      reward: { type: "bundle_price", bundleQuantity: 3, bundlePrice: 999 },
+      productIds: ["p1"],
+    });
+    expect(
+      offerTagFor(product({ unitPrice: 500 }), [bundle], policy, NOW),
+    ).not.toBeNull();
+
+    const vol = offer({
+      reward: {
+        type: "volume_break",
+        breaks: [{ minQuantity: 10, percent: 15 }],
+      },
+      productIds: ["p1"],
+    });
+    expect(offerTagFor(product(), [vol], policy, NOW)).not.toBeNull();
+  });
+
+  // ★★ THE PROPERTY THAT KEEPS THIS FROM BECOMING "the offer says 20%". The
+  // probe runs the real engine, so every gate the cart applies has already
+  // been passed by anything that returns a tag.
+  it("shows nothing for an offer the cart would refuse", () => {
+    const cases: Array<[string, Offer]> = [
+      ["another product", b1g1({ productIds: ["other"] })],
+      ["paused", b1g1({ status: "disabled" })],
+      ["expired", b1g1({ validUntil: "2026-01-01T00:00:00.000Z" })],
+      ["not started", b1g1({ validFrom: "2027-01-01T00:00:00.000Z" })],
+      ["POS only", b1g1({ channels: ["pos"] })],
+      ["needs a code", b1g1({ delivery: "code", code: "LAUNCH" })],
+      ["restricted to a group", b1g1({ groupIds: ["g1"] })],
+      ["out of budget", b1g1({ remainingBudget: 0 })],
+      ["exhausted", b1g1({ exhausted: true })],
+    ];
+    for (const [why, o] of cases) {
+      expect(offerTagFor(product(), [o], policy, NOW), why).toBeNull();
+    }
+  });
+
+  it("shows nothing when the store has automatic offers switched off", () => {
+    expect(
+      offerTagFor(product(), [b1g1()], { ...policy, autoApply: false }, NOW),
+    ).toBeNull();
+  });
+
+  it("respects the store's sale-price mode", () => {
+    // On sale, and the store says offers skip sale items — so there is no
+    // offer on this product, and saying otherwise would be a promise the cart
+    // declines.
+    const onSale = product({ unitPrice: 800, regularUnitPrice: 1000 });
+    expect(
+      offerTagFor(onSale, [b1g1()], { ...policy, onSalePrice: "skip" }, NOW),
+    ).toBeNull();
+    expect(offerTagFor(onSale, [b1g1()], policy, NOW)).not.toBeNull();
+  });
+
+  it("ignores order-level, shipping, gift and cashback offers", () => {
+    // None of them is a fact about THIS product.
+    const notLineLevel: Offer[] = [
+      offer({ reward: { type: "percent_off", percent: 10 } }),
+      offer({ reward: { type: "free_shipping" } }),
+      offer({ reward: { type: "credit_back", creditAmount: 100 } }),
+    ];
+    for (const o of notLineLevel) {
+      expect(offerTagFor(product(), [o], policy, NOW)).toBeNull();
+    }
+  });
+
+  it("covers a category-scoped offer, not only a named product", () => {
+    const byCategory = b1g1({ productIds: [], categoryIds: ["c1"] });
+    expect(offerTagFor(product(), [byCategory], policy, NOW)).not.toBeNull();
+    expect(
+      offerTagFor(product({ categoryId: "other" }), [byCategory], policy, NOW),
+    ).toBeNull();
   });
 });

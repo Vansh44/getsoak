@@ -590,24 +590,50 @@
    Tokenised on --sm-* like everything else here, so it re-skins with the
    store's theme instead of pinning one palette.
    --------------------------------------------------------------------------- */
+/* ★ IT SHOULD LOOK LIKE AN OPPORTUNITY, NOT A NOTICE. This was a grey bordered
+   box in the surface colour — the same shape as an error or an info panel — so
+   the one line in the summary offering the shopper something free read as
+   chrome and got skipped. It carries the store's own accent now, which is the
+   only colour on the page that already means "this is worth your attention",
+   and no border: a tinted block reads as a highlight where an outlined one
+   reads as a warning. */
 .sm-offer-nudge {
-  margin: 0.5rem 0;
-  padding: 0.5rem 0.75rem;
-  border: 1px solid var(--sm-border, #e5e7eb);
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin: 0.625rem 0;
+  padding: 0.625rem 0.75rem;
   border-radius: var(--sm-radius-sm, 8px);
-  background: var(--sm-surface, #ffffff);
-  color: var(--sm-ink-soft, #4b5563);
+  background: color-mix(
+    in srgb,
+    var(--sm-accent, #111827) 10%,
+    var(--sm-surface, #ffffff)
+  );
+  color: var(--sm-ink, #111827);
   font-size: 0.8125rem;
+  font-weight: 500;
   line-height: 1.4;
 }
 .sm-offer-nudge strong {
   color: var(--sm-ink, #111827);
-  font-weight: 600;
+  font-weight: 700;
+}
+.sm-offer-nudge-spark {
+  flex-shrink: 0;
+  font-size: 0.875rem;
+  line-height: 1.3;
 }
 
 /* Offer badge on a product card (docs/offers-plan.md Phase B). Sits in the
    same slot as the stock badges and borrows their scale, so a card never
-   changes shape depending on which one is showing. */
+   changes shape depending on which one is showing.
+
+   ⚠ NOT `white-space: nowrap` ANY MORE. The slot also carries the TERMS tag
+   now ("Buy 1, get 1 free", "Any 3 chosen items for ₹999"), which is several
+   times longer than the "20% off" this was sized for — unwrapped, a long tag
+   pushed the card's own layout sideways. `max-width` keeps it inside the
+   image, and the line height stays tight so a two-line tag does not reshape
+   the row. */
 .sm-offer-badge {
   font-size: 10px;
   font-weight: 700;
@@ -617,5 +643,7 @@
   border-radius: var(--sm-radius-sm, 4px);
   background: var(--sm-accent-warm, #f3f4f6);
   color: var(--sm-on-accent, #111827);
-  white-space: nowrap;
+  max-width: 100%;
+  line-height: 1.3;
+  text-align: left;
 }

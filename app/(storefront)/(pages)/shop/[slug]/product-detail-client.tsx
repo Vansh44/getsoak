@@ -91,6 +91,7 @@ export default function ProductDetailClient({
   reviews,
   grocery = false,
   storeLowStockThreshold = 0,
+  offerMarker = null,
 }: {
   product: DetailProduct;
   related: RelatedProduct[];
@@ -99,6 +100,16 @@ export default function ProductDetailClient({
   // Store-wide default (inventory.lowStockThreshold), resolved by the page; a
   // per-SKU threshold overrides it. Drives the "Only X left" badge.
   storeLowStockThreshold?: number;
+  /**
+   * "20% off" or "Buy 1, get 1 free" — resolved on the SERVER by the offers
+   * engine, so it is what the cart will actually do.
+   *
+   * ★ A STRING, NOT AN OFFER. Everything that decides it — scope, channel,
+   * dates, auto-apply, conditions, the sale-price mode — is server-side, and
+   * shipping the offer here would invite the client to re-derive an answer it
+   * cannot reach. The page renders what it is given.
+   */
+  offerMarker?: string | null;
 }) {
   const router = useRouter();
   const { addItem } = useCart();
@@ -237,6 +248,7 @@ export default function ProductDetailClient({
           hasVariants={hasVariants}
           variantId={variantId}
           selectVariant={selectVariant}
+          offerMarker={offerMarker}
           base={base}
           selling={selling}
           discount={discount}
@@ -385,6 +397,12 @@ export default function ProductDetailClient({
           {product.returnable === false && (
             <div className="mb-2 ml-2 inline-block rounded-sm bg-zinc-100 px-2 py-1 text-xs font-bold uppercase tracking-wider text-zinc-600">
               Final sale · no returns
+            </div>
+          )}
+
+          {offerMarker && (
+            <div className="mb-2 ml-2 inline-block">
+              <span className="sm-offer-badge">{offerMarker}</span>
             </div>
           )}
 

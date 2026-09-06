@@ -23,11 +23,22 @@ import { lineKey, type CartItem } from "./CartProvider";
 //                                 (caller shows "calculated at checkout")
 //   • { enabled: false, … }    → the store has tax turned off
 //   • { enabled: true, tax, … } → tax to display
-export function useCartTax(
+/**
+ * Just the fetch: the store's tax config and each line's authoritative price,
+ * rate, category and pre-sale price.
+ *
+ * ★★ SPLIT OUT BECAUSE THE CHECKOUT NEEDS THE MIDDLE OF THIS HOOK. Offers are
+ * priced from `rates.lines` (categories and sale prices) and the tax is then
+ * computed from what the offers took off — so the caller has to get between
+ * the fetch and the arithmetic. As one hook that is a cycle: tax needs the
+ * discount, the discount needs the rates, and the rates arrive with the tax.
+ *
+ * `useCartTax` below is unchanged for every caller that does not need to.
+ */
+export function useCartTaxRates(
   items: CartItem[],
   hydrated: boolean,
-  discount: number,
-): CartTaxResult | null {
+): CartTaxRates | null {
   const [rates, setRates] = useState<CartTaxRates | null>(null);
 
   // Stable key over the SET of (product, variant) pairs — order-independent and
@@ -73,42 +84,79 @@ export function useCartTax(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hydrated, setKey]);
 
-  return useMemo<CartTaxResult | null>(() => {
-    if (rates === null) return null;
-    if (!rates.enabled) {
-      return { enabled: false, inclusive: false, tax: 0, byRate: [] };
-    }
-    const byKey = new Map(
-      rates.lines.map((l) => [lineKey(l.productId, l.variantId), l]),
-    );
-    // A just-added line may not be in `rates` yet (its refetch is in flight) —
-    // it contributes 0 until the rates arrive, then this recomputes.
-    const taxLines = items.map((i) => {
-      const r = byKey.get(lineKey(i.productId, i.variantId));
-      return {
-        amount: (r?.price ?? 0) * i.quantity,
-        rate: r?.rate ?? 0,
-        label: r?.label,
-      };
-    });
-    const result = computeTax({
-      lines: taxLines,
-      discount: Math.max(0, discount),
-      pricesIncludeTax: rates.inclusive,
-      enabled: true,
-    });
+  return rates;
+}
+
+/**
+ * The tax those rates imply, for a given discount. Pure.
+ *
+ * @param lineDiscounts what an OFFER took off each line, keyed by `lineKey`.
+ *   ★ PER LINE, NOT SPREAD. `computeTax` allocates an order-level discount
+ *   proportionally, and an offer's reward is not proportional — ₹200 off a
+ *   ₹1,000 18% shirt beside a ₹1,000 5% book is ₹194 of tax, not the ₹207 the
+ *   spread produces. `placeOrder` passes the same per-line figures, so the
+ *   summary and the invoice agree.
+ * @param discount whatever is left over at ORDER level: a legacy coupon, or
+ *   the part of an offer the engine did not allocate to a line.
+ */
+export function cartTaxFrom(
+  rates: CartTaxRates | null,
+  items: CartItem[],
+  discount: number,
+  lineDiscounts?: ReadonlyMap<string, number> | null,
+): CartTaxResult | null {
+  if (rates === null) return null;
+  if (!rates.enabled) {
+    return { enabled: false, inclusive: false, tax: 0, byRate: [] };
+  }
+  const byKey = new Map(
+    rates.lines.map((l) => [lineKey(l.productId, l.variantId), l]),
+  );
+  // A just-added line may not be in `rates` yet (its refetch is in flight) —
+  // it contributes 0 until the rates arrive, then this recomputes.
+  const taxLines = items.map((i) => {
+    const key = lineKey(i.productId, i.variantId);
+    const r = byKey.get(key);
     return {
-      enabled: true,
-      inclusive: rates.inclusive,
-      // Passed through for `useCartOffers`, which needs each line's category
-      // and would otherwise repeat this fetch (see CartTaxResult.lines).
-      lines: rates.lines,
-      tax: result.totalTax,
-      byRate: result.byRate.map((b) => ({
-        rate: b.rate,
-        label: b.label,
-        tax: b.tax,
-      })),
+      amount: (r?.price ?? 0) * i.quantity,
+      rate: r?.rate ?? 0,
+      label: r?.label,
+      discount: Math.max(0, lineDiscounts?.get(key) ?? 0),
     };
-  }, [rates, items, discount]);
+  });
+  const result = computeTax({
+    lines: taxLines,
+    discount: Math.max(0, discount),
+    pricesIncludeTax: rates.inclusive,
+    enabled: true,
+  });
+  return {
+    enabled: true,
+    inclusive: rates.inclusive,
+    // Passed through for `useCartOffers`, which needs each line's category
+    // and would otherwise repeat this fetch (see CartTaxResult.lines).
+    lines: rates.lines,
+    tax: result.totalTax,
+    byRate: result.byRate.map((b) => ({
+      rate: b.rate,
+      label: b.label,
+      tax: b.tax,
+    })),
+  };
+}
+
+/**
+ * The original hook, unchanged for callers that price only a coupon (the
+ * grocery cart). Fetch + compute in one.
+ */
+export function useCartTax(
+  items: CartItem[],
+  hydrated: boolean,
+  discount: number,
+): CartTaxResult | null {
+  const rates = useCartTaxRates(items, hydrated);
+  return useMemo(
+    () => cartTaxFrom(rates, items, discount),
+    [rates, items, discount],
+  );
 }

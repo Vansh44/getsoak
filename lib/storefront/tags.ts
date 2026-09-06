@@ -13,6 +13,15 @@ export const TAGS = {
   /** @deprecated superseded by `chrome` — store_menus is no longer read. */
   menus: "storefront:menus",
   coupons: "storefront:coupons",
+  /**
+   * Offers, for the storefront's "Available coupons" list.
+   *
+   * ★ SEPARATE FROM `coupons`, though one read is tagged with both. A coupon
+   * edit and an offer edit are different writes in different actions, and
+   * making an offer save bust the coupon tag (or the reverse) would mean every
+   * write in one feature quietly invalidating caches in the other.
+   */
+  offers: "storefront:offers",
   billing: "storefront:billing",
   help: "help:centre",
 } as const;

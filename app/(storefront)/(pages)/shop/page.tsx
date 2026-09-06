@@ -8,7 +8,7 @@ import { getStorefrontLayout } from "@/lib/store/storefront-layout";
 import { getStoreSetting } from "@/lib/settings/resolve";
 import { getStoreBrand } from "@/lib/store/brand";
 import { loadOffersForStorefront } from "@/lib/offers/cart";
-import { offerBadgeFor } from "@/lib/offers/badge";
+import { offerBadgeFor, offerTagFor } from "@/lib/offers/badge";
 import { effectivePricing } from "@/lib/pricing";
 import ShopClient, { type ShopProduct, type ShopCategory } from "./shop-client";
 import "./shop.css";
@@ -97,7 +97,32 @@ export default async function ShopPage({
         offerBundle.offers,
         offerBundle.policy,
       );
-      if (badge) offerBadges[p.id] = { label: badge.label };
+      if (badge) {
+        offerBadges[p.id] = { label: badge.label };
+        continue;
+      }
+      // ★★ NO PRICE BADGE IS NOT NO OFFER. `offerBadgeFor` prices ONE unit, so
+      // buy-X-get-Y, bundles and quantity breaks all correctly score zero
+      // there — none of them is a claim about buying one. Until now that meant
+      // the whole family showed NOTHING on the shop, and a merchant's
+      // buy-1-get-1 was invisible to every shopper browsing the grid.
+      //
+      // The tag states the offer's TERMS instead of a saving, which is honest
+      // at any quantity, and it still proves the offer would apply (see
+      // `offerTagFor`). Second choice deliberately: where a real per-unit
+      // saving exists, "20% off" beats "there is an offer on this".
+      const tag = offerTagFor(
+        {
+          productId: p.id,
+          categoryId:
+            (p as { category_id?: string | null }).category_id ?? null,
+          unitPrice: priced.selling,
+          regularUnitPrice: priced.regularSelling,
+        },
+        offerBundle.offers,
+        offerBundle.policy,
+      );
+      if (tag) offerBadges[p.id] = { label: tag.label };
     }
   }
 
