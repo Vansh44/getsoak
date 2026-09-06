@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { makeDbMock } from "@/app/actions/_test-helpers";
+import { makeDbMock, sqlText } from "@/app/actions/_test-helpers";
 
 vi.mock("next/cache", () => ({
   revalidateTag: vi.fn(),
@@ -51,8 +51,14 @@ function req(auth?: string): Request {
 }
 
 /**
- * The route runs: 1 lapsed-select, then (if any lapsed) an update, then one
- * warn-select per EXPIRY_WARN_DAYS horizon. `returning` feeds the update.
+ * The route runs: the COMP sweep (one conditional UPDATE ... RETURNING, always),
+ * then 1 lapsed-select, then (if any lapsed) the paid update, then one
+ * warn-select per EXPIRY_WARN_DAYS horizon.
+ *
+ * ★ The comp sweep is a single raw-SQL `UPDATE ... FROM stores old ... RETURNING`
+ * (Postgres RETURNING gives the NEW row, so the plan that ENDED has to come
+ * from a self-join snapshot). It therefore consumes an `executeQueue` entry,
+ * not a `returningQueue` one.
  */
 function queues(lapsed: any[], warnRows: any[][] = []) {
   const warns = EXPIRY_WARN_DAYS.map((_, i) => warnRows[i] ?? []);
@@ -95,22 +101,79 @@ describe("/api/cron/plan-expiry", () => {
   });
 
   it("reports nothing expired when no plan has lapsed", async () => {
+    dbHolder.current = makeDbMock({
+      selectQueue: queues([]),
+      executeQueue: [[]], // comp sweep clears nothing
+    });
+
     const res = await GET(req("Bearer s3cret"));
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, expired: 0 });
+    expect(await res.json()).toMatchObject({
+      ok: true,
+      expired: 0,
+      compsEnded: 0,
+    });
     expect(revalidateTag).not.toHaveBeenCalled();
   });
 
-  it("does not run the UPDATE at all when nothing has lapsed", async () => {
+  it("does not run the PAID update when nothing has lapsed", async () => {
+    dbHolder.current = makeDbMock({
+      selectQueue: queues([]),
+      executeQueue: [[]],
+    });
+
     await GET(req("Bearer s3cret"));
 
     expect(dbHolder.current.calls.update).toHaveLength(0);
   });
 
+  it("★★ ends a lapsed comp WITHOUT touching the paid plan", async () => {
+    // docs/comped-plans-spec.md §3.2 — the failure the overlay exists to
+    // prevent. This store pays for Basic; only the comp columns may be cleared,
+    // or it lands on Free while its subscription is live and paid.
+    dbHolder.current = makeDbMock({
+      selectQueue: queues([]),
+      executeQueue: [[{ id: "s1", comp_plan_before: "pro", plan: "basic" }]],
+    });
+
+    const res = await GET(req("Bearer s3cret"));
+
+    expect(await res.json()).toMatchObject({ compsEnded: 1, expired: 0 });
+
+    const text = sqlText(dbHolder.current.calls.execute[0]);
+    // Only the comp columns are set...
+    expect(text).toContain("comp_plan = null");
+    expect(text).toContain("comp_expires_at = null");
+    // ...and the paid entitlement is never assigned. THE regression this
+    // guards: writing `plan = 'free'` here drops a live paid subscriber.
+    expect(text).not.toMatch(/set[\s\S]*\bs\.plan\s*=/);
+    expect(text).not.toContain("plan_expires_at = null");
+    // The old-row snapshot is what lets the notice name the plan that ended.
+    expect(text).toContain("old.comp_plan");
+  });
+
+  it("★ tells the merchant which plan they fall BACK to, not the one they lost", async () => {
+    dbHolder.current = makeDbMock({
+      selectQueue: queues([]),
+      executeQueue: [[{ id: "s1", comp_plan_before: "pro", plan: "basic" }]],
+    });
+
+    await GET(req("Bearer s3cret"));
+
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "store.comp_ended",
+        storeId: "s1",
+        payload: { comp_plan: "Pro", plan: "Basic" },
+      }),
+    );
+  });
+
   it("flips a lapsed plan to free and clears the expiry", async () => {
     dbHolder.current = makeDbMock({
       selectQueue: queues([{ id: "s1", plan: "pro" }]),
+      executeQueue: [[]], // comp sweep clears nothing
       returning: [{ id: "s1" }],
     });
 
@@ -128,6 +191,7 @@ describe("/api/cron/plan-expiry", () => {
     // off the update would record every store as falling from "free".
     dbHolder.current = makeDbMock({
       selectQueue: queues([{ id: "s1", plan: "pro" }]),
+      executeQueue: [[]], // comp sweep clears nothing
       returning: [{ id: "s1" }],
     });
 
@@ -301,11 +365,14 @@ describe("/api/cron/plan-expiry", () => {
       const warnRows = EXPIRY_WARN_DAYS.map((_, i) =>
         i === 0 ? [{ id: "s5", plan: "pro", planExpiresAt: "2026-08-13" }] : [],
       );
-      dbHolder.current = makeDbMock({ selectQueue: queues([], warnRows) });
+      dbHolder.current = makeDbMock({
+        selectQueue: queues([], warnRows),
+        executeQueue: [[]],
+      });
 
       const res = await GET(req("Bearer s3cret"));
 
-      expect(await res.json()).toEqual({ ok: true, expired: 0 });
+      expect(await res.json()).toEqual({ ok: true, expired: 0, compsEnded: 0 });
       // The store IS inside the 7-day window and still hears nothing.
       expect(recordEvent).not.toHaveBeenCalled();
     });

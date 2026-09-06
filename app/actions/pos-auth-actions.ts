@@ -119,7 +119,12 @@ async function deviceCapReached(
 ): Promise<{ reached: boolean; cap: number }> {
   const storeRows = await withService((db) =>
     db
-      .select({ plan: stores.plan, plan_expires_at: stores.planExpiresAt })
+      .select({
+        plan: stores.plan,
+        plan_expires_at: stores.planExpiresAt,
+        comp_plan: stores.compPlan,
+        comp_expires_at: stores.compExpiresAt,
+      })
       .from(stores)
       .where(eq(stores.id, storeId))
       .limit(1),

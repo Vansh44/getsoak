@@ -159,6 +159,7 @@ export const EVENT_KEYS = [
   "store.domain_live",
   "store.domain_reverted",
   // ── Plan & billing ──────────────────────────────────────────────────────
+  "store.comp_ended",
   "plan.changed",
   "plan.expiring",
   "subscription.invoice_due",
@@ -629,6 +630,25 @@ export const EVENTS: readonly EventDef[] = [
     // somewhere else. There is no version of "they opted out of hearing this"
     // that is defensible, and email is the only channel that reaches someone who
     // is not looking at the dashboard.
+    audiences: { "store-admins": BOTH },
+    configurable: false,
+  },
+  {
+    key: "store.comp_ended",
+    label: "Free plan upgrade ended",
+    description:
+      "A comped plan reached the end of its window; the store is back on the plan it pays for.",
+    group: "Plan & billing",
+    section: "ai",
+    severity: "info",
+    // ★ BOTH channels, and NOT configurable. What the store can DO changed
+    // while nobody was looking — POS, analytics and campaigns may all have just
+    // switched off. Email is the only channel that reaches someone who is not
+    // in the dashboard.
+    //
+    // ★ Its OWN event rather than `plan.changed`: this is a gift ending, not a
+    // downgrade, and the merchant did nothing wrong. Reusing the downgrade copy
+    // would tell a paying Basic subscriber they had been demoted.
     audiences: { "store-admins": BOTH },
     configurable: false,
   },

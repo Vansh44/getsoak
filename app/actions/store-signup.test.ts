@@ -334,6 +334,17 @@ describe("createStore provisioning", () => {
     });
   });
 
+  it("★★ records the OTP-verified phone on the owner row, not only the invoice profile", async () => {
+    // `admins.phone` is where `resolveBillingEmail` — and therefore
+    // `startEnrolment` — looks for a billing contact. Writing it to
+    // store_billing_settings alone left every wizard-created store unable to
+    // subscribe: "We couldn't prepare autopay", before any Razorpay call.
+    await createStore(INPUT);
+    expect(dbHolder.current.calls.values[1]).toMatchObject({
+      phone: "+919876543210",
+    });
+  });
+
   it("falls back to the email local-part when the owner name is blank", async () => {
     await createStore({ ...INPUT, firstName: "", lastName: "" });
     expect(dbHolder.current.calls.values[1]).toMatchObject({

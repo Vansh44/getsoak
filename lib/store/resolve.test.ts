@@ -90,27 +90,62 @@ describe("parseHost", () => {
 // from the EFFECTIVE plan so an expired grant stops serving.
 // ---------------------------------------------------------------------------
 describe("custom domain entitlement", () => {
-  const serves = (store: { plan: string; plan_expires_at: string | null }) =>
-    PLAN_LIMITS[effectivePlan(store)].customDomain;
+  const serves = (store: {
+    plan: string;
+    plan_expires_at: string | null;
+    comp_plan: string | null;
+    comp_expires_at: string | null;
+  }) => PLAN_LIMITS[effectivePlan(store)].customDomain;
 
   it("serves for Pro", () => {
-    expect(serves({ plan: "pro", plan_expires_at: null })).toBe(true);
+    expect(
+      serves({
+        plan: "pro",
+        plan_expires_at: null,
+        comp_plan: null,
+        comp_expires_at: null,
+      }),
+    ).toBe(true);
   });
 
   it("does NOT serve for free or basic", () => {
     // Basic previously had this flag on while nothing enforced it.
-    expect(serves({ plan: "free", plan_expires_at: null })).toBe(false);
-    expect(serves({ plan: "basic", plan_expires_at: null })).toBe(false);
+    expect(
+      serves({
+        plan: "free",
+        plan_expires_at: null,
+        comp_plan: null,
+        comp_expires_at: null,
+      }),
+    ).toBe(false);
+    expect(
+      serves({
+        plan: "basic",
+        plan_expires_at: null,
+        comp_plan: null,
+        comp_expires_at: null,
+      }),
+    ).toBe(false);
   });
 
   it("stops serving once a timed Pro plan has lapsed", () => {
     // The row still says "pro" — effectivePlan is what notices the expiry, and
     // reading raw `plan` here would keep a lapsed store on its domain forever.
     expect(
-      serves({ plan: "pro", plan_expires_at: "2020-01-01T00:00:00Z" }),
+      serves({
+        plan: "pro",
+        plan_expires_at: "2020-01-01T00:00:00Z",
+        comp_plan: null,
+        comp_expires_at: null,
+      }),
     ).toBe(false);
     expect(
-      serves({ plan: "pro", plan_expires_at: "2999-01-01T00:00:00Z" }),
+      serves({
+        plan: "pro",
+        plan_expires_at: "2999-01-01T00:00:00Z",
+        comp_plan: null,
+        comp_expires_at: null,
+      }),
     ).toBe(true);
   });
 });

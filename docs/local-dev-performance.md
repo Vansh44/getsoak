@@ -158,3 +158,12 @@ Configuration checks verify the development values, override validation, retaine
 source-map/cache settings, and absence of the callback in production. Targeted
 ESLint and formatting checks also pass. No production build is needed for these
 internal development settings.
+
+## Optional Turbopack filesystem-cache override
+
+Use `npm run dev:turbo -- --no-fs-cache` (or `DEV_FS_CACHE=0`) to measure
+a session without persistent Turbopack cache writes. `--fs-cache` (or
+`DEV_FS_CACHE=1`) enables it again. CLI flags take precedence over the environment;
+if both flags are supplied, `--no-fs-cache` wins. The default preserves caches,
+and disabling the cache does not delete existing files. This affects Turbopack
+only; the memory-aware Webpack default and production builds are unchanged.

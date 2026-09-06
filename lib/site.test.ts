@@ -16,6 +16,8 @@ const base = {
   settings: {},
   plan: "pro",
   plan_expires_at: null,
+  comp_plan: null,
+  comp_expires_at: null,
 };
 
 describe("storeOrigin", () => {

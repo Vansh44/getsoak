@@ -701,9 +701,10 @@ describe("downgradeExpired", () => {
   });
 
   it("★ a REFUSED claim closes no shift — the store keeps trading", async () => {
-    // billing_claim_downgrade says no when they paid, when it already ran, or
-    // when the store is comped. Closing the till anyway would stop a shop that
-    // is still entitled to sell.
+    // billing_claim_downgrade says no when they paid or when it already ran.
+    // (It used to refuse a comped subscription too; migration 0078 removed that
+    // — a comp is an overlay, not a billing state.) Closing the till anyway
+    // would stop a shop that is still entitled to sell.
     seed([[{ storeId: STORE }]]);
     dbHolder.current.db.execute = vi.fn(async () => ({
       rows: [{ ok: false }],

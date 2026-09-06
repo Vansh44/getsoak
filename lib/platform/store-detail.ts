@@ -52,6 +52,18 @@ export interface StoreDetail {
   effective: Plan;
   planSource: string | null;
   planExpiresAt: string | null;
+  /**
+   * The comped-plan overlay (docs/comped-plans-spec.md). `offer` is granted but
+   * not yet accepted; `active` is running. They are mutually exclusive.
+   */
+  comp: {
+    offer: {
+      plan: Plan;
+      durationDays: number;
+      offeredAt: string | null;
+    } | null;
+    active: { plan: Plan; startsAt: string; expiresAt: string } | null;
+  };
   createdAt: string;
   storeNo: number | null;
   customDomain: string | null;
@@ -130,6 +142,11 @@ export async function loadStoreDetail(
           s.plan,
           s.plan_source,
           s.plan_expires_at,
+          s.comp_plan,
+          s.comp_duration_days,
+          s.comp_offered_at,
+          s.comp_starts_at,
+          s.comp_expires_at,
           s.created_at,
           s.store_no,
           s.custom_domain,
@@ -200,6 +217,8 @@ export async function loadStoreDetail(
       const effective = effectivePlan({
         plan,
         plan_expires_at: planExpiresAt,
+        comp_plan: str(row.comp_plan),
+        comp_expires_at: str(row.comp_expires_at),
       });
 
       return {
@@ -211,6 +230,24 @@ export async function loadStoreDetail(
         effective,
         planSource: str(row.plan_source),
         planExpiresAt,
+        comp: {
+          offer:
+            row.comp_plan && row.comp_duration_days && !row.comp_starts_at
+              ? {
+                  plan: normalizePlan(String(row.comp_plan)),
+                  durationDays: num(row.comp_duration_days),
+                  offeredAt: str(row.comp_offered_at),
+                }
+              : null,
+          active:
+            row.comp_plan && row.comp_starts_at && row.comp_expires_at
+              ? {
+                  plan: normalizePlan(String(row.comp_plan)),
+                  startsAt: String(row.comp_starts_at),
+                  expiresAt: String(row.comp_expires_at),
+                }
+              : null,
+        },
         createdAt: String(row.created_at),
         storeNo: row.store_no == null ? null : num(row.store_no),
         customDomain: str(row.custom_domain),

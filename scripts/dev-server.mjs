@@ -107,6 +107,14 @@ const nodeOptions = [
 const childEnv = { ...process.env };
 if (nodeOptions) childEnv.NODE_OPTIONS = nodeOptions;
 else delete childEnv.NODE_OPTIONS;
+// Explicit overrides retain the default warm cache unless requested otherwise.
+if (process.argv.includes("--no-fs-cache")) childEnv.NEXT_DEV_FS_CACHE = "0";
+else if (process.argv.includes("--fs-cache")) childEnv.NEXT_DEV_FS_CACHE = "1";
+else if (["0", "false"].includes(process.env.DEV_FS_CACHE))
+  childEnv.NEXT_DEV_FS_CACHE = "0";
+else if (["1", "true"].includes(process.env.DEV_FS_CACHE))
+  childEnv.NEXT_DEV_FS_CACHE = "1";
+
 const nextArgs = process.argv
   .slice(2)
   .filter((arg) => !arg.startsWith("--heap-mb=") && arg !== "--reset-cache");

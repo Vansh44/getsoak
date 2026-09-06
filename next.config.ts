@@ -37,6 +37,11 @@ const nextConfig: NextConfig = {
     dangerouslyAllowLocalIP: process.env.NODE_ENV === "development",
   },
   experimental: {
+    // The dev runner forwards explicit filesystem-cache overrides. Unset keeps
+    // Next's default enabled cache; this setting does not affect Webpack.
+    ...(process.env.NEXT_DEV_FS_CACHE === "0"
+      ? { turbopackFileSystemCacheForDev: false }
+      : {}),
     // Tree-shake barrel imports to per-export modules. lucide-react is already
     // optimized by default; these heavy ones are not. (They're also lazily
     // loaded via next/dynamic, so this trims what lands in their split chunks.)

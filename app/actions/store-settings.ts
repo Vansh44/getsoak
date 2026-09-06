@@ -14,7 +14,7 @@ import {
   planAllows,
   resolveStoreSettings,
 } from "@/lib/settings/registry";
-import { effectivePlan } from "@/lib/plans";
+import { effectivePlan, NO_COMP } from "@/lib/plans";
 import { canRequirePrepaid } from "@/lib/fulfilment/payment-policy";
 import { getStoreGateway } from "@/lib/payments/provider";
 import { limitsFor } from "@/lib/plans";
@@ -51,6 +51,8 @@ async function readStoreRow(storeId: string) {
         settings: stores.settings,
         plan: stores.plan,
         plan_expires_at: stores.planExpiresAt,
+        comp_plan: stores.compPlan,
+        comp_expires_at: stores.compExpiresAt,
       })
       .from(stores)
       .where(eq(stores.id, storeId))
@@ -89,7 +91,7 @@ export async function getStoreSettingsForEditor(group?: string): Promise<{
     store = undefined;
   }
 
-  const plan = effectivePlan(store ?? {});
+  const plan = effectivePlan(store ?? NO_COMP);
   const values = resolveStoreSettings(
     (store?.settings as Record<string, unknown>) ?? {},
     plan,

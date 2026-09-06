@@ -111,6 +111,8 @@ async function checkStockChanges(
         settings: stores.settings,
         plan: stores.plan,
         planExpiresAt: stores.planExpiresAt,
+        compPlan: stores.compPlan,
+        compExpiresAt: stores.compExpiresAt,
       })
       .from(stores)
       .where(eq(stores.id, storeId))
@@ -121,7 +123,12 @@ async function checkStockChanges(
   const storeDefault = Number(
     resolveStoreSettings(
       store.settings as Record<string, unknown> | null,
-      effectivePlan({ plan: store.plan, plan_expires_at: store.planExpiresAt }),
+      effectivePlan({
+        plan: store.plan,
+        plan_expires_at: store.planExpiresAt,
+        comp_plan: store.compPlan,
+        comp_expires_at: store.compExpiresAt,
+      }),
     )["inventory.lowStockThreshold"],
   );
 

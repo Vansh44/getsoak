@@ -9,6 +9,8 @@ import {
   limitsFor,
   EXPIRY_WARN_DAYS,
   expiryWarnWindow,
+  compActive,
+  NO_COMP,
 } from "./plans";
 
 describe("normalizePlan", () => {
@@ -30,16 +32,34 @@ describe("effectivePlan (timed plans)", () => {
   const now = new Date("2026-07-11T12:00:00.000Z");
 
   it("no expiry = the stored plan, indefinitely", () => {
-    expect(effectivePlan({ plan: "pro", plan_expires_at: null }, now)).toBe(
-      "pro",
-    );
-    expect(effectivePlan({ plan: "basic" }, now)).toBe("basic");
+    expect(
+      effectivePlan(
+        {
+          plan: "pro",
+          plan_expires_at: null,
+          comp_plan: null,
+          comp_expires_at: null,
+        },
+        now,
+      ),
+    ).toBe("pro");
+    expect(
+      effectivePlan(
+        { plan: "basic", comp_plan: null, comp_expires_at: null },
+        now,
+      ),
+    ).toBe("basic");
   });
 
   it("a future expiry keeps the plan", () => {
     expect(
       effectivePlan(
-        { plan: "pro", plan_expires_at: "2026-08-01T00:00:00.000Z" },
+        {
+          plan: "pro",
+          plan_expires_at: "2026-08-01T00:00:00.000Z",
+          comp_plan: null,
+          comp_expires_at: null,
+        },
         now,
       ),
     ).toBe("pro");
@@ -48,7 +68,12 @@ describe("effectivePlan (timed plans)", () => {
   it("a past expiry lapses to free", () => {
     expect(
       effectivePlan(
-        { plan: "pro", plan_expires_at: "2026-07-01T00:00:00.000Z" },
+        {
+          plan: "pro",
+          plan_expires_at: "2026-07-01T00:00:00.000Z",
+          comp_plan: null,
+          comp_expires_at: null,
+        },
         now,
       ),
     ).toBe("free");
@@ -57,7 +82,12 @@ describe("effectivePlan (timed plans)", () => {
   it("expiry exactly now counts as expired", () => {
     expect(
       effectivePlan(
-        { plan: "basic", plan_expires_at: "2026-07-11T12:00:00.000Z" },
+        {
+          plan: "basic",
+          plan_expires_at: "2026-07-11T12:00:00.000Z",
+          comp_plan: null,
+          comp_expires_at: null,
+        },
         now,
       ),
     ).toBe("free");
@@ -66,7 +96,12 @@ describe("effectivePlan (timed plans)", () => {
   it("accepts Date objects", () => {
     expect(
       effectivePlan(
-        { plan: "basic", plan_expires_at: new Date("2027-01-01") },
+        {
+          plan: "basic",
+          plan_expires_at: new Date("2027-01-01"),
+          comp_plan: null,
+          comp_expires_at: null,
+        },
         now,
       ),
     ).toBe("basic");
@@ -74,23 +109,184 @@ describe("effectivePlan (timed plans)", () => {
 
   it("an unparseable expiry fails open (treated as indefinite)", () => {
     expect(
-      effectivePlan({ plan: "pro", plan_expires_at: "not-a-date" }, now),
+      effectivePlan(
+        {
+          plan: "pro",
+          plan_expires_at: "not-a-date",
+          comp_plan: null,
+          comp_expires_at: null,
+        },
+        now,
+      ),
     ).toBe("pro");
   });
 
   it("normalizes legacy plan ids before checking expiry", () => {
     expect(
       effectivePlan(
-        { plan: "starter", plan_expires_at: "2027-01-01T00:00:00.000Z" },
+        {
+          plan: "starter",
+          plan_expires_at: "2027-01-01T00:00:00.000Z",
+          comp_plan: null,
+          comp_expires_at: null,
+        },
         now,
       ),
     ).toBe("basic");
     expect(
       effectivePlan(
-        { plan: "starter", plan_expires_at: "2026-01-01T00:00:00.000Z" },
+        {
+          plan: "starter",
+          plan_expires_at: "2026-01-01T00:00:00.000Z",
+          comp_plan: null,
+          comp_expires_at: null,
+        },
         now,
       ),
     ).toBe("free");
+  });
+});
+
+describe("effectivePlan — the comped-plan OVERLAY", () => {
+  // docs/comped-plans-spec.md. The scenario the design exists for: a store on
+  // paid Basic to 10 Sept, handed one free month of Pro on 6 Sept.
+  const now = new Date("2026-09-06T12:00:00.000Z");
+  const paidBasic = {
+    plan: "basic",
+    plan_expires_at: "2026-09-10T00:00:00.000Z",
+  };
+
+  it("raises to the comped plan while the window is open", () => {
+    expect(
+      effectivePlan(
+        {
+          ...paidBasic,
+          comp_plan: "pro",
+          comp_expires_at: "2026-10-06T12:00:00.000Z",
+        },
+        now,
+      ),
+    ).toBe("pro");
+  });
+
+  it("★★ FALLS BACK TO THE PAID PLAN WHEN THE COMP ENDS — never to free", () => {
+    // THE regression the whole overlay exists to prevent (spec §3.2). The naive
+    // design wrote the comp into stores.plan/plan_expires_at, and
+    // /api/cron/plan-expiry then flipped any expired non-free plan to
+    // `free, null` without ever consulting billing_subscriptions — so a merchant
+    // who was PAYING for Basic throughout landed on Free.
+    const afterComp = new Date("2026-10-07T00:00:00.000Z");
+    expect(
+      effectivePlan(
+        {
+          plan: "basic",
+          // Their subscription renewed on 10 Sept and again on 10 Oct.
+          plan_expires_at: "2026-11-10T00:00:00.000Z",
+          comp_plan: "pro",
+          comp_expires_at: "2026-10-06T12:00:00.000Z",
+        },
+        afterComp,
+      ),
+    ).toBe("basic");
+  });
+
+  it("a comp at or below the paid rank is inert", () => {
+    // A gift must never quietly demote someone. Pro subscriber, comped Basic.
+    expect(
+      effectivePlan(
+        {
+          plan: "pro",
+          plan_expires_at: "2026-12-01T00:00:00.000Z",
+          comp_plan: "basic",
+          comp_expires_at: "2026-10-06T00:00:00.000Z",
+        },
+        now,
+      ),
+    ).toBe("pro");
+  });
+
+  it("lifts a FREE store for the window, then drops it back", () => {
+    const store = {
+      plan: "free",
+      plan_expires_at: null,
+      comp_plan: "pro",
+      comp_expires_at: "2026-10-06T00:00:00.000Z",
+    };
+    expect(effectivePlan(store, now)).toBe("pro");
+    expect(effectivePlan(store, new Date("2026-10-07T00:00:00.000Z"))).toBe(
+      "free",
+    );
+  });
+
+  it("★ ignores a comp with no window — fail CLOSED", () => {
+    // The asymmetry is deliberate: junk must never manufacture an entitlement
+    // nobody granted, where junk on the PAID side must never strip a payer.
+    expect(
+      effectivePlan(
+        { ...paidBasic, comp_plan: "pro", comp_expires_at: null },
+        now,
+      ),
+    ).toBe("basic");
+    expect(
+      effectivePlan(
+        { ...paidBasic, comp_plan: "pro", comp_expires_at: "not-a-date" },
+        now,
+      ),
+    ).toBe("basic");
+  });
+
+  it("★ an unparseable PAID expiry is still indefinite — fail OPEN", () => {
+    expect(
+      effectivePlan(
+        {
+          plan: "pro",
+          plan_expires_at: "not-a-date",
+          comp_plan: null,
+          comp_expires_at: null,
+        },
+        now,
+      ),
+    ).toBe("pro");
+  });
+
+  it("the window is half-open: expiry instant is already over", () => {
+    expect(
+      effectivePlan(
+        {
+          plan: "free",
+          plan_expires_at: null,
+          comp_plan: "pro",
+          comp_expires_at: now.toISOString(),
+        },
+        now,
+      ),
+    ).toBe("free");
+  });
+
+  it("★ INVARIANT 1 — a store with no comp is unchanged", () => {
+    // Every existing store is this case. If it ever diverges, the overlay has
+    // stopped being additive.
+    expect(effectivePlan({ ...paidBasic, ...NO_COMP }, now)).toBe("basic");
+    expect(
+      effectivePlan(
+        { ...paidBasic, ...NO_COMP },
+        new Date("2026-09-11T00:00:00.000Z"),
+      ),
+    ).toBe("free");
+  });
+
+  it("compActive names the overlay for UI that must say so out loud", () => {
+    expect(
+      compActive(
+        {
+          ...paidBasic,
+          comp_plan: "pro",
+          comp_expires_at: "2026-10-06T00:00:00.000Z",
+        },
+        now,
+      ),
+    ).toBe(true);
+    expect(compActive({ ...paidBasic, ...NO_COMP }, now)).toBe(false);
   });
 });
 

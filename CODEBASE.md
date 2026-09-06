@@ -1625,14 +1625,21 @@ wholesip/
 │                              # missing/draft/empty guide drift is repaired before publication.
 │                              # It follows the 0049/0050 UX migrations.
 ├── scripts/
-│   ├── dev-server.mjs         # Next dev runner: V8 old-space cap of 2 GB on ≤12 GB
-│   │                          # RAM, 3 GB on ≤20 GB; native memory is NOT capped.
-│   │                          # Webpack default on ≤12 GB RAM; Turbopack above;
-│   │                          # honors explicit --webpack/--turbopack/--turbo.
-│   │                          # Preserves caches; DEV_CACHE_MAX_MB enables opt-in
-│   │                          # .next/dev rotation, dev:reset resets it manually.
-│   │                          # Warns about existing swap without diagnosing paging;
-│   │                          # best-effort Spotlight markers and signal forwarding.
+│   ├── dev-server.mjs         # ★ resource-aware Next dev runner: 2 GB heap on ≤12 GB
+│   │                          # machines, 3 GB on ≤20 GB, uncapped above; rotates
+│   │                          # generated .next/dev caches over 3 GB, ALWAYS reclaims
+│   │                          # .next/cache over 256 MB (next build's webpack cache —
+│   │                          # Turbopack dev never reads it, so dropping it is a free
+│   │                          # reclaim, not a speed trade); warns when swap is ≥60%
+│   │                          # full BEFORE starting; drops a `.metadata_never_index`
+│   │                          # marker in .next/node_modules/coverage on every start
+│   │                          # (they are gitignored AND wiped by dev:reset / npm ci,
+│   │                          # so a one-time marker silently disappears); signal-safe.
+│   │                          # ⚠ The heap cap bounds V8's old space ONLY — Turbopack
+│   │                          # is Rust, so its module graph and source maps are native
+│   │                          # allocations outside it. Measured on M2/8 GB: 90 MB at
+│   │                          # boot → 1.77 GB after eight routes, cap never binding.
+│   │                          # Restarting the server is what reclaims memory, not the cap
 │   ├── db-migrate.mjs         # ★ status/baseline/apply/verify + recovery-only audit/adopt
 │   │                          # runner: physical DB guard, advisory lock, one transaction
 │   │                          # per migration, checksum drift/unknown-row refusal, and
@@ -7502,6 +7509,38 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       `toast.info` carrying the server's own wording (money may have moved —
       §26's rule), and `autopay: false` is stated plainly whenever no mandate was
       captured, because assuming otherwise becomes a downgrade next cycle.
+    - **★★ AND THAT BILLING-CONTACT GATE REFUSED EVERY MERCHANT ON THE PLATFORM**
+      (found in prod 2026-09-06). Razorpay's recurring endpoint needs BOTH an
+      email and a phone, so `ensureRzpCustomer` refuses without them — correctly.
+      But its only phone source was `admins.phone`, and **`createStore` never
+      wrote that column**: the wizard OTP-verifies a number, then put it in
+      `store_billing_settings.contact_phone` and nowhere else. So every
+      wizard-created store answered Subscribe with "We couldn't prepare autopay"
+      forever, **before a single Razorpay call was made** — nothing in the logs
+      from the gateway, nothing to see in the Razorpay dashboard, and the message
+      pointed at a phone number the merchant had already given us. Measured on
+      production: 2 of 3 superadmins had `phone IS NULL`, both with a perfectly
+      good verified number one table away. The platform could not sell anything.
+      - **★ FIXED AT BOTH ENDS, and only one of them fixes the stores that
+        already exist.** `createStore` now writes `user.phone` onto the admin row
+        (it runs only after the `phoneConfirmed` gate, so it is exactly what
+        `setVerifiedPhone` would store), and `resolveBillingEmail` falls back to
+        `store_billing_settings.contact_phone`. The signup write is the correct
+        record; the fallback is what unblocks everyone created before it.
+      - **★ THE FALLBACK IS VALIDATED, THE OWNER'S IS NOT.** `admins.phone` came
+        from a verified Identity Platform identity; the invoice contact is free
+        text typed on Taxes & invoices and may be a landline or a placeholder, so
+        it passes through `formatIndianMobile` (§35's one normaliser). A mandate
+        whose pre-debit notice reaches nobody is worse than a refusal.
+      - **★ NO BACKFILL, deliberately.** Copying a business contact number into
+        `admins.phone` would contradict that column's contract — `setVerifiedPhone`
+        accepts only a number the auth identity has verified — so the existing
+        rows are served by the fallback and stay honest about what was verified.
+      - **★ THE REFUSAL NOW NAMES ITS CAUSE.** `ensureRzpCustomer` returns
+        `missing-contact` or `gateway` instead of a bare null, because "add your
+        billing email and mobile under Settings → Taxes & invoices" is a minute's
+        work and a gateway outage is not — telling a merchant to go and re-edit a
+        phone number that is already correct wastes their time and hides ours.
     - **★★ `OpenInvoices` REMAINS FIRST-CLASS.** Automatic collection handles
       only eligible active mandates below both ceilings; no mandate, yearly/AFA,
       a revoked mandate or an incident rollback still needs manual payment. It
@@ -7858,6 +7897,112 @@ way — an entry there is a deliberate act, not a way to silence the guard.
         what makes "exactly one" true. ⚠ That claim also fixed a quieter bug:
         `paid_at` used to be rewritten on every later sync, so a second attempt
         settling days afterwards moved the timestamp on an already-paid invoice.
+      - **★★ A COMPED PLAN IS AN ENTITLEMENT OVERLAY, NEVER A BILLING OPERATION**
+        (spec: `docs/comped-plans-spec.md`; migration
+        `20260906_0077_comped_plan_overlay`). Giving a store a free month of Pro
+        must not disturb the Basic it already pays for, and the obvious design —
+        flip the plan, start a cycle, raise a ₹0 invoice — fails three ways. A ₹0
+        subscription invoice is UNPAYABLE (`manual-pay.ts` refuses a non-positive
+        amount due; Razorpay rejects ₹0 orders) so it sits open until the
+        downgrade claim fires. `/api/cron/plan-expiry` flips any expired non-free
+        plan to free WITHOUT consulting `billing_subscriptions`, so the comp
+        lapsing drops a live paid subscriber to Free. And writing a cycle puts the
+        expiry cron and the renewal worker both in charge of `stores.plan`.
+      - **★ `stores.plan_expires_at` IS ALREADY OVERLOADED** — grant end for a
+        comp, CYCLE end for a paid plan (`enrol.ts` sets it to the cycle end on
+        every activation) — which is why a comp needs its own columns. `stores`
+        gains `comp_plan`, `comp_duration_days`, `comp_offered_at`,
+        `comp_starts_at` and `comp_expires_at`, and `effectivePlan` returns the
+        higher-ranked of the paid entitlement and an active comp. **★★ THAT MAKES
+        EXPIRY FREE:** nothing writes the comp into `plan`, so when the window
+        closes the paid entitlement underneath is what remains — no "put them back
+        on Basic" step to forget.
+      - **★ GRANT AND WINDOW ARE SEPARATE.** The operator sets the duration; the
+        merchant's acceptance sets the window, so a free month counts from the day
+        it is taken up. `app/actions/comp-plan-actions.ts`: `offerCompPlan`
+        (superadmin, duration only), `withdrawCompOffer` (unaccepted offers only —
+        there is no mid-window revocation), and **`activateCompPlan()`, which
+        TAKES NO ARGUMENTS** — plan, duration and both timestamps come from the
+        stored grant or the DATABASE clock, because an action shaped
+        `activateComp(plan)` lets a merchant post "pro" and self-grant (the
+        `confirmLocationPurchase` rule). One conditional claim on a null
+        `comp_starts_at` makes a double-click and a withdrawn offer report rather
+        than repeat.
+      - **★ COLLECTION CONTINUES DURING A COMP.** It is a free upgrade, not a
+        payment holiday: the merchant keeps paying their own subscription, and the
+        offer copy says so. A comp only ever RAISES — one at or below the paid
+        rank is inert. Junk on the comp side fails CLOSED; junk on the paid side
+        fails OPEN.
+      - **★★ THE COMP FIELDS ARE REQUIRED ON `PlanEntitlement`.** 18 of
+        `effectivePlan`'s 40 call sites pass an object literal or an empty-object
+        fallback; optional fields would let every one silently ignore a comp —
+        merchant told Pro, gets Basic, no error anywhere. Requiring them turned
+        that into one build error per site (the `OrderInsert` technique).
+        `NO_COMP` is the explicit "I checked, there isn't one".
+      - **★ THE FALL-BACK NOTICE IS ITS OWN EVENT.** `store.comp_ended` (both
+        channels, not configurable) fires from the sweep and names the plan they
+        LAND ON, which for a paying merchant is the plan they were paying all
+        along — reusing `plan.changed` would tell a Basic subscriber they had been
+        downgraded. ⚠ Postgres RETURNING yields the row AFTER the update, so the
+        plan that ENDED cannot be read from it: the sweep is one raw UPDATE with a
+        `FROM stores old` self-join supplying the pre-update snapshot. Still a
+        single conditional claim, so a concurrent run cannot double-notify.
+      - **⚠ NO `comp_note` OR `comp_granted_by` COLUMN:** the "Read stores" policy
+        grants SELECT to `public`, so who comped a store and why lives in
+        `plan_events` (service-role only), audited with an `operator` source — NOT
+        `comp`, which belongs to `stores.plan_source` and is rejected by that CHECK
+        (§15). **✅ BACKFILL AND EXEMPTION DONE (2026-09-06).** The one live
+        grant was moved into the overlay by `docs/comped-plans-backfill.sql` —
+        one production row, guarded, with a plpgsql assertion that aborts the
+        transaction unless the entitlement is provably unchanged at three
+        instants. Only that one row needed it: `plan_source` DEFAULTS to `comp`,
+        so all four stores read as comped while only `wholesip` (an indefinite
+        grant with no subscription, deliberately left alone — the overlay is
+        time-boxed by constraint) and `echos` were real.
+      - **★★ THE COMP EXEMPTION IS GONE FROM COLLECTION** (migration
+        `20260906_0078_drop_subscription_comp_exemption`). A subscription's own
+        `plan_source = 'comp'` no longer means "do not bill": the plan underneath
+        a comp is real and must still be collected, or a gift becomes a silent
+        payment holiday. ★ It was also a latent trap —
+        `billing_subscriptions.plan_source` DEFAULTS to `comp` and only becomes
+        `paid` at activation, so a half-enrolled row was permanently
+        uninvoiceable AND undowngradeable with nothing reporting it. ★★ ALL FOUR
+        SITES MOVED TOGETHER: three Drizzle predicates in `renewal-worker.ts`
+        plus the one inside `billing_claim_downgrade()`. Removing only the
+        TypeScript ones would be worse than none — a comped subscription would be
+        invoiced, chased through grace, selected for downgrade, then silently
+        refused at the atomic claim. ⚠ Verified inert first: no subscription in
+        either database had `plan_source = 'comp'`.
+      - **★★ FINALIZE BEFORE SETTLING, OR A PAID INVOICE STAYS UNPAID** (fixed
+        2026-09-06; `enrol.ts`, `plan-change.ts`, `locations.ts`). All three
+        confirm paths called `settleAttempt(captured)` and only THEN
+        `finalizeInvoice`. But `syncInvoiceStatus` claims the move to paid with
+        `inArray(status, ["open","processing"])`, and an unfinalized invoice is
+        `draft` — in NEITHER list. So the claim matched zero rows: the attempt
+        went `captured`, the invoice stayed unpaid, `paid_at` stayed null and NO
+        receipt was sent. `finalizeInvoice` then set `status: "open"`, leaving an
+        OPEN invoice behind a CAPTURED payment — phantom debt that dunning chases
+        and the downgrade clock runs against. ⚠ The ordering was doubly wrong:
+        `finalizeInvoice` sets `status: "open"` unconditionally (guarded only on a
+        null `finalized_at`), so even a successful paid claim would have been
+        clobbered back to open. MEASURED ON PRODUCTION: store `echos` paid its ₹15
+        cycle-1 invoice on 2026-08-16 16:50:11Z (attempt captured) and the
+        invoice's `paid_at` was 2026-09-05 21:15:41Z — a lag of 20 days 4 hours.
+        It settled only because the merchant clicked "Pay now" on a bill they did
+        not owe: that created a second attempt, and `syncInvoiceStatus` recomputed
+        over the OLD captured one. The same click fired the receipt, so they got
+        "Payment received" for a payment they then CANCELLED — and had they
+        completed it, they would have paid twice. Finalizing first does not weaken
+        "a number is spent only on an invoice that was really paid": the checkout
+        signature and `verifyCapturedCheckoutPayment` both pass above it. Pinned
+        in all three suites by an `invocationCallOrder` assertion.
+      - **★★ A ZERO-ROW PAID CLAIM IS NOW LOUD.** The bug above survived because
+        `syncInvoiceStatus` could not tell "another settle won" (benign) from "the
+        invoice is in a status this claim cannot reach" (money taken, bill still
+        open). There was no log and no failed request — the only trace was a null
+        `paid_at` beside a captured attempt. It now re-reads the row on a missed
+        paid claim and logs `billing.invoice_paid_claim_missed` unless the invoice
+        is already paid.
       - **★ A CREDIT PURCHASE GETS NO SUBSCRIPTION RECEIPT.** A mail reading
         "your Pro plan is active" for a ₹59 credit pack is wrong; credits have
         their own confirmation (`ai.credits_purchased`).
@@ -9118,25 +9263,14 @@ way — an entry there is a deliberate act, not a way to silence the guard.
 
 ## 6. Commands
 
-> **Dev feels slow?** See `docs/local-dev-performance.md`. September's saved
-> trace contains 60 s login compilation and 43 s builder compilation: August's
-> fast timings must not be treated as a permanent diagnosis. The 8 GB Mac also
-> showed 6.4 GB swap used and 3.3 GB compressed RAM. Check current memory pressure
-> and separate compile time from render/database time. The runner limits V8's
-> old space, not total process memory. Warm caches are preserved by default;
-> `DEV_CACHE_MAX_MB` opts into size-based dev-cache rotation, and `dev:reset` is
-> for cache recovery, not routine speed tuning. `dev:all:webpack` provides an
-> explicit Webpack command with the same proxy and V8 heap policy. On ≤12 GB
-> RAM the runner now selects Webpack automatically; `dev:all:turbo` opts back in
-> to Turbopack. Development-only Webpack configuration limits parallel module
-> processing to 8 per compiler on ≤12 GB RAM (32 above; override through
-> `DEV_WEBPACK_PARALLELISM`) and disables output path comments. On ≤12 GB,
-> on-demand entries retain two recent pages with a 25 s inactivity threshold.
-> Next's source maps, loaders, chunking and caches are preserved. Production
-> config has no custom Webpack callback. See the performance doc for sources
-> and measured results; this is a memory/throughput tradeoff, not a RAM ceiling.
-> This is internal development tooling; customer flows and Help Centre content
-> are unchanged.
+> **Dev feels slow?** Read `docs/local-dev-performance.md` before tuning.
+> The runner preserves warm caches, chooses Webpack on ≤12 GB machines and
+> Turbopack above, and caps V8 old space at 2 GB / 3 GB on ≤12 GB / ≤20 GB.
+> Native allocations are outside that cap. Cache rotation is opt-in through
+> `DEV_CACHE_MAX_MB`; `.next/cache` is never automatically deleted. Swap warnings
+> are advisory: use current memory pressure and request compile/render timings.
+> Explicit `--no-fs-cache` / `--fs-cache` flags (or `DEV_FS_CACHE=0` / `1`)
+> control Turbopack's persistent cache without deleting files; defaults preserve it.
 
 ```bash
 npm run dev         # Webpack on ≤12 GB RAM, Turbopack above; 2 GB heap on ≤12 GB,
@@ -9148,6 +9282,8 @@ npm run dev:all:turbo # explicit Turbopack + Cloud SQL proxy
 npm run dev:lean    # force the 2 GB heap regardless of detected machine memory
 npm run dev:full    # explicitly disable the heap cap (for high-memory machines/debugging)
 npm run dev:reset   # delete generated .next/dev only; next launch recompiles cold once
+npm run dev -- --fs-cache     # force Turbopack's dev filesystem cache ON  (DEV_FS_CACHE=1)
+npm run dev -- --no-fs-cache  # force it OFF (DEV_FS_CACHE=0); default preserves cache
 npm run dev:all     # ↑ dev + the Cloud SQL Auth Proxy together (concurrently) — one command
 npm run dev:all:lean # ↑ force the 2 GB heap + proxy (normally identical on this 8 GB Mac)
 npm run dev:all:full # ↑ uncapped dev + proxy

@@ -8,6 +8,7 @@ import { sendEmail } from "./send";
 import type { StoreBrand } from "@/lib/store/brand";
 import { withService } from "@/lib/db/client";
 import { admins, storeBillingSettings, stores } from "@/drizzle/schema";
+import { formatIndianMobile } from "@/lib/phone";
 
 // Transactional BILLING emails. These come from the platform (StoreMink), not
 // the merchant's store brand — a plan receipt / renewal / dunning notice is
@@ -280,8 +281,32 @@ export interface BillingRecipient {
   slug: string;
 }
 
-/** The billing contact for a store: its owner (superadmin) admin email, else
- *  the invoice contact email. Null when neither is set. */
+/**
+ * The billing contact for a store: its owner (superadmin) admin email, else
+ * the invoice contact email. Null when neither is set.
+ *
+ * ★★ THE PHONE HAS TWO SOURCES, AND READING ONLY THE FIRST BLOCKED EVERY
+ * SUBSCRIPTION. `startEnrolment` refuses before Checkout unless it has BOTH an
+ * email and a phone (Razorpay's subsequent-charge endpoint needs both), and the
+ * only source here was `admins.phone` — which the signup wizard NEVER WROTE.
+ * The owner OTP-verifies a number during signup and `createStore` put it in
+ * `store_billing_settings.contact_phone` only, so every wizard-created store had
+ * `admins.phone = NULL` and answered Subscribe with "We couldn't prepare
+ * autopay" forever, without a single Razorpay call being made. Measured on
+ * production 2026-09-06: 2 of 3 superadmins had no phone, both with a perfectly
+ * good verified number sitting one table away.
+ *
+ * `createStore` now records the verified number on the admin row too, but the
+ * fallback is what fixes the stores that already exist — and the invoice contact
+ * phone is the store's OWN stated billing contact, which is exactly the right
+ * number for a pre-debit notification.
+ *
+ * ★ The fallback is VALIDATED (`formatIndianMobile`), the owner's is not: an
+ * `admins.phone` was written from a verified Identity Platform identity, while
+ * the invoice contact is free text a merchant typed on Taxes & invoices and may
+ * be a landline or a placeholder. Handing Razorpay one of those registers a
+ * mandate whose pre-debit notice reaches nobody.
+ */
 export async function resolveBillingEmail(
   storeId: string,
 ): Promise<BillingRecipient | null> {
@@ -289,9 +314,10 @@ export async function resolveBillingEmail(
   let ownerEmail: string | null = null;
   let ownerPhone: string | null = null;
   let billingEmail: string | null = null;
+  let billingPhone: string | null = null;
   try {
-    ({ store, ownerEmail, ownerPhone, billingEmail } = await withService(
-      async (db) => {
+    ({ store, ownerEmail, ownerPhone, billingEmail, billingPhone } =
+      await withService(async (db) => {
         const [storeRows, ownerRows, billingRows] = await Promise.all([
           db
             .select({ name: stores.name, slug: stores.slug })
@@ -310,7 +336,10 @@ export async function resolveBillingEmail(
             )
             .limit(1),
           db
-            .select({ contact_email: storeBillingSettings.contactEmail })
+            .select({
+              contact_email: storeBillingSettings.contactEmail,
+              contact_phone: storeBillingSettings.contactPhone,
+            })
             .from(storeBillingSettings)
             .where(eq(storeBillingSettings.storeId, storeId))
             .limit(1),
@@ -320,9 +349,9 @@ export async function resolveBillingEmail(
           ownerEmail: ownerRows[0]?.email ?? null,
           ownerPhone: ownerRows[0]?.phone ?? null,
           billingEmail: billingRows[0]?.contact_email ?? null,
+          billingPhone: billingRows[0]?.contact_phone ?? null,
         };
-      },
-    ));
+      }));
   } catch (err) {
     console.error(
       "resolveBillingEmail:",
@@ -333,9 +362,13 @@ export async function resolveBillingEmail(
 
   const email = ownerEmail || billingEmail || null;
   if (!email) return null;
+  // The owner's own verified number belongs to the owner's email; pairing it
+  // with an invoice contact email would mix two identities. The store's stated
+  // invoice contact phone pairs with either.
+  const verifiedOwnerPhone = ownerEmail === email ? ownerPhone : null;
   return {
     email,
-    phone: ownerEmail === email ? ownerPhone : null,
+    phone: verifiedOwnerPhone || formatIndianMobile(billingPhone),
     storeName: store?.name || "Your store",
     slug: store?.slug || "",
   };
