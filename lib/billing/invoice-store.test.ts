@@ -37,6 +37,7 @@ import {
   finalizePaidAiCreditsInvoice,
   getInvoice,
   loadTaxContext,
+  reshapeDraftSubscriptionInvoice,
 } from "./invoice-store";
 import { buildSubscriptionInvoice, type TaxContext } from "./invoice";
 
@@ -223,6 +224,154 @@ describe("ensureRenewalInvoice", () => {
   it("★ never throws into a caller mid-collection; logs and returns null", async () => {
     brokenDb();
     expect(await ensureRenewalInvoice(args)).toBeNull();
+    expect(logError).toHaveBeenCalled();
+  });
+});
+
+describe("reshapeDraftSubscriptionInvoice", () => {
+  const BUILT = {
+    lines: [
+      {
+        kind: "base_plan" as const,
+        description: "Pro plan — yearly",
+        quantity: 1,
+        unitAmountPaise: 24_000_00,
+        amountPaise: 24_000_00,
+      },
+    ],
+    subtotalPaise: 24_000_00,
+    discountPaise: 0,
+    taxPaise: 0,
+    totalPaise: 24_000_00,
+    taxRateBps: 0,
+    gst: { intraState: true, cgstPaise: 0, sgstPaise: 0, igstPaise: 0 },
+  };
+
+  const input = {
+    invoiceId: INVOICE,
+    storeId: STORE,
+    periodStart: new Date("2026-09-06T00:00:00.000Z"),
+    periodEnd: new Date("2027-09-06T00:00:00.000Z"),
+    built: BUILT,
+  };
+
+  it("rewrites an unpaid draft to the new shape", async () => {
+    seed({
+      selects: [
+        [{ id: INVOICE, status: "draft", finalizedAt: null, paidAt: null }],
+        [{ ...INVOICE_ROW, totalPaise: 24_000_00 }],
+      ],
+    });
+    const row = await reshapeDraftSubscriptionInvoice(input);
+    expect(row?.totalPaise).toBe(24_000_00);
+    // Old lines go, new lines land — a merged set would double the plan line.
+    expect(dbHolder.current.calls.delete.length).toBe(1);
+  });
+
+  it("★★ REFUSES a finalized invoice — that is a document, not a choice", async () => {
+    // Finalizing allocates a number in the gapless GST series, so the document
+    // has been issued. Rewriting one is not a draft edit; the database's own
+    // immutability trigger would refuse it too.
+    seed({
+      selects: [
+        [
+          {
+            id: INVOICE,
+            status: "open",
+            finalizedAt: "2026-09-06T00:00:00.000Z",
+            paidAt: null,
+          },
+        ],
+      ],
+    });
+    expect(await reshapeDraftSubscriptionInvoice(input)).toBeNull();
+    expect(dbHolder.current.calls.delete.length).toBe(0);
+  });
+
+  it("★★ REFUSES a paid invoice", async () => {
+    // Money has moved against this amount. Changing it afterwards would leave
+    // the payment settling an obligation that no longer exists.
+    seed({
+      selects: [
+        [
+          {
+            id: INVOICE,
+            status: "paid",
+            finalizedAt: "2026-09-06T00:00:00.000Z",
+            paidAt: "2026-09-06T00:10:00.000Z",
+          },
+        ],
+      ],
+    });
+    expect(await reshapeDraftSubscriptionInvoice(input)).toBeNull();
+  });
+
+  it("★★ REFUSES an open (issued) invoice even before it is paid", async () => {
+    // Isolates the status guard. `finalizeInvoice` moves draft → open and
+    // allocates the number, so an `open` invoice has been issued and may
+    // already be sitting on the merchant's Plans page as a payable bill.
+    seed({
+      selects: [
+        [{ id: INVOICE, status: "open", finalizedAt: null, paidAt: null }],
+      ],
+    });
+    expect(await reshapeDraftSubscriptionInvoice(input)).toBeNull();
+    expect(dbHolder.current.calls.delete.length).toBe(0);
+  });
+
+  it("★★ REFUSES a draft that is already marked paid", async () => {
+    // Isolates the `paid_at` guard. Money has moved against this amount, so
+    // rewriting it would leave the payment settling an obligation that no
+    // longer exists — regardless of what the status column says.
+    seed({
+      selects: [
+        [
+          {
+            id: INVOICE,
+            status: "draft",
+            finalizedAt: null,
+            paidAt: "2026-09-06T00:10:00.000Z",
+          },
+        ],
+      ],
+    });
+    expect(await reshapeDraftSubscriptionInvoice(input)).toBeNull();
+    expect(dbHolder.current.calls.delete.length).toBe(0);
+  });
+
+  it("★★ REFUSES a draft that has already been finalized", async () => {
+    // Isolates the `finalized_at` guard from the status one. They are not the
+    // same check: finalizing allocates the GST number, and that is what the
+    // database's own immutability trigger keys off — so a row that is somehow
+    // draft AND finalized must still be refused here.
+    seed({
+      selects: [
+        [
+          {
+            id: INVOICE,
+            status: "draft",
+            finalizedAt: "2026-09-06T00:00:00.000Z",
+            paidAt: null,
+          },
+        ],
+      ],
+    });
+    expect(await reshapeDraftSubscriptionInvoice(input)).toBeNull();
+    expect(dbHolder.current.calls.delete.length).toBe(0);
+  });
+
+  it("finds nothing for an invoice belonging to another store", async () => {
+    // ⚠ The store predicate is argued, not pinned: the db mock does not
+    // evaluate WHERE clauses, so this proves only that an empty read is handled.
+    // The scope itself is read in the source — an invoice id alone must never
+    // let one merchant rewrite another's document.
+    seed({ selects: [[]] });
+    expect(await reshapeDraftSubscriptionInvoice(input)).toBeNull();
+  });
+
+  it("returns null rather than throwing when the database is down", async () => {
+    brokenDb();
+    expect(await reshapeDraftSubscriptionInvoice(input)).toBeNull();
     expect(logError).toHaveBeenCalled();
   });
 });

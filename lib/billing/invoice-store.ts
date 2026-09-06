@@ -38,6 +38,16 @@ export interface InvoiceRow {
   cycleSeq: number | null;
   invoiceRef: string | null;
   finalizedAt: string | null;
+  /**
+   * The cycle this invoice covers. Read by enrolment to tell a monthly first
+   * cycle from a yearly one when the two happen to cost the same.
+   *
+   * ⚠ Compare the DURATION, never the instants: a cycle is anchored to the
+   * moment it was raised, so two clicks a minute apart legitimately produce
+   * different endpoints for the very same plan.
+   */
+  periodStart: string | null;
+  periodEnd: string | null;
 }
 
 /**
@@ -295,6 +305,135 @@ export async function ensureRenewalInvoice(input: {
   }
 }
 
+/** The subscription invoice for one cycle, if it exists yet. */
+export async function getCycleInvoice(
+  storeId: string,
+  cycleSeq: number,
+): Promise<InvoiceRow | null> {
+  try {
+    return await withService(async (db) => {
+      const [row] = await selectInvoice(db).where(
+        and(
+          eq(billingInvoices.storeId, storeId),
+          eq(billingInvoices.kind, "subscription"),
+          eq(billingInvoices.cycleSeq, cycleSeq),
+        ),
+      );
+      return row ? toInvoiceRow(row) : null;
+    });
+  } catch (err) {
+    logError("billing.get_cycle_invoice", err, { storeId, cycleSeq });
+    return null;
+  }
+}
+
+/**
+ * Re-shape an UNPAID enrolment invoice to the plan and period now being bought.
+ *
+ * ★★ WHY THIS EXISTS. `ensureRenewalInvoice` is idempotent on
+ * (store, kind, cycle_seq), which is exactly right for a RENEWAL — one cycle,
+ * one obligation, however many workers race. It is wrong for an ENROLMENT,
+ * where cycle 1's invoice is raised the moment a merchant first opens the
+ * payment window and they are still free to change their mind. Without this,
+ * the first shape they ever picked is the one they are charged: choose Pro
+ * monthly, dismiss Checkout, come back and choose Pro YEARLY, and the ₹2,400
+ * monthly invoice is silently reused while `billing_subscriptions` records
+ * yearly — so paying ₹2,400 grants a full year (measured on production,
+ * 2026-09-06: a ₹21,600 shortfall), and the reverse overcharges by ₹21,600.
+ *
+ * ★ The database already permits this: both immutability guards return early
+ * while `finalized_at IS NULL`, because lines are deliberately written before
+ * finalize. A draft carries no invoice number and has been sent to nobody, so
+ * rewriting one destroys no document and burns nothing in the GST series.
+ *
+ * ★ REFUSES anything that is not a plain unpaid draft — finalized, paid, void,
+ * uncollectible. Those are documents or debts, not a choice still being made.
+ * Returns null rather than throwing so the caller can carry on with what it
+ * already has instead of failing a sale over a shape mismatch.
+ */
+export async function reshapeDraftSubscriptionInvoice(input: {
+  invoiceId: string;
+  storeId: string;
+  periodStart: Date;
+  periodEnd: Date;
+  dueAt?: Date | null;
+  built: BuiltInvoice;
+}): Promise<InvoiceRow | null> {
+  try {
+    return await withService(async (db) => {
+      // Lock it: a confirm settling this invoice must not interleave with a
+      // rewrite of the amount it is settling.
+      const [current] = await db
+        .select({
+          id: billingInvoices.id,
+          status: billingInvoices.status,
+          finalizedAt: billingInvoices.finalizedAt,
+          paidAt: billingInvoices.paidAt,
+        })
+        .from(billingInvoices)
+        .where(
+          and(
+            eq(billingInvoices.id, input.invoiceId),
+            // Scoped by store as well: an invoice id alone must never let one
+            // merchant rewrite another's document.
+            eq(billingInvoices.storeId, input.storeId),
+          ),
+        )
+        .for("update")
+        .limit(1);
+
+      if (
+        !current ||
+        current.status !== "draft" ||
+        current.finalizedAt !== null ||
+        current.paidAt !== null
+      ) {
+        return null;
+      }
+
+      await db
+        .delete(billingInvoiceItems)
+        .where(eq(billingInvoiceItems.invoiceId, input.invoiceId));
+
+      const { built } = input;
+      if (built.lines.length > 0) {
+        await db.insert(billingInvoiceItems).values(
+          built.lines.map((line, i) => ({
+            invoiceId: input.invoiceId,
+            kind: line.kind,
+            description: line.description,
+            quantity: line.quantity,
+            unitAmountPaise: line.unitAmountPaise,
+            amountPaise: line.amountPaise,
+            sortOrder: i,
+          })),
+        );
+      }
+
+      await db
+        .update(billingInvoices)
+        .set({
+          subtotalPaise: built.subtotalPaise,
+          discountPaise: built.discountPaise,
+          taxPaise: built.taxPaise,
+          totalPaise: built.totalPaise,
+          taxRateBps: built.taxRateBps,
+          periodStart: input.periodStart.toISOString(),
+          periodEnd: input.periodEnd.toISOString(),
+          dueAt: input.dueAt?.toISOString() ?? null,
+        })
+        .where(eq(billingInvoices.id, input.invoiceId));
+
+      return readInvoice(db, input.invoiceId);
+    });
+  } catch (err) {
+    logError("billing.reshape_draft_invoice", err, {
+      invoiceId: input.invoiceId,
+    });
+    return null;
+  }
+}
+
 /**
  * A one-time AI credit purchase invoice.
  *
@@ -487,6 +626,8 @@ function selectInvoice(db: Db) {
       cycleSeq: billingInvoices.cycleSeq,
       invoiceRef: billingInvoices.invoiceRef,
       finalizedAt: billingInvoices.finalizedAt,
+      periodStart: billingInvoices.periodStart,
+      periodEnd: billingInvoices.periodEnd,
     })
     .from(billingInvoices);
 }
@@ -508,6 +649,8 @@ function toInvoiceRow(row: {
   cycleSeq: number | null;
   invoiceRef: string | null;
   finalizedAt: string | null;
+  periodStart?: string | null;
+  periodEnd?: string | null;
 }): InvoiceRow | null {
   if (
     row.kind !== "subscription" &&
@@ -516,7 +659,12 @@ function toInvoiceRow(row: {
   ) {
     return null;
   }
-  return { ...row, kind: row.kind };
+  return {
+    ...row,
+    kind: row.kind,
+    periodStart: row.periodStart ?? null,
+    periodEnd: row.periodEnd ?? null,
+  };
 }
 
 async function readInvoice(db: Db, id: string): Promise<InvoiceRow | null> {
