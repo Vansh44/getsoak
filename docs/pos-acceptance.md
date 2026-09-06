@@ -4002,6 +4002,29 @@ reopen the old broad result. Completion is private to the requesting admin.
 Cancel, refresh, worker restart and retries do not create duplicate runs or
 notifications. Use ECH-P8A-01–24 in the living prompt suite for merchant checks.
 
+## 11n. Mink Phase 8B recurring watch acceptance
+
+Use Echos, with Shop and Delhi. No real customer or inventory writes are needed
+to test watch controls. Deliberately changing fixture stock is a separate
+tester-authorized operation, never an automatic watch action.
+
+| Story                                | Expected acceptance                                                                                                                    |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| Ask “Keep an eye on stock at Delhi.” | Human setup link only; no watch until scope/schedule/quiet hours and consent are reviewed.                                             |
+| Enable all-location inventory watch  | Separate tracked-SKU low/out counts at Shop and Delhi. Cross-location stock cannot hide shortages.                                     |
+| Repeat same shortage                 | No repeated notification for unchanged per-location counts. Changes at one location can trigger one new alert.                         |
+| Unknown data                         | No healthy zeroes or invented recovery; source failure retries then pauses.                                                            |
+| Quiet hours                          | Collection continues; private alerts defer/coalesce, and detected recovery clears undelivered attention.                               |
+| Pause/delete during processing       | Cancels pending work and suppresses undelivered watch notifications; cannot retract an already delivered notice.                       |
+| Narrow admin to Shop                 | Old all-location evidence is unreadable; worker/alert delivery revalidates and pauses the old watch. No Delhi leakage.                 |
+| Revoke one required View permission  | Cannot create/resume or read broad results. Dashboard access still allows pause/delete.                                                |
+| Alert isolation                      | Only the creator receives a generic in-app notification; other admins and other tenants cannot read the watch.                         |
+| Check limits and duplicate clicks    | At most five per owner/twenty per store including paused, one check in flight, idempotent creation and no duplicate alert after retry. |
+
+Migration 0082 and the existing authenticated workflow heartbeat are required.
+These are deployment acceptance stories; unit tests do not establish live
+scheduler timing or model routing accuracy.
+
 ## 12. Known gaps
 
 Real and deliberate, so nobody files them as bugs:

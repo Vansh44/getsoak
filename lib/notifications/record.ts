@@ -201,11 +201,18 @@ function trim(value: string | null | undefined, max = 300): string | null {
  * caller genuinely needs it persisted before returning (a cron job, a test).
  * Request handlers should use emitEvent().
  *
- * Resolves to the new event id, or null if nothing was recorded. Never throws.
+ * Resolves to the new event id, or null if nothing was recorded. Normally never
+ * throws. The in-app-only watch outbox may supply its transaction: errors then
+ * propagate so notification delivery and outbox acknowledgement roll back together.
  */
 export async function recordEvent(
   input: EmitEventInput,
+  existingDb?: Db,
 ): Promise<string | null> {
+  // Only this fixed in-app event can share a transaction; email workers must
+  // never be kicked before their caller commits.
+  if (existingDb && input.type !== "mink.watch_ready")
+    throw new Error("Only Mink watch alerts support a shared transaction");
   const def = getEventDef(input.type);
   if (!def) {
     // A typo'd key would otherwise vanish silently — record nothing, say so.
@@ -215,7 +222,7 @@ export async function recordEvent(
 
   try {
     let queuedInstantEmail = false;
-    const eventId = await withService(async (db) => {
+    const persist = async (db: Db) => {
       const insert = db.insert(activityEvents).values({
         storeId: input.storeId ?? null,
         type: def.key,
@@ -236,8 +243,13 @@ export async function recordEvent(
 
       if (!event) return null;
       queuedInstantEmail = await fanOut(db, event.id, input, def.key);
+      if (existingDb && queuedInstantEmail)
+        throw new Error("Watch alerts must remain in-app only");
       return event.id;
-    });
+    };
+    const eventId = await (existingDb
+      ? persist(existingDb)
+      : withService(persist));
 
     // Kick the email worker only AFTER the transaction has committed — a
     // worker that claims before the COMMIT would find an empty queue and the
@@ -249,6 +261,7 @@ export async function recordEvent(
     }
     return eventId;
   } catch (error) {
+    if (existingDb) throw error;
     logError("notifications: failed to record event", error, {
       type: input.type,
       storeId: input.storeId ?? undefined,

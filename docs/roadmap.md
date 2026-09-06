@@ -1993,8 +1993,11 @@ orders created in the historical window. Insufficient baselines are labelled,
 not guessed. Analytics/Products/Inventory/Orders View and captured scope are
 revalidated; scope narrowing cancels a checkpointed brief. No model calls run
 in the worker. Migration `20260905_0081_mink_phase_8a_business_briefs` adds the
-template and Help guide. Echos tests are ECH-P8A-01–24. Phase 8B recurring
-opt-in watch rules are next; Phase 8C approved proactive responses and Phase
+template and Help guide. Echos tests are ECH-P8A-01–24. Phase 8B adds explicitly
+enabled owner-private daily/weekly watches, quiet hours, episode/location-count
+deduplication, pause/resume/delete and captured-scope checks. The existing
+workflow heartbeat queues bounded checks without extra model calls. Migration
+0082 and ECH-P8B-01–30 cover deployment acceptance. Phase 8C approved proactive responses is next; Phase
 8D approved memory/optional inputs remain unbuilt. Conversion monitoring
 requires a separately validated source and is not claimed by Phase 8A.
 

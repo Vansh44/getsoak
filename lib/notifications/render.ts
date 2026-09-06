@@ -392,6 +392,13 @@ export function renderNotification(
         url: safeDashboardUrl(p.url),
       };
 
+    case "mink.watch_ready":
+      return {
+        title: "Your Mink watch has an update",
+        body: "Open your private watches to review the latest evidence.",
+        url: "/dashboard/mink-watches",
+      };
+
     // The merchant's own welcome. Deliberately separate from
     // platform.store_created below, which is the operators' copy of the same
     // moment — different audience, different words, different destination.

@@ -16,6 +16,7 @@ vi.mock("@/lib/db/client", () => ({
 vi.mock("next/server", () => ({ after: vi.fn((fn: any) => fn()) }));
 
 import { recordEvent } from "./record";
+import { withService } from "@/lib/db/client";
 import {
   activityEvents,
   notificationEmailQueue,
@@ -24,6 +25,32 @@ import {
 
 const STORE = "store-1";
 const EVENT_ID = "event-1";
+
+describe("watch outbox shared transaction", () => {
+  it("reuses the transaction instead of acquiring another connection", async () => {
+    const mock = setupDb({});
+    vi.mocked(withService).mockClear();
+    await expect(
+      recordEvent({ type: "mink.watch_ready", storeId: STORE }, mock.db),
+    ).resolves.toBe(EVENT_ID);
+    expect(withService).not.toHaveBeenCalled();
+  });
+  it("propagates delivery failures so the outbox transaction rolls back", async () => {
+    const mock = setupDb({});
+    mock.db.insert.mockImplementation(() => {
+      throw new Error("delivery failed");
+    });
+    await expect(
+      recordEvent({ type: "mink.watch_ready", storeId: STORE }, mock.db),
+    ).rejects.toThrow("delivery failed");
+  });
+  it("refuses a shared transaction for other notification types", async () => {
+    const mock = setupDb({});
+    await expect(
+      recordEvent({ type: "order.placed", storeId: STORE }, mock.db),
+    ).rejects.toThrow("Only Mink watch");
+  });
+});
 
 /**
  * The recorder reads in a fixed order, and the mock's select queue must match:

@@ -1,4 +1,5 @@
 "use client";
+import Link from "next/link";
 
 import {
   ArrowUp,
@@ -333,6 +334,14 @@ export function DashboardChat({
         </div>
 
         <div className="flex shrink-0 items-center gap-1 text-[#5c5f62]">
+          <Link
+            href="/dashboard/mink-watches"
+            onNavigate={closeChat}
+            className="rounded-md px-2 py-1 text-xs hover:bg-[#f1f1f1]"
+            title="Manage your recurring Mink watches"
+          >
+            Watches
+          </Link>
           <button
             type="button"
             onClick={toggleExpand}

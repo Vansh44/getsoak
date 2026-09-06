@@ -67,6 +67,46 @@ tokens were renamed to `--sm-*` and `WHOLESIP_STORE_ID` to `FALLBACK_STORE_ID`.
 > ordinary Echos merchant requests, separate tester expectations, clarification
 > conversations and a distinct technical security appendix.
 
+### Mink Phase 8B — Opt-in recurring watches (2026-09-05)
+
+`lib/mink/watch-policy.ts` validates daily/weekly schedules, captured-IANA-zone
+quiet hours and deterministic attention fingerprints. `lib/mink/watches.ts`
+owns explicit-consent creation (idempotent UUID, serialized caps of 5 per admin
+and 20 per tenant including paused watches), versioned pause/resume/delete,
+owner-scoped readback and the bounded scheduler/outbox. New service-only
+`mink_watches` and `mink_watch_events` tables retain captured brief authority and
+lifecycle audit. A composite watch/store FK binds scheduled workflow runs.
+The existing `/api/cron/mink-workflows` heartbeat queues up to five due watches,
+executes the existing snapshot/analyse/finalise worker and reconciles up to ten
+outcomes independently. One in-flight check per watch; no missed-slot catch-up.
+Every step, result read and alert delivery revalidates authority. Scope loss or
+exhausted source retries pause the watch; no failed read becomes a healthy zero.
+Locked watch passes reuse their transaction for eligibility, scope and in-app
+notification fan-out, avoiding nested connection acquisition. `recordEvent`
+accepts a shared service transaction only for `mink.watch_ready`; failures in
+this mode propagate and roll back both delivery and outbox acknowledgement.
+
+`/dashboard/mink-watches` and `/api/mink/watches` expose the human-reviewed
+controls. The chat-header Watches link and read-only `get_mink_watches` tool
+provide discovery; Gemini cannot activate, change or delete a watch. POSTs
+require same-origin validation, trusted host/session identity, bounded JSON,
+strict fields and rate limits. Stop controls remain available with Dashboard
+View while Mink is disabled. Setup changes require deletion and fresh consent.
+No new environment variable, scheduler job, model call, credit charge or
+business-write authority is introduced. Existing worker deployment is required.
+
+`mink.watch_ready` is deduplicated by workflow subject and restricted to the
+owner, in-app only. Its activity payload contains no business metrics. Quiet
+hours defer/coalesce the outbox; recovery clears pending attention. Inventory
+fingerprints compare per-location low/out counts (not individual SKU changes).
+Other alerts deduplicate an attention episode; insufficient data does not reset
+it. Briefs notify per reporting period. Pause/delete cancel pending work and
+suppress undelivered alerts. Bounded cleanup prunes terminal scheduled snapshots
+after 30 days except current/pending pointers, and purges deleted watches with
+their snapshots/audit after 30 days. Manual workflows are never pruned here.
+Migration `20260905_0082_mink_phase_8b_watches` installs the contract and Help
+guide. ECH-P8B prompts cover natural Echos requests and manual stress checks.
+
 ### Mink Phase 8A — Requested business briefs (2026-09-05)
 
 `lib/mink/business-brief-types.ts` defines complete-local-day daily/weekly
@@ -94,8 +134,8 @@ measurement limitations. Migration
 `drizzle/migrations/sql/20260905_0081_mink_phase_8a_business_briefs.sql` extends
 the existing template constraint, adds a store/time index for historical
 return-record aggregation and publishes Help guidance; no new route,
-table or scheduled job is introduced. Runtime prompt versions are read-beta-v8
-and draft-action-beta-v19; registries read-beta-v8 and draft-beta-v14. Phase 8B
+table or scheduled job is introduced. Phase 8B advances runtime prompt versions
+to read-beta-v9 and draft-action-beta-v20; registries read-beta-v9 and draft-beta-v15. Phase 8B
 recurring watches and automatic actions are not part of requested briefs.
 
 ## 3. Multi-tenancy architecture (the core concept)

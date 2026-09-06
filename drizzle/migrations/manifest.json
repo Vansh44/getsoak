@@ -3651,7 +3651,7 @@
           },
           {
             "name": "Business brief scope and signal guidance published",
-            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%<h2>Get a daily or weekly business brief</h2>%' and body like '%not a gateway-attempt failure rate%' and body like '%Recurring watches are a later phase.%'",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%<h2>Get a daily or weekly business brief</h2>%' and body like '%not a gateway-attempt failure rate%' and body like '%asking for a daily brief does not enable a recurring schedule%'",
             "equals": "1"
           },
           {
@@ -3671,12 +3671,69 @@
           },
           {
             "name": "Business brief scope and signal guidance published",
-            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%<h2>Get a daily or weekly business brief</h2>%' and body like '%not a gateway-attempt failure rate%' and body like '%Recurring watches are a later phase.%'",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%<h2>Get a daily or weekly business brief</h2>%' and body like '%not a gateway-attempt failure rate%' and body like '%asking for a daily brief does not enable a recurring schedule%'",
             "equals": "1"
           },
           {
             "name": "Business brief historical return index installed",
             "sql": "select count(*)::text from pg_indexes where schemaname = 'public' and tablename = 'order_returns' and indexname = 'mink_brief_returns_store_created_idx' and indexdef like '%(store_id, created_at)%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260905_0082_mink_phase_8b_watches",
+      "description": "Owner-confirmed scheduled Mink watches with quiet hours, deduplicated alerts and stop controls",
+      "file": "sql/20260905_0082_mink_phase_8b_watches.sql",
+      "transaction": true,
+      "requires": ["20260905_0081_mink_phase_8a_business_briefs"],
+      "verify": {
+        "tables": ["mink_watches", "mink_watch_events", "mink_workflow_runs"],
+        "queries": [
+          {
+            "name": "Watch tables are RLS-protected and not accessible to browser role",
+            "sql": "select count(*)::text from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relname in ('mink_watches','mink_watch_events') and c.relrowsecurity and not has_table_privilege('app_user',c.oid,'SELECT,INSERT,UPDATE,DELETE')",
+            "equals": "2"
+          },
+          {
+            "name": "Tenant-bound workflow watch foreign key",
+            "sql": "select count(*)::text from pg_constraint where conrelid='public.mink_workflow_runs'::regclass and conname='mink_workflow_runs_watch_fk' and pg_get_constraintdef(oid) like '%FOREIGN KEY (watch_id, store_id)%'",
+            "equals": "1"
+          },
+          {
+            "name": "Watch notification deduplication index",
+            "sql": "select count(*)::text from pg_indexes where schemaname='public' and indexname='activity_events_mink_watch_ready_key' and indexdef like '%UNIQUE%'",
+            "equals": "1"
+          },
+          {
+            "name": "Watch consent and quiet-hour guide published",
+            "sql": "select count(*)::text from public.help_articles where slug='use-mink-ai-in-your-dashboard' and status='published' and category_id is not null and body like '%<h2>Enable private recurring Mink watches</h2>%' and body like '%explicit consent box%' and body like '%Quiet hours use the captured store timezone%' and body like '%at most 5 watches per admin and 20 per store%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "tables": ["mink_watches", "mink_watch_events", "mink_workflow_runs"],
+        "queries": [
+          {
+            "name": "Watch tables are RLS-protected and not accessible to browser role",
+            "sql": "select count(*)::text from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relname in ('mink_watches','mink_watch_events') and c.relrowsecurity and not has_table_privilege('app_user',c.oid,'SELECT,INSERT,UPDATE,DELETE')",
+            "equals": "2"
+          },
+          {
+            "name": "Tenant-bound workflow watch foreign key",
+            "sql": "select count(*)::text from pg_constraint where conrelid='public.mink_workflow_runs'::regclass and conname='mink_workflow_runs_watch_fk' and pg_get_constraintdef(oid) like '%FOREIGN KEY (watch_id, store_id)%'",
+            "equals": "1"
+          },
+          {
+            "name": "Watch notification deduplication index",
+            "sql": "select count(*)::text from pg_indexes where schemaname='public' and indexname='activity_events_mink_watch_ready_key' and indexdef like '%UNIQUE%'",
+            "equals": "1"
+          },
+          {
+            "name": "Watch consent and quiet-hour guide published",
+            "sql": "select count(*)::text from public.help_articles where slug='use-mink-ai-in-your-dashboard' and status='published' and category_id is not null and body like '%<h2>Enable private recurring Mink watches</h2>%' and body like '%explicit consent box%' and body like '%Quiet hours use the captured store timezone%' and body like '%at most 5 watches per admin and 20 per store%'",
             "equals": "1"
           }
         ]
