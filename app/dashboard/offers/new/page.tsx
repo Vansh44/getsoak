@@ -1,13 +1,17 @@
 import { getActingStoreId, requireSectionAccess } from "../../lib/access";
 import { getStorePlanContext } from "@/lib/plans/entitlements";
 import { OfferForm } from "../offer-form";
-import { loadOfferScopes } from "../page";
+import { loadOfferScopes, loadOffersAutoApply } from "../page";
 
 export default async function NewOfferPage() {
   await requireSectionAccess("promotions", "manage");
   const storeId = await getActingStoreId();
-  const [{ limits }, { locations, groups, products, categories }] =
-    await Promise.all([getStorePlanContext(storeId), loadOfferScopes(storeId)]);
+  const [{ limits }, { locations, groups, products, categories }, autoApplyOn] =
+    await Promise.all([
+      getStorePlanContext(storeId),
+      loadOfferScopes(storeId),
+      loadOffersAutoApply(storeId),
+    ]);
 
   return (
     <OfferForm
@@ -22,6 +26,7 @@ export default async function NewOfferPage() {
       initialVariantIds={[]}
       initialCategoryIds={[]}
       allowsGroups={limits.customerGroups}
+      autoApplyOn={autoApplyOn}
     />
   );
 }

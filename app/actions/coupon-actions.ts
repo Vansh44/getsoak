@@ -1,15 +1,26 @@
 "use server";
 
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, ne } from "drizzle-orm";
 import { revalidatePath, revalidateTag, unstable_cache } from "next/cache";
 import {
   withAnon,
+  withService,
   withUser,
   type Db,
   type UserIdentity,
 } from "@/lib/db/client";
-import { isUniqueViolation, dbErrorMessage } from "@/lib/db/errors";
-import { coupons, couponUserGroups, userGroupMembers } from "@/drizzle/schema";
+import {
+  isUniqueViolation,
+  dbErrorMessage,
+  isSchemaNotReady,
+} from "@/lib/db/errors";
+import {
+  coupons,
+  couponUserGroups,
+  offers,
+  offerUserGroups,
+  userGroupMembers,
+} from "@/drizzle/schema";
 import { getServerUser } from "@/lib/auth/server-user";
 import {
   getManagerIdentity,
@@ -416,7 +427,20 @@ export async function validateCoupon(
     console.error("validateCoupon error:", err);
     return { error: "Could not check that code. Please try again." };
   }
-  if (!data) return { error: "Invalid or expired coupon code." };
+
+  // ★★ A CODE MAY BE AN OFFER RATHER THAN A COUPON, and until now it could not
+  // be applied AT ALL. Offers replaced coupons, but this read never left the
+  // legacy table — so a code created in the Offers UI was rejected here as
+  // invalid, and because `placeOrder` only ever receives
+  // `cart.appliedCoupon?.code`, the cart gate blocked it before the offer
+  // engine (which honours it perfectly well) was ever asked. Migrated coupons
+  // kept working because they still have a `coupons` row; anything created
+  // after the migration did not.
+  //
+  // ★ THE FALLBACK ORDER MATTERS. Coupons first, so a migrated pair — which
+  // shares an id and a code across both tables — resolves exactly as it did
+  // before and nothing about an existing code changes.
+  if (!data) return validateCodeOffer(storeId, code, subtotal);
 
   // Group restriction: a coupon linked to one or more user groups can only be
   // applied by a signed-in customer who belongs to one of them. Public coupons
@@ -449,6 +473,174 @@ export async function validateCoupon(
       minOrderAmount: minOrder,
     },
   };
+}
+
+/**
+ * The same check, against a code-delivery OFFER.
+ *
+ * ★★ SERVICE SCOPE, NARROWLY FILTERED. `offers.code` is revoked from anon and
+ * authenticated (migration 0059) precisely so the API cannot be asked to list
+ * every active discount code — so this cannot run under `withAnon`, and the
+ * filter is the boundary instead: this store, active, code delivery, and an
+ * exact code match the caller already supplied. It returns one row and no
+ * column the caller did not already know.
+ *
+ * ★ ORDER-LEVEL PERCENT/AMOUNT ONLY. The cart previews a coupon with its own
+ * arithmetic (`subtotal × pct`, or a flat amount); a buy-X-get-Y or a bundle on
+ * a code can only be priced by the engine, and pretending otherwise would show
+ * a discount the charge then disagrees with. Those still work at order time —
+ * `placeOrder` passes the code to the engine — they just cannot be PREVIEWED,
+ * so they are not accepted here and not offered on the storefront either.
+ */
+async function validateCodeOffer(
+  storeId: string,
+  code: string,
+  subtotal: number,
+): Promise<ValidateResult> {
+  let row:
+    | {
+        id: string;
+        code: string | null;
+        reward_type: string;
+        reward_config: unknown;
+        trigger_type: string;
+        trigger_config: unknown;
+        valid_from: string | null;
+        valid_until: string | null;
+        max_redemptions: number | null;
+        redemption_count: number;
+      }
+    | undefined;
+  try {
+    const rows = await withService((db) =>
+      db
+        .select({
+          id: offers.id,
+          code: offers.code,
+          reward_type: offers.rewardType,
+          reward_config: offers.rewardConfig,
+          trigger_type: offers.triggerType,
+          trigger_config: offers.triggerConfig,
+          valid_from: offers.validFrom,
+          valid_until: offers.validUntil,
+          max_redemptions: offers.maxRedemptions,
+          redemption_count: offers.redemptionCount,
+        })
+        .from(offers)
+        .where(
+          and(
+            eq(offers.storeId, storeId),
+            eq(offers.code, code),
+            eq(offers.status, "active"),
+            ne(offers.delivery, "automatic"),
+          ),
+        )
+        .limit(1),
+    );
+    row = rows[0];
+  } catch (err) {
+    // ★ FAILS TO "not a valid code", not to an outage message. The commonest
+    // reason to be here is a genuinely wrong code, and the offers table may
+    // not exist yet in the window before its migration runs.
+    if (!isSchemaNotReady(err)) console.error("validateCodeOffer error:", err);
+    return { error: "Invalid or expired coupon code." };
+  }
+  if (!row) return { error: "Invalid or expired coupon code." };
+
+  const reward = (row.reward_config ?? {}) as Record<string, unknown>;
+  const isPercent = row.reward_type === "percent_off";
+  if (!isPercent && row.reward_type !== "amount_off") {
+    // Real, active, and simply not previewable in the cart. Say what it is
+    // rather than "invalid", which would send the shopper to support over a
+    // code that is working exactly as the merchant set it up.
+    return {
+      error: "This code is applied automatically at checkout, not here.",
+    };
+  }
+  const value = Number(isPercent ? reward.percent : reward.amount) || 0;
+  if (value <= 0) return { error: "Invalid or expired coupon code." };
+
+  const restriction = await checkOfferGroupRestriction(row.id);
+  if (restriction) return { error: restriction };
+
+  const now = Date.now();
+  if (row.valid_from && new Date(row.valid_from).getTime() > now)
+    return { error: "This coupon isn’t active yet." };
+  if (row.valid_until && new Date(row.valid_until).getTime() < now)
+    return { error: "This coupon has expired." };
+
+  if (
+    row.max_redemptions !== null &&
+    row.redemption_count >= row.max_redemptions
+  ) {
+    return { error: "This coupon has reached its usage limit." };
+  }
+
+  const trigger = (row.trigger_config ?? {}) as Record<string, unknown>;
+  const minOrder =
+    row.trigger_type === "min_subtotal" ? Number(trigger.minSubtotal) || 0 : 0;
+  if (minOrder > 0 && subtotal < minOrder) {
+    return {
+      error: `Add ₹${(minOrder - subtotal).toLocaleString(
+        "en-IN",
+      )} more to use this coupon (min ₹${minOrder.toLocaleString("en-IN")}).`,
+    };
+  }
+
+  return {
+    coupon: {
+      code: row.code ?? code,
+      discountType: isPercent ? "percentage" : "fixed",
+      discountValue: value,
+      minOrderAmount: minOrder,
+    },
+  };
+}
+
+/** The group restriction, read off `offer_user_groups`. Same contract as the
+ *  coupon one: unreadable ⇒ treat as public rather than block a real code. */
+async function checkOfferGroupRestriction(
+  offerId: string,
+): Promise<string | null> {
+  let groupIds: string[];
+  try {
+    const links = await withService((db) =>
+      db
+        .select({ group_id: offerUserGroups.groupId })
+        .from(offerUserGroups)
+        .where(eq(offerUserGroups.offerId, offerId)),
+    );
+    groupIds = links.map((l) => l.group_id);
+  } catch (err) {
+    console.error("checkOfferGroupRestriction (links) error:", err);
+    return null;
+  }
+  if (groupIds.length === 0) return null;
+
+  const user = await getServerUser();
+  if (!user) return "Sign in to use this coupon.";
+  try {
+    const memberships = await withUser(
+      { uid: user.id, email: user.email },
+      (db) =>
+        db
+          .select({ group_id: userGroupMembers.groupId })
+          .from(userGroupMembers)
+          .where(
+            and(
+              eq(userGroupMembers.userId, user.id),
+              inArray(userGroupMembers.groupId, groupIds),
+            ),
+          ),
+    );
+    if (memberships.length === 0) {
+      return "This code isn’t available on your account.";
+    }
+  } catch (err) {
+    console.error("checkOfferGroupRestriction (membership) error:", err);
+    return null;
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -514,7 +706,7 @@ const getStorefrontCouponsCached = unstable_cache(
     }
 
     const now = Date.now();
-    return rows
+    const couponEntries: AvailableCoupon[] = rows
       .filter((c) => {
         if (c.valid_from && new Date(c.valid_from).getTime() > now)
           return false;
@@ -530,9 +722,110 @@ const getStorefrontCouponsCached = unstable_cache(
         discount_value: Number(c.discount_value) || 0,
         min_order_amount: Number(c.min_order_amount) || 0,
       }));
+
+    // ★★ AND THE CODE OFFERS THE MERCHANT CHOSE TO PUBLISH. Offers replaced
+    // coupons, so a code created in the Offers UI has no `coupons` row and
+    // could never appear here — the merchant ticked nothing because there was
+    // nothing to tick.
+    //
+    // ★ SERVICE SCOPE, NARROWLY FILTERED, for the reason `validateCodeOffer`
+    // gives: `offers.code` is revoked from anon precisely so the API cannot be
+    // asked for every active code. The filter is the boundary — this store,
+    // active, code delivery, published, and an order-level percent/amount,
+    // which is the only shape the cart can preview.
+    // ⚠ try/catch, not `.catch()` — the read is awaited and a rejection here
+    // must degrade to "no published codes", never take the coupon list with it.
+    let offerRows: {
+      code: string | null;
+      description: string | null;
+      name: string;
+      reward_type: string;
+      reward_config: unknown;
+      trigger_type: string;
+      trigger_config: unknown;
+      valid_from: string | null;
+      valid_until: string | null;
+      max_redemptions: number | null;
+      redemption_count: number;
+    }[] = [];
+    try {
+      offerRows = await withService((db) =>
+        db
+          .select({
+            code: offers.code,
+            description: offers.description,
+            name: offers.name,
+            reward_type: offers.rewardType,
+            reward_config: offers.rewardConfig,
+            trigger_type: offers.triggerType,
+            trigger_config: offers.triggerConfig,
+            valid_from: offers.validFrom,
+            valid_until: offers.validUntil,
+            max_redemptions: offers.maxRedemptions,
+            redemption_count: offers.redemptionCount,
+          })
+          .from(offers)
+          .where(
+            and(
+              eq(offers.storeId, storeId),
+              eq(offers.status, "active"),
+              ne(offers.delivery, "automatic"),
+              inArray(offers.rewardType, ["percent_off", "amount_off"]),
+              // ★ `showAll` DOES NOT REACH OFFERS. On coupons it is a legacy
+              // convenience; here, publishing a code is a per-offer decision the
+              // merchant makes on the offer itself, and a store-wide switch that
+              // silently published every targeted code would undo exactly the
+              // targeting they set up.
+              eq(offers.showOnStorefront, true),
+            ),
+          ),
+      );
+    } catch (err) {
+      if (!isSchemaNotReady(err)) {
+        console.error("getStorefrontCoupons (offers):", err);
+      }
+    }
+
+    // ★ A MIGRATED COUPON EXISTS IN BOTH TABLES with the same code, so without
+    // this it would be listed twice. The coupon row wins: it is what
+    // `validateCoupon` resolves first, so the list and the Apply button agree.
+    const seen = new Set(couponEntries.map((c) => normalizeCode(c.code)));
+    for (const o of offerRows) {
+      const code = normalizeCode(o.code ?? "");
+      if (!code || seen.has(code)) continue;
+      const reward = (o.reward_config ?? {}) as Record<string, unknown>;
+      const isPercent = o.reward_type === "percent_off";
+      const value = Number(isPercent ? reward.percent : reward.amount) || 0;
+      if (value <= 0) continue;
+      if (o.valid_from && new Date(o.valid_from).getTime() > now) continue;
+      if (o.valid_until && new Date(o.valid_until).getTime() < now) continue;
+      if (
+        o.max_redemptions !== null &&
+        o.redemption_count >= o.max_redemptions
+      ) {
+        continue;
+      }
+      const trigger = (o.trigger_config ?? {}) as Record<string, unknown>;
+      seen.add(code);
+      couponEntries.push({
+        code,
+        // ★ The merchant's own description, falling back to the internal name
+        // — which is at least something they wrote, where a generated phrase
+        // would sit oddly beside hand-written coupon descriptions.
+        description: o.description || o.name || null,
+        discount_type: (isPercent ? "percentage" : "fixed") as DiscountType,
+        discount_value: value,
+        min_order_amount:
+          o.trigger_type === "min_subtotal"
+            ? Number(trigger.minSubtotal) || 0
+            : 0,
+      });
+    }
+
+    return couponEntries;
   },
   ["storefront-available-coupons"],
-  { tags: [TAGS.coupons], revalidate: 300 },
+  { tags: [TAGS.coupons, TAGS.offers], revalidate: 300 },
 );
 
 export async function getAvailableStorefrontCoupons(): Promise<

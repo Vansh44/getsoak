@@ -901,7 +901,7 @@
         "queries": [
           {
             "name": "plan guide contains exact product tiers and no-data-loss downgrade contract",
-            "sql": "select count(*)::text from public.help_articles where slug = 'manage-your-storemink-plan-and-subscription' and status = 'published' and body like '%<td>5</td><td>50</td><td>Unlimited</td>%' and body like '%does not delete store data because a plan becomes lower%' and body like '%Custom domain</td><td>—</td><td>—</td><td>Included%'",
+            "sql": "select count(*)::text from public.help_articles where slug = 'manage-your-storemink-plan-and-subscription' and status = 'published' and body like '%<td>5</td><td>50</td><td>Unlimited</td>%' and body like '%does not delete store data because a plan becomes lower%' and body like '%Custom domain</td><td>\u2014</td><td>\u2014</td><td>Included%'",
             "equals": "1"
           },
           {
@@ -915,7 +915,7 @@
         "queries": [
           {
             "name": "plan guide contains exact product tiers and no-data-loss downgrade contract",
-            "sql": "select count(*)::text from public.help_articles where slug = 'manage-your-storemink-plan-and-subscription' and status = 'published' and body like '%<td>5</td><td>50</td><td>Unlimited</td>%' and body like '%does not delete store data because a plan becomes lower%' and body like '%Custom domain</td><td>—</td><td>—</td><td>Included%'",
+            "sql": "select count(*)::text from public.help_articles where slug = 'manage-your-storemink-plan-and-subscription' and status = 'published' and body like '%<td>5</td><td>50</td><td>Unlimited</td>%' and body like '%does not delete store data because a plan becomes lower%' and body like '%Custom domain</td><td>\u2014</td><td>\u2014</td><td>Included%'",
             "equals": "1"
           },
           {
@@ -1188,7 +1188,7 @@
         "queries": [
           {
             "name": "the dashboard Mink AI alpha guide is published with limits and permissions",
-            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%This alpha is read only.%' and body like '%Products → View%' and body like '%does not debit AI credits%'",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%This alpha is read only.%' and body like '%Products \u2192 View%' and body like '%does not debit AI credits%'",
             "equals": "1"
           }
         ]
@@ -1298,7 +1298,7 @@
         "queries": [
           {
             "name": "the Mink dashboard guide documents Phase 1B tools permissions and reliability",
-            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%Analytics → View%' and body like '%Inventory → View%' and body like '%retries a transient model failure at most once%' and body like '%never displays prompts, answers, tool arguments, tool results or model reasoning%'",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%Analytics \u2192 View%' and body like '%Inventory \u2192 View%' and body like '%retries a transient model failure at most once%' and body like '%never displays prompts, answers, tool arguments, tool results or model reasoning%'",
             "equals": "1"
           }
         ]
@@ -1307,7 +1307,7 @@
         "queries": [
           {
             "name": "the Mink dashboard guide includes sales and low-stock permissions",
-            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%Analytics → View%' and body like '%Inventory → View%'",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%Analytics \u2192 View%' and body like '%Inventory \u2192 View%'",
             "equals": "1"
           }
         ]
@@ -1344,7 +1344,7 @@
         "queries": [
           {
             "name": "the Mink dashboard guide documents the invited beta cards privacy compaction feedback and shadow metering",
-            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%Cards, filters and dashboard context%' and body like '%Customers → View%' and body like '%bounded extractive summary%' and body like '%Shadow credits%'",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and body like '%Cards, filters and dashboard context%' and body like '%Customers \u2192 View%' and body like '%bounded extractive summary%' and body like '%Shadow credits%'",
             "equals": "1"
           }
         ]
@@ -1762,7 +1762,7 @@
           },
           {
             "name": "the Mink guide documents guarded delivery order-status transitions",
-            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%<h2>Advance one delivery order</h2>%' and body like '%pending → processing%' and body like '%Delivery order-status transitions%' and body like '%Pending or approved cancellation states and any refund activity block advancement%'",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%<h2>Advance one delivery order</h2>%' and body like '%pending \u2192 processing%' and body like '%Delivery order-status transitions%' and body like '%Pending or approved cancellation states and any refund activity block advancement%'",
             "equals": "1"
           }
         ]
@@ -3341,6 +3341,176 @@
           {
             "name": "the plan guide already explains re-pricing before payment",
             "sql": "select count(*)::text from public.help_articles where status = 'published' and slug = 'manage-your-storemink-plan-and-subscription' and body like '%<h2>Changing your mind before you pay</h2>%' and body like '%re-priced to the plan you have just chosen%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260906_0081_offers_auto_apply_help",
+      "description": "Explain the store switch that decides whether an automatic offer runs",
+      "file": "sql/20260906_0081_offers_auto_apply_help.sql",
+      "checksum": "f19624cae6e4ad573edec9f867205922817541ab40b1afcb6a2e1eeec9413bea",
+      "transaction": true,
+      "requires": ["20260906_0080_plan_change_before_payment_help"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "the offers guide explains the automatic-offers switch",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and slug = 'create-and-manage-offers' and body like '%<h2>Automatic offers need to be switched on for your store</h2>%' and body like '%never affected by this switch%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "the offers guide already explains the automatic-offers switch",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and slug = 'create-and-manage-offers' and body like '%<h2>Automatic offers need to be switched on for your store</h2>%' and body like '%never affected by this switch%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260906_0082_offers_visibility_help",
+      "description": "Document where a shopper is shown an offer: product tag, cart nudge, checkout line",
+      "file": "sql/20260906_0082_offers_visibility_help.sql",
+      "checksum": "7fd1f7bc4eea4c00f8eef8cd4f51031869f04f73690c1d2c1b821f0ec6e38f83",
+      "transaction": true,
+      "requires": ["20260906_0081_offers_auto_apply_help"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "the offers guide explains where shoppers see an offer",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and slug = 'create-and-manage-offers' and body like '%On product cards and product pages.%' and body like '%named after the offer%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "the offers guide already explains where shoppers see an offer",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and slug = 'create-and-manage-offers' and body like '%On product cards and product pages.%' and body like '%named after the offer%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260906_0083_offers_auto_apply_default_help",
+      "description": "Automatic offers default on; point the guide at the new offer settings page",
+      "file": "sql/20260906_0083_offers_auto_apply_default_help.sql",
+      "checksum": "a49c3d5d9b62357c8fabf4bf62a68256157351d1e9b75ac67ca79cc9e68e1c77",
+      "transaction": true,
+      "requires": ["20260906_0082_offers_visibility_help"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "the offers guide says automatic offers are on by default",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and slug = 'create-and-manage-offers' and body like '%It is on unless you turned it off.%' and body not like '%Stores created recently already have it on.%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "the offers guide already says automatic offers are on by default",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and slug = 'create-and-manage-offers' and body like '%It is on unless you turned it off.%' and body not like '%Stores created recently already have it on.%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260906_0084_offers_set_limit_help",
+      "description": "Explain that buy X get Y repeats by default, and bound it with a budget not a set cap",
+      "file": "sql/20260906_0084_offers_set_limit_help.sql",
+      "checksum": "18b1815f1bb868129428e7f4d618d8173f7b9f5ed8c6655ccf96632512964941",
+      "transaction": true,
+      "requires": ["20260906_0083_offers_auto_apply_default_help"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "the offers guide explains how far buy X get Y repeats",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and slug = 'create-and-manage-offers' and body like '%<h2>How far a buy X get Y offer repeats</h2>%' and body like '%use a total budget instead%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "the offers guide already explains how far buy X get Y repeats",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and slug = 'create-and-manage-offers' and body like '%<h2>How far a buy X get Y offer repeats</h2>%' and body like '%use a total budget instead%'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260907_0085_offers_storefront_visibility",
+      "description": "Opt-in flag to list a code offer in the storefront cart; offers.code stays sealed",
+      "file": "sql/20260907_0085_offers_storefront_visibility.sql",
+      "checksum": "2d97d50c91c86a58de7210cbacac26a1eec2c0826004fed6efb9a69252a97b99",
+      "transaction": true,
+      "requires": ["20260906_0084_offers_set_limit_help"],
+      "verify": {
+        "queries": [
+          {
+            "name": "offers.code is still sealed from anon and authenticated",
+            "sql": "select count(*)::text from information_schema.column_privileges where table_schema='public' and table_name='offers' and column_name='code' and grantee in ('anon','authenticated') and privilege_type='SELECT'",
+            "equals": "0"
+          }
+        ]
+      },
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "offers.show_on_storefront exists",
+            "sql": "select count(*)::text from information_schema.columns where table_schema='public' and table_name='offers' and column_name='show_on_storefront' and is_nullable='NO'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "offers.show_on_storefront already exists",
+            "sql": "select count(*)::text from information_schema.columns where table_schema='public' and table_name='offers' and column_name='show_on_storefront' and is_nullable='NO'",
+            "equals": "1"
+          }
+        ]
+      }
+    },
+    {
+      "id": "20260907_0086_offers_coupon_visibility_help",
+      "description": "Document coupon codes as offers and the opt-in storefront listing",
+      "file": "sql/20260907_0086_offers_coupon_visibility_help.sql",
+      "checksum": "0939131590fb8ef0361f8fc696af386bf5bffc9a7294825e8094f035392a539c",
+      "transaction": true,
+      "requires": ["20260907_0085_offers_storefront_visibility"],
+      "verify": {},
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "the offers guide explains publishing a code",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and slug = 'create-and-manage-offers' and body like '%<h2>Discount codes, and showing them on your storefront</h2>%' and body like '%off by default on purpose%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "queries": [
+          {
+            "name": "the offers guide already explains publishing a code",
+            "sql": "select count(*)::text from public.help_articles where status = 'published' and slug = 'create-and-manage-offers' and body like '%<h2>Discount codes, and showing them on your storefront</h2>%' and body like '%off by default on purpose%'",
             "equals": "1"
           }
         ]

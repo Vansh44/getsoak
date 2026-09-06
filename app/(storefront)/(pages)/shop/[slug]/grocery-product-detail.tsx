@@ -25,6 +25,7 @@ export function GroceryProductDetail({
   hasVariants,
   variantId,
   selectVariant,
+  offerMarker,
   base,
   selling,
   discount,
@@ -46,6 +47,9 @@ export function GroceryProductDetail({
   hasVariants: boolean;
   variantId: string | null;
   selectVariant: (v: DetailVariant) => void;
+  /** "20% off" / "Buy 1, get 1 free", resolved server-side. See the classic
+   *  layout's prop for why it arrives as a string. */
+  offerMarker?: string | null;
   base: number;
   selling: number;
   discount: number;
@@ -128,6 +132,11 @@ export function GroceryProductDetail({
         <div className="gpdp-info">
           {catActive && (
             <span className="gpdp-category">{product.category!.name}</span>
+          )}
+          {offerMarker && (
+            <div className="mb-2">
+              <span className="sm-offer-badge">{offerMarker}</span>
+            </div>
           )}
           <h1 className="gpdp-name">{product.name}</h1>
 

@@ -81,6 +81,15 @@ export interface OfferFormData {
   amount: number;
   /** `fixed_price`: the per-unit price matching items are charged. */
   unitPrice: number;
+  /**
+   * List this code in the storefront cart's "Available coupons".
+   *
+   * ★ CODE DELIVERY ONLY, and only for an order-level percentage or amount —
+   * the shape the cart can price without the offer engine. Forced false for
+   * anything else in `buildRow`, so a merchant cannot publish a code the cart
+   * would then reject.
+   */
+  showOnStorefront: boolean;
   /** `buy_x_get_y`. `maxSets` of 0 = no limit. */
   buyQuantity: number;
   getQuantity: number;
@@ -137,6 +146,7 @@ export interface OfferRow {
   getQuantity: number | null;
   getPercent: number | null;
   maxSets: number | null;
+  showOnStorefront: boolean;
   tierMode: "percent" | "amount";
   tiers: { minSubtotal: number; value: number }[];
   breaks: { minQuantity: number; percent: number }[];
@@ -184,6 +194,11 @@ function revalidateOffers() {
   revalidatePath("/dashboard/offers");
   // The storefront reads active offers for badges and the near-miss nudge.
   revalidateTag(TAGS.coupons, "max");
+  // ★ AND FOR THE PUBLISHED-CODE LIST. `getStorefrontCouponsCached` is tagged
+  // with both, because it now reads both tables — so ticking "show this coupon
+  // on my storefront" has to bust it from this side too, or the code appears
+  // in the cart up to five minutes late.
+  revalidateTag(TAGS.offers, "max");
 }
 
 /**
@@ -368,6 +383,16 @@ function buildRow(form: OfferFormData, userId: string, creating: boolean) {
     triggerConfig: triggerConfigFor(form),
     rewardType: form.rewardType,
     rewardConfig: rewardConfigFor(form),
+    // ★★ FORCED FALSE UNLESS THE CART COULD ACTUALLY PRICE IT. Publishing a
+    // code puts it in front of every visitor, and `validateCoupon` can only
+    // preview an order-level percentage or amount — anything else would be
+    // advertised, typed in, and refused. The checkbox is hidden in those cases
+    // too, but a hidden control is not a boundary: an older client, a stale
+    // tab or a direct call must not be able to set it.
+    showOnStorefront:
+      form.delivery !== "automatic" &&
+      (form.rewardType === "percent_off" || form.rewardType === "amount_off") &&
+      form.showOnStorefront === true,
     // Normalised through the decoder on the way IN as well, so a stray field
     // from an older client cannot reach the column.
     conditions: decodeConditions(form.conditions ?? []).conditions,
@@ -663,6 +688,7 @@ function mapRow(row: typeof offers.$inferSelect): OfferRow {
     getQuantity: numOrNull(reward.getQuantity),
     getPercent: numOrNull(reward.getPercent),
     maxSets: numOrNull(reward.maxSets),
+    showOnStorefront: row.showOnStorefront === true,
     // ★ VIA THE SHARED DECODER, so the editor and the engine can never read a
     // stored ladder differently — the exact divergence that made buy-X-get-Y
     // look configured and discount nothing.
