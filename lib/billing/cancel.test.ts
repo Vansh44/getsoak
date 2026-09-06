@@ -235,6 +235,53 @@ describe("resumeSubscription", () => {
 });
 
 describe("getSubscriptionView", () => {
+  it("★★ autopay is FALSE for a mandate above the AFA-exempt limit", async () => {
+    // The reassuring half of the Plans page. A ₹43,000 ceiling looks like the
+    // strongest possible autopay and is the opposite: RBI caps an unattended
+    // debit at ₹15,000 on cards and UPI alike, so a mandate sized past it can
+    // never carry a renewal at all. Every yearly subscriber saw autopay ON
+    // while each renewal quietly went to a manual invoice.
+    seed([
+      [
+        {
+          plan: "pro",
+          period: "yearly",
+          state: "active",
+          currentPeriodEnd: PERIOD_END,
+          cancelAtPeriodEnd: false,
+          scheduledPlan: null,
+          scheduledPeriod: null,
+          scheduledLocations: null,
+          mandateId: "mand-1",
+          mandateStatus: "active",
+          mandateMaxPaise: 43_000_00,
+        },
+      ],
+    ]);
+    expect((await getSubscriptionView(STORE)).autopay).toBe(false);
+  });
+
+  it("★ autopay is FALSE for a revoked mandate, whatever its ceiling", async () => {
+    seed([
+      [
+        {
+          plan: "pro",
+          period: "monthly",
+          state: "active",
+          currentPeriodEnd: PERIOD_END,
+          cancelAtPeriodEnd: false,
+          scheduledPlan: null,
+          scheduledPeriod: null,
+          scheduledLocations: null,
+          mandateId: "mand-1",
+          mandateStatus: "revoked",
+          mandateMaxPaise: 5_000_00,
+        },
+      ],
+    ]);
+    expect((await getSubscriptionView(STORE)).autopay).toBe(false);
+  });
+
   it("maps our state vocabulary through, not Razorpay's", async () => {
     seed([
       [
@@ -249,6 +296,7 @@ describe("getSubscriptionView", () => {
           scheduledLocations: 1,
           mandateId: "mand-1",
           mandateStatus: "active",
+          mandateMaxPaise: 5_000_00,
         },
       ],
     ]);
