@@ -7677,6 +7677,71 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       second charge. ⚠ Only a `processing` attempt is resumable: the index also
       covers `created` (no order exists yet) and `authorized` (money already
       authorized — re-opening checkout would invite a second authorization).
+    - **★★ THE AMOUNT PICKS THE MANDATE RAIL, AND SOMETIMES THERE ISN'T ONE**
+      (`autopayRailFor`, `lib/billing/mandate-types.ts`). RBI's AFA-exempt limit
+      is **₹15,000 on cards and UPI ALIKE** — the intuition that a card is more
+      permissive is wrong, and Razorpay's own wording is quoted at the constant
+      so it is not re-litigated: above it, _"an Additional Factor Authentication
+      (AFA) is required from customers for every subsequent debit"_. The
+      ₹1,00,000 exemption reaches only mutual funds, insurance and credit-card
+      bills. So Pro yearly at ₹24,000 could NEVER be auto-debited, and we asked
+      the merchant to authorise **₹43,000** for it anyway — authority shown on
+      the Razorpay screen that could not be exercised. Now: the charge chooses
+      the rail (UPI Autopay by default), and when no rail can carry it **no
+      mandate is requested at all** — cycle 1 goes through the plain,
+      production-verified checkout and the screen says renewals are invoiced.
+    - **★ THE CARVE-OUT IS NARROW, AND A TEST KEEPS IT THAT WAY.** The refusal
+      it sits beside exists because turning a first cycle into an ordinary
+      payment SILENTLY surprises the merchant with a manual invoice next
+      renewal — that is autopay failing when it should have worked. This is the
+      other case: autopay is structurally impossible, so there is nothing to
+      fail, and refusing would mean not selling a yearly plan at all. An
+      unverified endpoint still refuses.
+    - **★ THE CEILING IS CAPPED AT THE AFA LIMIT.** The 1.18 × 1.5 provision is
+      real headroom while both the old and new charge stay under ₹15,000 (Pro
+      monthly: ₹2,400 charge, ₹5,000 ceiling, a reprice to ₹4,000 still
+      collects). Above the limit it buys nothing, because a charge of ₹15,001 is
+      manual whatever the ceiling says — Basic yearly was asking for ₹27,000
+      against a ₹15,000 charge already at the maximum a mandate can carry.
+    - **★ AND THE CHOOSER IS GONE, WITH ONE ESCAPE.** A rail is fixed on the
+      order and cannot be edited after, so a merchant who picked one their
+      renewal cannot carry had authorised a mandate that would never fire. The
+      charge is better placed to decide. ⚠ Checkout shows ONLY the rail on the
+      order, so pinning UPI outright would leave a merchant with no UPI app
+      unable to subscribe: a "pay by card instead" link is the sideways move,
+      and both rails sit under the limit. ⚠ `openRazorpayModal` sends
+      `recurring: true` whenever a customer id is present, so `customerId` is
+      omitted on a no-mandate order — asking Checkout to treat a plain order as
+      recurring is the same mismatch that produced the Cards-only screen.
+    - **★★ `autopay` NOW MEANS THE CHARGE WILL ACTUALLY BE TAKEN.** It read
+      `mandateStatus === "active"` on the Plans page and `!!row.mandateId` in
+      the renewal notice — so every yearly subscriber was shown autopay ON and
+      emailed _"we'll charge your saved payment method — there's nothing you
+      need to do"_, while `collectionRoute` sent each renewal to manual. The
+      Plans page contradicted the invoice, and the merchant trusted the
+      reassuring one. Both now consult the ceilings.
+    - **★★ AND THE ROUTE REASON IS NO LONGER THROWN AWAY.** `collectionRoute`
+      has always said WHY (`over_mandate` / `over_afa_limit` / `no_mandate`),
+      `collectInvoice` returned it, and `classify` collapsed all three into
+      "manual" — no log, no metric, nothing. So an operator reprice that pushed
+      a cohort past a ceiling was invisible: invoices simply stopped being paid
+      automatically. It is logged as `billing.renewal_not_auto_collectable`.
+    - **★ A REPRICE IS NAMED IN THE RENEWAL EMAIL.** Renewals are priced LIVE
+      (`priceFor` → `getPlanPricingLive`), so an operator change reaches existing
+      subscribers at their next cycle — correct, and previously silent: the
+      4-day notice carried the new figure without saying it was new. It now
+      reads the previous cycle's invoice and names the difference, **in the
+      right direction** — "your price has changed" reads as a rise to everyone,
+      so a merchant whose bill went DOWN would write in to ask what went wrong.
+      Equal amounts say nothing; noise on an unchanged bill is what teaches
+      people to stop reading billing email.
+    - ⚠ **PHASE 2, NOT BUILT: Emandate (NPCI eNACH)** would make yearly genuinely
+      automatic — ₹1 crore ceiling, no per-debit AFA, real-time registration.
+      Two things shape it: an eNACH authorisation order is **`amount: 0`** (it
+      registers and charges nothing; "charge during registration" is HDFC/ICICI
+      only), and the subsequent-debit endpoint has still never succeeded in
+      production. So cycle 1 must stay on the verified one-time checkout, and
+      `MANDATE_MAX_GATEWAY_PAISE` (₹99,999) has to become per-rail.
     - **★★ AND CYCLE 1's INVOICE PINNED THE PLAN AND PERIOD THE SAME WAY.**
       `ensureRenewalInvoice` is idempotent on (store, kind, cycle_seq) — exactly
       right for a RENEWAL, wrong for an ENROLMENT, where the invoice is raised

@@ -34,6 +34,7 @@ import { withService } from "@/lib/db/client";
 import { billingMandates, billingSubscriptions } from "@/drizzle/schema";
 import { logError } from "@/lib/observability/logger";
 import type { SubscriptionView } from "./invoice-types";
+import { AFA_EXEMPT_PAISE } from "./mandate-types";
 import { notifySubscriptionCancelled } from "./receipts";
 
 export type CancelResult<T> =
@@ -298,6 +299,7 @@ export async function getSubscriptionView(
           scheduledLocations: billingSubscriptions.scheduledLocations,
           mandateId: billingSubscriptions.mandateId,
           mandateStatus: billingMandates.status,
+          mandateMaxPaise: billingMandates.maxAmountPaise,
         })
         .from(billingSubscriptions)
         .leftJoin(
@@ -321,7 +323,18 @@ export async function getSubscriptionView(
               ? "monthly"
               : null,
         scheduledLocations: row.scheduledLocations,
-        autopay: row.mandateStatus === "active",
+        // ★★ AUTOPAY MEANS THE RENEWAL WILL ACTUALLY BE TAKEN, not that a
+        // mandate row exists. Read the other way, every yearly subscriber saw
+        // autopay ON while `collectionRoute` sent each renewal to manual — the
+        // Plans page contradicting the invoice email, and the merchant trusting
+        // the reassuring one. The amount is not known here, so this answers the
+        // half that IS: a live mandate whose own ceiling is inside the AFA
+        // limit can carry SOME charge automatically. A ceiling above it can
+        // never carry one at all, because the limit binds first.
+        autopay:
+          row.mandateStatus === "active" &&
+          (row.mandateMaxPaise ?? 0) > 0 &&
+          (row.mandateMaxPaise ?? 0) <= AFA_EXEMPT_PAISE,
         active: LIVE_STATES.includes(row.state),
       } satisfies SubscriptionView;
     });

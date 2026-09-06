@@ -181,6 +181,8 @@ export function renewalDueTemplate(d: {
   dueOn: string;
   invoiceRef: string | null;
   autopay: boolean;
+  /** Last cycle's amount, when it differed from this one. */
+  previousAmountInr?: number | null;
   manageUrl: string;
 }): BuiltEmail {
   const store = escapeHtml(d.storeName);
@@ -188,6 +190,13 @@ export function renewalDueTemplate(d: {
   const ref = d.invoiceRef
     ? `<p style="margin:0 0 12px; color:${EMAIL_THEME.muted}; font-size:13px;">Invoice ${escapeHtml(d.invoiceRef)}</p>`
     : "";
+  // ★ Named, and named in the RIGHT DIRECTION. "Your price has changed" reads
+  // as a rise to everyone, so a merchant whose bill went DOWN would write in
+  // to ask what happened.
+  const repriced =
+    d.previousAmountInr != null && d.previousAmountInr !== d.amountInr
+      ? `<p style="margin:0 0 12px;">This is ${d.amountInr > d.previousAmountInr ? "an increase" : "a reduction"} from <strong>${money(d.previousAmountInr)}</strong> last time. Plan prices changed; nothing about your subscription was altered.</p>`
+      : "";
   return {
     subject: d.autopay
       ? `Your ${d.planName} plan renews on ${shortDate(d.dueOn)}`
@@ -197,11 +206,13 @@ export function renewalDueTemplate(d: {
         ? `<h1 style="margin:0 0 12px; font-size:20px; color:${EMAIL_THEME.ink};">Your plan renews soon</h1>
            <p style="margin:0 0 12px;"><strong>${store}</strong>'s ${plan} plan renews on <strong>${shortDate(d.dueOn)}</strong>. We'll charge <strong>${money(d.amountInr)}</strong> to your saved payment method — there's nothing you need to do.</p>
            ${ref}
+           ${repriced}
            <p style="margin:0 0 4px;">Want to change or cancel first? You can, any time before then.</p>
            ${button(d.manageUrl, "Manage your plan")}`
         : `<h1 style="margin:0 0 12px; font-size:20px; color:${EMAIL_THEME.ink};">Time to renew</h1>
            <p style="margin:0 0 12px;"><strong>${store}</strong>'s ${plan} plan is due for renewal. <strong>${money(d.amountInr)}</strong> is payable by <strong>${shortDate(d.dueOn)}</strong>.</p>
            ${ref}
+           ${repriced}
            <p style="margin:0 0 4px;">Pay from your dashboard in a couple of taps. If it's not paid by the renewal date you'll get 48 hours' grace, then the store moves to the Free plan.</p>
            ${button(d.manageUrl, "Pay now")}`,
     ),
