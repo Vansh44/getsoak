@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const runWorker = vi.fn();
+const schedule = vi.fn();
+const reconcile = vi.fn();
+vi.mock("@/lib/mink/watches", () => ({
+  scheduleMinkWatches: schedule,
+  reconcileMinkWatches: reconcile,
+}));
 
 vi.mock("@/lib/mink/workflows", () => ({
   runMinkWorkflowWorker: runWorker,
@@ -11,6 +17,8 @@ describe("Mink workflow cron", () => {
 
   beforeEach(() => {
     process.env.CRON_SECRET = "cron-secret";
+    schedule.mockReset().mockResolvedValue(0);
+    reconcile.mockReset().mockResolvedValue(0);
     runWorker.mockReset().mockResolvedValue({
       claims: 3,
       stepsCompleted: 3,
@@ -41,6 +49,8 @@ describe("Mink workflow cron", () => {
     expect(missing.status).toBe(401);
     expect(wrong.status).toBe(401);
     expect(runWorker).not.toHaveBeenCalled();
+    expect(schedule).not.toHaveBeenCalled();
+    expect(reconcile).not.toHaveBeenCalled();
   });
 
   it("answers 503 rather than an unhandled 500 when the heartbeat throws", async () => {
@@ -57,6 +67,7 @@ describe("Mink workflow cron", () => {
       }),
     );
     expect(response.status).toBe(503);
+    expect(reconcile).toHaveBeenCalledOnce();
     await expect(response.json()).resolves.toMatchObject({ ok: false });
   });
 
@@ -95,5 +106,17 @@ describe("Mink workflow cron", () => {
       notificationsDelivered: 1,
     });
     expect(runWorker).toHaveBeenCalledTimes(1);
+  });
+  it("still runs manual workflows and delivery after a watch scheduling failure", async () => {
+    schedule.mockRejectedValueOnce(new Error("watch scheduler unavailable"));
+    const { GET } = await import("./route");
+    const response = await GET(
+      new Request("https://storemink.com/api/cron/mink-workflows", {
+        headers: { authorization: "Bearer cron-secret" },
+      }),
+    );
+    expect(response.status).toBe(503);
+    expect(runWorker).toHaveBeenCalledOnce();
+    expect(reconcile).toHaveBeenCalledOnce();
   });
 });

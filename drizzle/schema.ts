@@ -5040,6 +5040,82 @@ export const minkActionToolAccess = pgTable(
   ],
 );
 
+// Owner-only opt-in watches. Browser access always passes the Mink service.
+export const minkWatches = pgTable(
+  "mink_watches",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id")
+      .notNull()
+      .references(() => stores.id, { onDelete: "cascade" }),
+    adminId: text("admin_id").notNull(),
+    creationKey: uuid("creation_key").notNull(),
+    kind: text().notNull(),
+    status: text().default("active").notNull(),
+    version: integer().default(1).notNull(),
+    scheduleJson: jsonb("schedule_json").notNull(),
+    inputJson: jsonb("input_json").notNull(),
+    nextRunAt: timestamp("next_run_at", {
+      withTimezone: true,
+      mode: "string",
+    }).notNull(),
+    lastRunId: uuid("last_run_id"),
+    processedRunId: uuid("processed_run_id"),
+    pendingRunId: uuid("pending_run_id"),
+    fingerprint: text(),
+    lastAlertAt: timestamp("last_alert_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    errorCode: text("error_code"),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => [
+    unique("mink_watches_id_store_key").on(t.id, t.storeId),
+    unique("mink_watches_creation_key").on(t.storeId, t.adminId, t.creationKey),
+    index("mink_watches_due_idx").on(t.status, t.nextRunAt),
+    index("mink_watches_owner_idx").on(t.storeId, t.adminId),
+    check(
+      "mink_watches_status_check",
+      sql`${t.status} in ('active','paused','deleted')`,
+    ),
+    check(
+      "mink_watches_kind_check",
+      sql`${t.kind} in ('brief','inventory','sales','returns','payments')`,
+    ),
+    check("mink_watches_version_check", sql`${t.version} > 0`),
+    check(
+      "mink_watches_schedule_json_check",
+      sql`jsonb_typeof(${t.scheduleJson}) = 'object'`,
+    ),
+    check(
+      "mink_watches_input_json_check",
+      sql`jsonb_typeof(${t.inputJson}) = 'object'`,
+    ),
+  ],
+);
+
+export const minkWatchEvents = pgTable(
+  "mink_watch_events",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    watchId: uuid("watch_id")
+      .notNull()
+      .references(() => minkWatches.id, { onDelete: "cascade" }),
+    event: text().notNull(),
+    version: integer().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => [index("mink_watch_events_watch_idx").on(t.watchId, t.createdAt)],
+);
+
 // Durable Phase 6 workflow runtime. These are service-only operational rows:
 // the initiating request snapshots tenant/admin/location authority, workers
 // claim short leases, and every browser read still rechecks store + owner.
@@ -5050,6 +5126,7 @@ export const minkWorkflowRuns = pgTable(
     storeId: uuid("store_id").notNull(),
     adminId: text("admin_id").notNull(),
     sourceRunId: uuid("source_run_id"),
+    watchId: uuid("watch_id"),
     template: text().notNull(),
     status: text().default("queued").notNull(),
     idempotencyKey: text("idempotency_key").notNull(),
@@ -5086,6 +5163,12 @@ export const minkWorkflowRuns = pgTable(
   },
   (table) => [
     unique("mink_workflow_runs_id_store_key").on(table.id, table.storeId),
+    foreignKey({
+      columns: [table.watchId, table.storeId],
+      foreignColumns: [minkWatches.id, minkWatches.storeId],
+      name: "mink_workflow_runs_watch_fk",
+    }).onDelete("cascade"),
+    index("mink_workflow_runs_watch_idx").on(table.watchId, table.createdAt),
     unique("mink_workflow_runs_owner_idempotency_key").on(
       table.storeId,
       table.adminId,
@@ -6658,6 +6741,11 @@ export const activityEvents = pgTable(
       table.createdAt,
     ),
     index("activity_events_created_idx").on(table.createdAt),
+    uniqueIndex("activity_events_mink_watch_ready_key")
+      .on(table.storeId, table.type, table.subjectId)
+      .where(
+        sql`${table.type} = 'mink.watch_ready' AND ${table.subjectId} IS NOT NULL`,
+      ),
     uniqueIndex("activity_events_mink_workflow_completion_key")
       .on(table.storeId, table.type, table.subjectId)
       .where(sql`type = 'mink.workflow_completed' AND subject_id IS NOT NULL`),

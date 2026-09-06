@@ -1413,8 +1413,21 @@ Exit criteria:
   passed (10 skipped), 88 focused checks passed, TypeScript/lint and production
   build passed. Migration 0081 was exercised in isolated PostgreSQL, including
   manifest checks, safe repeat execution and rollback on missing Help guidance.
-- **8B — Opt-in recurring watch rules: next, not implemented.** Scheduling,
-  deduplicated alerts, quiet hours, pause/delete and bounded notification costs.
+- **8B — Opt-in recurring watch rules: implemented, deployment acceptance pending.**
+  Human-confirmed daily/weekly brief or inventory/sales/returns/payments watch,
+  captured timezone/location scope, overnight quiet hours, deduplicated private
+  in-app notifications and versioned pause/resume/delete. Five per admin,
+  twenty per tenant, one in-flight check each; bounded existing-heartbeat
+  scheduling, retries, retention and no extra model calls. Source failure or
+  permission narrowing pauses rather than fabricating healthy results. Gemini
+  only reads watch status and links to human controls. Migration 0082 and
+  ECH-P8B-01–30 cover rollout; real worker timing and merchant acceptance must
+  still be exercised on Echos after deployment.
+  Local verification after the latest branch merges: 6,095 regression tests
+  passed (15 skipped); lint and the production build, including TypeScript,
+  passed. All five opt-in PostgreSQL concurrency checks also passed during
+  implementation. Migration 0082 passed isolated repeat,
+  rollback, tenant-FK, restricted-role, deduplication and manifest checks.
 - **8C — Approved proactive responses: not implemented.** Evidence-ranked
   proposed responses under explicit action scope, limits and approvals.
 - **8D — Approved memory and optional inputs: not implemented.** Merchant-owned
@@ -1642,12 +1655,13 @@ would move risk into production rather than remove work.
 
 ## 21. Immediate next sprint
 
-Phase 8A implementation is complete locally. Before enabling it on a deployed
-revision, apply `20260905_0081_mink_phase_8a_business_briefs`, run
-ECH-P8A-01–24 against Echos with the existing workflow worker, and verify date,
-scope, source-failure and permission-revocation outcomes. No new environment
-variables or recurring jobs are required. Phase 8B is the next implementation:
-explicit opt-in recurring watches, deduplication, quiet hours and pause/delete.
+Phase 8B is implemented locally. Apply `20260905_0082_mink_phase_8b_watches`
+after 0081 and deploy the matching revision. Run ECH-P8A-01–24 and
+ECH-P8B-01–30 on Echos using the existing workflow heartbeat. Verify consent,
+owner-only alerts, quiet hours, duplicate delivery, source errors and scope
+revocation. No new environment variables or recurring jobs are required.
+Phase 8C (approved proactive responses) is next; no automatic remediation is
+part of 8B.
 Do not infer live model routing accuracy or production latency from unit tests.
 
 The Phase 7D deployment acceptance checklist remains applicable:

@@ -167,6 +167,7 @@ export const EVENT_KEYS = [
   "ai.credits_low",
   "ai.credits_purchased",
   "mink.workflow_completed",
+  "mink.watch_ready",
   // ── Data (CSV import/export) ────────────────────────────────────────────
   "data.import_started",
   "data.imported",
@@ -721,6 +722,17 @@ export const EVENTS: readonly EventDef[] = [
     section: "ai",
     severity: "success",
     audiences: { "store-admins": IN_APP },
+  },
+  {
+    key: "mink.watch_ready",
+    label: "Mink watch update",
+    description:
+      "A personally enabled watch has new evidence or a scheduled brief.",
+    group: "Plan & billing",
+    section: "dashboard",
+    severity: "info",
+    audiences: { "store-admins": IN_APP },
+    configurable: false,
   },
   {
     key: "mink.workflow_completed",

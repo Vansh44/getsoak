@@ -18,6 +18,7 @@ import {
   minkWorkflowEvents,
   minkWorkflowRuns,
   minkWorkflowSteps,
+  minkWatches,
   platformAdmins,
   roles,
   storeLocations,
@@ -90,6 +91,7 @@ type ClaimedWorkflow = Pick<
   | "id"
   | "storeId"
   | "adminId"
+  | "watchId"
   | "template"
   | "status"
   | "inputJson"
@@ -118,6 +120,27 @@ export async function enqueueBusinessBrief(
   options: { period: BusinessBriefPeriod; locationName?: unknown },
 ): Promise<MinkWorkflowView> {
   assertQueueAuthority(actor, "business_brief");
+  const input = await captureBusinessBriefInput(actor, options);
+  return enqueueWorkflow(actor, {
+    template: "business_brief",
+    input,
+    idempotencyKey: `agent-run:${actor.runId}:business-brief:${input.period}:${input.locationIds.join(",")}:${input.includeUnassigned}:v1`,
+  });
+}
+
+export async function captureBusinessBriefInput(
+  actor: MinkActorContext,
+  options: { period: BusinessBriefPeriod; locationName?: unknown },
+): Promise<BusinessBriefInput> {
+  if (
+    !actor.isSuperadmin &&
+    !hasWorkflowPermissions(actor.permissions, "business_brief")
+  )
+    throw new MinkRequestError(
+      "watch_access_denied",
+      "Watches need Analytics, Products, Inventory and Orders View.",
+      403,
+    );
   if (options.period !== "daily" && options.period !== "weekly")
     throw new MinkToolInputError(
       "Choose daily or weekly for a business brief.",
@@ -127,11 +150,7 @@ export async function enqueueBusinessBrief(
     period: options.period,
     defaultLowStockThreshold: actor.defaultLowStockThreshold,
   };
-  return enqueueWorkflow(actor, {
-    template: "business_brief",
-    input,
-    idempotencyKey: `agent-run:${actor.runId}:business-brief:${input.period}:${input.locationIds.join(",")}:${input.includeUnassigned}:v1`,
-  });
+  return input;
 }
 
 /** Queue one deterministic read-only report. Model retries reuse source run. */
@@ -602,6 +621,28 @@ export async function runMinkWorkflowWorker(
         result.workflowsCancelled += 1;
         continue;
       }
+      if (run.watchId) {
+        const active = await withService((db) =>
+          db
+            .select({ id: minkWatches.id })
+            .from(minkWatches)
+            .where(
+              and(
+                eq(minkWatches.id, run.watchId!),
+                eq(minkWatches.storeId, run.storeId),
+                eq(minkWatches.adminId, run.adminId),
+                eq(minkWatches.status, "active"),
+                eq(minkWatches.lastRunId, run.id),
+              ),
+            )
+            .limit(1),
+        );
+        if (!active[0]) {
+          await cancelClaimedWorkflow(run, workerId, "watch_inactive");
+          result.workflowsCancelled += 1;
+          continue;
+        }
+      }
       if (config.betaRequireInvite || requiresWorkflowDrafting(run.template)) {
         const access = await getMinkStoreAccess(run.storeId);
         if (
@@ -613,7 +654,10 @@ export async function runMinkWorkflowWorker(
           continue;
         }
       }
-      const executionScope = await revalidateWorkflowAuthority(run);
+      const executionScope = await revalidateWorkflowAuthority(
+        run,
+        Boolean(run.watchId),
+      );
       if (!executionScope) {
         await cancelClaimedWorkflow(run, workerId, "authorization_revoked");
         result.workflowsCancelled += 1;
@@ -655,13 +699,15 @@ export async function runMinkWorkflowWorker(
  * platform-operator row, or narrowing an explicit location assignment takes
  * effect before the next step reads store data.
  */
-async function revalidateWorkflowAuthority(
-  run: ClaimedWorkflow,
+export async function revalidateWorkflowAuthority(
+  run: Pick<ClaimedWorkflow, "storeId" | "adminId" | "template" | "inputJson">,
+  requireDashboard = false,
+  existingDb?: Db,
 ): Promise<WorkflowExecutionScope | null> {
   if (!isMinkWorkflowTemplate(run.template)) return null;
   const template = run.template;
   const input = readWorkflowInput(template, run.inputJson);
-  return withService(async (db) => {
+  const read = async (db: Db): Promise<WorkflowExecutionScope | null> => {
     let isPlatformOperator = false;
     let isStoreSuperadmin = false;
     if (input.requesterEmail) {
@@ -691,6 +737,8 @@ async function revalidateWorkflowAuthority(
           )
           .limit(1);
         const permissions = normalizePermissions(roleRows[0]?.permissions);
+        if (requireDashboard && !can(permissions, "dashboard", "view"))
+          return null;
         if (!hasWorkflowPermissions(permissions, template)) return null;
       }
     }
@@ -741,7 +789,8 @@ async function revalidateWorkflowAuthority(
           ? input.locationLabel
           : `${locationIds.length} currently authorized ${locationIds.length === 1 ? "location" : "locations"} (narrowed from ${input.locationIds.length} queued)`,
     };
-  });
+  };
+  return existingDb ? read(existingDb) : withService(read);
 }
 
 /**
@@ -851,6 +900,7 @@ async function deliverPendingWorkflowNotifications(limit: number) {
       .where(
         and(
           eq(minkWorkflowRuns.status, "completed"),
+          sql`${minkWorkflowRuns.watchId} IS NULL`,
           sql`NOT EXISTS (
             SELECT 1
             FROM ${activityEvents}
@@ -1006,6 +1056,7 @@ async function claimWorkflow(
       RETURNING run.id,
                 run.store_id AS "storeId",
                 run.admin_id AS "adminId",
+                run.watch_id AS "watchId",
                 run.template,
                 run.status,
                 run.input_json AS "inputJson",
@@ -1052,6 +1103,8 @@ function parseClaimedWorkflow(value: unknown): ClaimedWorkflow | null {
     typeof row.id !== "string" ||
     typeof row.storeId !== "string" ||
     typeof row.adminId !== "string" ||
+    (row.watchId != null &&
+      (typeof row.watchId !== "string" || !UUID_PATTERN.test(row.watchId))) ||
     typeof row.template !== "string" ||
     row.status !== "running" ||
     !row.inputJson ||
@@ -1070,6 +1123,7 @@ function parseClaimedWorkflow(value: unknown): ClaimedWorkflow | null {
     id: row.id,
     storeId: row.storeId,
     adminId: row.adminId,
+    watchId: typeof row.watchId === "string" ? row.watchId : null,
     template: row.template,
     status: "running",
     inputJson: row.inputJson,
@@ -1119,12 +1173,11 @@ async function executeClaimedStep(
         run,
         "snapshot",
       );
-      await completeIntermediateStep(
-        run,
-        workerId,
-        stepKey,
-        buildBusinessBriefResult(snapshot),
-      );
+      const brief = buildBusinessBriefResult(snapshot);
+      if (run.watchId)
+        brief.limitations[brief.limitations.length - 1] =
+          "This is a scheduled check from your explicitly enabled private watch. It grants no automatic business-action authority.";
+      await completeIntermediateStep(run, workerId, stepKey, brief);
       return { completed: false };
     }
     return finalizeFromStep<BusinessBriefResult>(

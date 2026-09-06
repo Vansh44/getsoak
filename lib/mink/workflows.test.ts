@@ -406,6 +406,36 @@ describe("Phase 8A durable brief worker", () => {
     expect(state.collectBrief).not.toHaveBeenCalled();
   });
 
+  it("cancels a watch run when its owner lost Dashboard View", async () => {
+    state.executeRows = [[{ ...claim, watchId: shop }]];
+    state.selectRows = [
+      [],
+      [{ id: shop }],
+      [{ role: "staff" }],
+      [{ permissions }],
+      lease,
+      [],
+    ];
+    expect((await runMinkWorkflowWorker(1)).workflowsCancelled).toBe(1);
+    expect(state.collectBrief).not.toHaveBeenCalled();
+    expect(state.setCalls).toContainEqual(
+      expect.objectContaining({ errorCode: "authorization_revoked" }),
+    );
+  });
+
+  it.each([0, 1, 2])(
+    "stops an inactive watch before step %i reads a checkpoint",
+    async (currentStep) => {
+      state.executeRows = [[{ ...claim, watchId: shop, currentStep }]];
+      state.selectRows = [[], [], lease, []];
+      expect((await runMinkWorkflowWorker(1)).workflowsCancelled).toBe(1);
+      expect(state.collectBrief).not.toHaveBeenCalled();
+      expect(state.setCalls).toContainEqual(
+        expect.objectContaining({ errorCode: "watch_inactive" }),
+      );
+    },
+  );
+
   it("retries a failed source instead of completing a zero-valued brief", async () => {
     state.collectBrief.mockRejectedValue(new Error("inventory unavailable"));
     state.selectRows = [[], [{ role: "superadmin" }], active, lease, lease, []];

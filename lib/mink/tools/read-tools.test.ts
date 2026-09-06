@@ -253,6 +253,7 @@ describe("Mink read-tool declarations", () => {
       "get_sales_summary",
       "list_low_stock",
       "start_business_brief",
+      "get_mink_watches",
       "start_weekly_trading_report",
       "start_revenue_decline_investigation",
       "start_product_launch_preparation",
@@ -299,6 +300,7 @@ describe("Mink read-tool declarations", () => {
 
     expect(declared({ dashboard: ["view"] })).toEqual([
       "get_store_profile",
+      "get_mink_watches",
       "search_help_centre",
     ]);
     expect(declared({ builder: ["view"] })).toEqual([
@@ -311,11 +313,13 @@ describe("Mink read-tool declarations", () => {
       "get_store_profile",
       "get_catalog_summary",
       "search_products",
+      "get_mink_watches",
       "search_help_centre",
     ]);
     expect(declared({ dashboard: ["view"], analytics: ["view"] })).toEqual([
       "get_store_profile",
       "get_sales_summary",
+      "get_mink_watches",
       "start_weekly_trading_report",
       "start_revenue_decline_investigation",
       "search_help_centre",
@@ -323,6 +327,7 @@ describe("Mink read-tool declarations", () => {
     expect(declared({ dashboard: ["view"], inventory: ["view"] })).toEqual([
       "get_store_profile",
       "list_low_stock",
+      "get_mink_watches",
       "search_help_centre",
     ]);
     expect(
@@ -336,11 +341,13 @@ describe("Mink read-tool declarations", () => {
       "get_catalog_summary",
       "search_products",
       "list_low_stock",
+      "get_mink_watches",
       "start_product_launch_preparation",
       "search_help_centre",
     ]);
     expect(declared({ dashboard: ["view"], orders: ["view"] })).toEqual([
       "get_store_profile",
+      "get_mink_watches",
       "list_orders",
       "search_help_centre",
     ]);

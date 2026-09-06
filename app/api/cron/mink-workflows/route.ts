@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { runMinkWorkflowWorker } from "@/lib/mink/workflows";
+import { scheduleMinkWatches, reconcileMinkWatches } from "@/lib/mink/watches";
 import { logError } from "@/lib/observability/logger";
 
 export const runtime = "nodejs";
@@ -20,8 +21,34 @@ async function handle(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   try {
-    const result = await runMinkWorkflowWorker();
-    return NextResponse.json({ ok: result.workflowsFailed === 0, ...result });
+    // Independent passes: a scheduler failure must not strand manual workflows.
+    let passError: unknown = null;
+    let watchesQueued = 0;
+    try {
+      watchesQueued = await scheduleMinkWatches();
+    } catch (error) {
+      passError = error;
+    }
+    let result: Awaited<ReturnType<typeof runMinkWorkflowWorker>> | null = null;
+    try {
+      result = await runMinkWorkflowWorker();
+    } catch (error) {
+      passError ??= error;
+    }
+    let watchAlerts = 0;
+    try {
+      watchAlerts = await reconcileMinkWatches();
+    } catch (error) {
+      passError ??= error;
+    }
+    if (passError) throw passError;
+    if (!result) throw new Error("Workflow heartbeat returned no result.");
+    return NextResponse.json({
+      ok: result.workflowsFailed === 0,
+      ...result,
+      watchesQueued,
+      watchAlerts,
+    });
   } catch (error) {
     // 503, not an unhandled 500, so Cloud Scheduler's retries engage — the
     // same contract prune-logs and seo-refresh answer on a failed pass. A

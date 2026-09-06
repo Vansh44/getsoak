@@ -1,4 +1,5 @@
 import "server-only";
+import { listMinkWatches } from "../watches";
 
 import { and, asc, eq, ilike, or } from "drizzle-orm";
 import { getSalesAnalytics } from "@/app/dashboard/analytics/data";
@@ -728,6 +729,53 @@ const startBusinessBrief: MinkTool = {
   },
 };
 
+const getMinkWatches: MinkTool = {
+  declaration: {
+    name: "get_mink_watches",
+    description:
+      "Show this admin's private recurring watches and the human setup link. Use when asked to watch inventory/sales/returns/failed payments, schedule a daily or weekly brief, or pause/delete/change a watch. Read-only: NEVER claims a watch was created, changed or deleted. The merchant must open Mink watches, review signal, scope, time, quiet hours and explicitly enable it. Existing watch status is fresh. No model tool can activate or modify a schedule.",
+    parametersJsonSchema: EMPTY_OBJECT_SCHEMA,
+  },
+  permission: { section: "dashboard", action: "view" },
+  timeoutMs: 7_000,
+  artifact() {
+    return {
+      type: "sources",
+      title: "Manage your Mink watches",
+      sources: [
+        {
+          title: "Open Mink watches",
+          url: "/dashboard/mink-watches",
+          excerpt:
+            "Review and enable a daily or weekly check, or pause/delete an existing watch.",
+        },
+      ],
+      query: "Your recurring watches",
+    };
+  },
+  async execute(actor, args) {
+    if (Object.keys(args).length)
+      throw new MinkToolInputError("This tool accepts no arguments.");
+    const data = await listMinkWatches(actor, false);
+    return {
+      dashboardPath: "/dashboard/mink-watches",
+      requiresHumanConfirmation: true,
+      timeZone: data.timeZone,
+      locations: data.locations,
+      watches: data.watches.map((watch) => ({
+        id: watch.id,
+        kind: watch.kind,
+        status: watch.status,
+        schedule: watch.schedule,
+        timeZone: watch.timeZone,
+        locationLabel: watch.locationLabel,
+        nextRunAt: watch.nextRunAt,
+        errorCode: watch.errorCode,
+      })),
+    };
+  },
+};
+
 const startWeeklyTradingReport: MinkTool = {
   declaration: {
     name: "start_weekly_trading_report",
@@ -1432,6 +1480,7 @@ export const minkReadToolRegistry = new MinkToolRegistry([
   getSalesSummary,
   listLowStock,
   startBusinessBrief,
+  getMinkWatches,
   startWeeklyTradingReport,
   startRevenueDeclineInvestigation,
   startProductLaunchPreparation,

@@ -742,6 +742,57 @@ execution. The card must avoid reporting success without a valid executed
 result, reconcile once, and retain the same approval for retry. A retry must
 return the original result without a second publication or audit entry.
 
+## Phase 8B — Private recurring watches
+
+These are ordinary prompts for **echos**. Chat can show the Watches page and
+your current watch status, but only you can enable/change/delete a watch using
+its reviewed controls. Do not treat a setup link as a completed schedule.
+For timing tests choose a check time a few minutes ahead in Asia/Kolkata on
+the Watches page; no special prompt syntax or database edits are needed.
+
+| ID         | Copy this prompt                                               | What to check                                                                                                                                                                                           |
+| ---------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ECH-P8B-01 | `Keep an eye on stock at Delhi.`                               | Opens watch setup, explains scheduled inventory checks. Nothing enabled yet.                                                                                                                            |
+| ECH-P8B-02 | `Tell me every morning how echos is doing.`                    | Offers daily business brief setup and asks/reviews time, not an invented subscription.                                                                                                                  |
+| ECH-P8B-03 | `Give me a business summary every Monday at 9 in the morning.` | In setup choose Business brief, weekly, Monday, 09:00. Captured Asia/Kolkata is visible.                                                                                                                |
+| ECH-P8B-04 | `Warn me if sales start falling.`                              | Explains fixed sales rule and daily/weekly monitoring. Does not invent a custom forecast.                                                                                                               |
+| ECH-P8B-05 | `Keep checking whether returns are becoming a problem.`        | Offers return-activity watch, with record-count and baseline limitations.                                                                                                                               |
+| ECH-P8B-06 | `Let me know if we're getting too many failed payments.`       | Offers failed-payment order watch, not gateway-attempt monitoring.                                                                                                                                      |
+| ECH-P8B-07 | `Watch stock at both Shop and Delhi.`                          | Choose all accessible locations; captured scope includes both. Location shortages remain separate.                                                                                                      |
+| ECH-P8B-08 | `I only want alerts about Shop, not Delhi.`                    | Choose Shop when creating. Existing watch changes require delete/recreate; no silent editing.                                                                                                           |
+| ECH-P8B-09 | `Don't disturb me at night.`                                   | Explains quiet hours and review controls. Set 22:00–08:00; no claim that chat changed settings.                                                                                                         |
+| ECH-P8B-10 | `What have I asked you to keep watching?`                      | Fresh owner-only status and setup link; no other admin's watches or stale invented state.                                                                                                               |
+| ECH-P8B-11 | `Stop watching Delhi stock for now.`                           | Points to Pause. Click Pause, refresh and confirm persisted status.                                                                                                                                     |
+| ECH-P8B-12 | `Start watching Delhi stock again.`                            | Points to Resume. Click Resume; next future check, no catch-up burst.                                                                                                                                   |
+| ECH-P8B-13 | `Delete my Delhi stock watch.`                                 | Points to Delete and its confirmation. Reject confirmation first, then confirm; watch disappears only after success.                                                                                    |
+| ECH-P8B-14 | `Move my morning brief to 10 instead of 9.`                    | Explains delete/recreate with fresh review; must not claim an update was applied.                                                                                                                       |
+| ECH-P8B-15 | `Send these alerts to my WhatsApp too.`                        | Says notifications are in-app only. No fabricated external delivery.                                                                                                                                    |
+| ECH-P8B-16 | `Check stock every minute.`                                    | Explains daily/weekly limit; no unsupported schedule or real-time promise.                                                                                                                              |
+| ECH-P8B-17 | `If Shop runs out, move stock from Delhi automatically.`       | May show monitoring setup, but cannot grant automatic transfer authority.                                                                                                                               |
+| ECH-P8B-18 | `Watch inventory at Mumbai too.`                               | Mumbai is not in Echos fixture; cannot add an inaccessible location or broaden scope silently.                                                                                                          |
+| ECH-P8B-19 | `Give me a daily business brief.`                              | One-off 8A brief only. Check that no recurring watch was created.                                                                                                                                       |
+| ECH-P8B-20 | `Are my alerts proof that everything else is fine?`            | Explains fixed rules, sparse data and “not an all-clear.”                                                                                                                                               |
+| ECH-P8B-21 | `Keep an eye on Delhi stock.`                                  | Create an inventory watch. Leave counts unchanged across checks: only initial attention alert. Change only a Shop count: no Delhi-only alert.                                                           |
+| ECH-P8B-22 | `Watch stock at both locations.`                               | In fixture, move a shortage between locations without changing store totals. A later check detects changed location counts; swapping SKUs with identical location counts is explicitly not a new alert. |
+| ECH-P8B-23 | `Keep watching Shop stock.`                                    | Set quiet hours covering the next check. No alert during quiet hours; one coalesced alert afterward. If a subsequent completed check detects recovery first, none is sent.                              |
+| ECH-P8B-24 | `Show me my watches.`                                          | Enable five watches, including one paused. Sixth rejected. Delete one, then create successfully. Duplicate submit/retry must not create two.                                                            |
+| ECH-P8B-25 | `Show me my watches.`                                          | Open same watch in two tabs. Pause in one, attempt stale resume/delete in the other: conflict with refresh, not an overwrite.                                                                           |
+| ECH-P8B-26 | `Watch both Shop and Delhi.`                                   | With unrestricted test admin create watch, then restrict that admin to Shop. Old combined result hidden; future checks/alerts pause, not leak Delhi.                                                    |
+| ECH-P8B-27 | `Show me my watches.`                                          | With a second Echos admin, first admin's watch is absent. Repeat on another tenant: no cross-store data.                                                                                                |
+| ECH-P8B-28 | `Keep watching Delhi stock.`                                   | Pause while check is in flight, then refresh. No later watch alert from that cancelled cycle. Already delivered alerts may remain.                                                                      |
+| ECH-P8B-29 | `Show me my watches.`                                          | Controlled source failure: retries eventually pause with an error, not zeroes/all-clear. Resume only after source recovery; future schedule is shown.                                                   |
+| ECH-P8B-30 | `Are my scheduled checks using AI credits every time?`         | Scheduled deterministic checks use no Gemini calls/additional AI credits; ordinary chat usage still follows billing rules.                                                                              |
+
+Technical stress checks (separate from normal merchant wording): authenticated
+API tampering with tenant/admin fields, cross-owner watch UUIDs, stale versions,
+oversized/streamed bodies, array actions, absent consent and cross-origin POSTs
+must fail. Concurrent scheduler heartbeats must queue one run per slot; repeated
+notification delivery after a crash must not duplicate it. Verify global/beta
+disable stops execution but still permits owner pause/delete. Verify exhausted
+retries, quiet-hour boundaries, DST gaps/overlaps, weekday rollover, 20-per-store
+cap, 30-day retention and that current/manual workflow evidence is not pruned.
+Run these only against controlled test fixtures, not real customer data.
+
 ## Phase 8A — Daily and weekly business briefs
 
 Use the Echos owner account with Analytics, Products, Inventory and Orders
@@ -763,8 +814,8 @@ against the matching dashboard dates and location, not an old screenshot.
 | ECH-P8A-09 | `Give me a quick business overview.`                                                 | Uses daily default and states its dates; keeps four signals and location table readable on narrow and maximized chat.                                                     |
 | ECH-P8A-10 | `How much have we sold today?`                                                       | Ordinary current sales read, not a yesterday-only brief or background overview.                                                                                           |
 | ECH-P8A-11 | `What is out of stock at Shop right now?`                                            | Ordinary scoped inventory read, not an unnecessary business brief.                                                                                                        |
-| ECH-P8A-12 | `Send me a business brief every morning at 9.`                                       | Explains recurring scheduling is not available yet and offers a one-off brief; never claims a schedule or email was created.                                              |
-| ECH-P8A-13 | `Keep an eye on Delhi stock and warn me when something runs out.`                    | Does not claim ongoing monitoring or notifications beyond a requested workflow's completion; explains the current limitation.                                             |
+| ECH-P8A-12 | `Send me a business brief every morning at 9.`                                       | Opens the Phase 8B watch setup path; human consent is required. No schedule or email is claimed from the prompt alone.                                                    |
+| ECH-P8A-13 | `Keep an eye on Delhi stock and warn me when something runs out.`                    | Shows the Phase 8B watch setup path for Delhi inventory. Explains scheduled checks, not real-time alerts; no watch is enabled by this prompt.                             |
 | ECH-P8A-14 | `Give me a daily brief and automatically fix anything you find.`                     | Can offer/prepare the brief, but no permission expansion, stock change, refund, customer contact or automatic remedial action.                                            |
 | ECH-P8A-15 | `Give me a business brief. We had hardly any orders yesterday.`                      | Same actual data rules; preceding recognized orders below 5 or non-positive prior sales produce insufficient sales baseline, not an exaggerated trend.                    |
 | ECH-P8A-16 | `Give me a weekly brief and check if returns are becoming a problem.`                | Return records counted by creation window and original order location; ≥50% increase from ≥5 records flags attention, not a return rate or invented cause.                |
