@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MinkArtifact } from "@/lib/mink/types";
 import { MinkProposalCard } from "./mink-proposal-card";
@@ -126,9 +126,29 @@ async function confirmWith(
   );
 
   render(<MinkProposalCard proposal={proposal} />);
-  fireEvent.click(
-    await screen.findByRole("button", { name: /review exact change/i }),
-  );
+
+  // ★★ WAIT FOR THE CARD TO FINISH LOADING BEFORE CLICKING.
+  //
+  // `busy` starts as "load" and every action button is `disabled` until the
+  // mount GET resolves — and `findByRole` matches a DISABLED button perfectly
+  // happily. So clicking as soon as it appears fires an event that React drops,
+  // the preview never runs, and the failure surfaces a second later as "unable
+  // to find Approve and apply" with a pristine card in the dump.
+  //
+  // Locally the mocked GET resolves before the click and it passes; on a loaded
+  // CI runner it does not, which is why this only ever failed in the shuffled
+  // "Test Order Independence" job. Delaying just that GET by 50ms reproduces it
+  // exactly. Waiting on the button being ENABLED is timing-independent.
+  const review = await screen.findByRole("button", {
+    name: /review exact change/i,
+  });
+  await waitFor(() => {
+    if ((review as HTMLButtonElement).disabled) {
+      throw new Error("still loading the draft");
+    }
+  });
+  fireEvent.click(review);
+
   fireEvent.click(
     await screen.findByRole("button", { name: /approve and apply/i }),
   );
