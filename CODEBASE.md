@@ -67,6 +67,49 @@ tokens were renamed to `--sm-*` and `WHOLESIP_STORE_ID` to `FALLBACK_STORE_ID`.
 > ordinary Echos merchant requests, separate tester expectations, clarification
 > conversations and a distinct technical security appendix.
 
+### Mink Phase 8D — Approved memories and reviewed text input (2026-09-07)
+
+`/dashboard/mink-memories` and `/api/mink/memories` provide private per-store,
+per-admin reference context. `lib/mink/memory-policy.ts` validates explicit
+consent, exact fields, categories, 80/600-character bounds and 30/90/365-day
+retention. `memories.ts` serializes changes with an owner-specific transaction
+advisory lock, enforces 10 memories, exact-version edits and idempotent save
+keys. No model memory mutation tool exists. Same-origin POSTs, actual streamed
+body limits, rate limits and trusted host/session ownership guard management.
+Inspection/deletion remain available with Dashboard View when generation is
+disabled; saves require current Mink access. Content-free deletion markers
+prevent delayed requests resurrecting deleted or physically expired text.
+
+Every new chat turn loads only active owner memories before run/credit
+reservation. An exact role/permissions/location-binding hash withholds context
+after authority changes until explicit reapproval. The Vertex session receives
+JSON reference data as a separate user-message part, never system policy; it is
+not copied into persisted user messages or background workflows. Current user
+requests take precedence over preferences and live facts still require tools.
+Deletion/expiry affect future turns, not in-flight provider context or existing
+conversation mentions. Saves have no separate AI-credit charge; context adds
+normal input tokens. No new environment variables, model or scheduled job.
+
+`mink-document-input.tsx` reads one .txt/.md file locally (UTF-8, 8 KiB,
+3,000 characters), requires review/consent, then adds labelled reference text
+to the editable composer within its existing 4,000-character total. Nothing
+uploads before Send; text follows existing conversation persistence/deletion.
+`document-input.ts` rejects binary controls, invalid encoding and oversized
+input without truncation. No PDF, screenshot, audio/voice, spreadsheet, URL
+fetch, media upload or document-library ingestion is implemented by this phase.
+Pending local document previews reset on conversation changes. Previously inert
+attach/microphone icons are replaced by the functional text-document control.
+
+Migration `20260907_0084_mink_phase_8d_memories.sql` adds service-only
+`mink_memories`/`mink_memory_deletions`, store FKs, bounds/indexes and published
+Help guidance. The existing workflow heartbeat independently purges up to 500
+expired texts per pass; expiry is enforced on reads even without cron. The
+optional `memories.postgres.test.ts` fixture uses a fresh `mink_8d_verify`
+database on `MINK_MEMORY_TEST_SOCKET`, port 55484, never application credentials.
+Prompt versions advance to `read-beta-v11`/`draft-action-beta-v22`; registry
+versions stay unchanged. `bounded-json.ts` also closes the chat body's missing/
+forged Content-Length loophole. ECH-P8D prompts cover review, privacy and stress.
+
 ### Mink Phase 8C — Approved watch response investigations (2026-09-06)
 
 `lib/mink/proactive-response-types.ts` ranks evidenced attention signals in a

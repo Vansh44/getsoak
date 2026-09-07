@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { runMinkWorkflowWorker } from "@/lib/mink/workflows";
 import { scheduleMinkWatches, reconcileMinkWatches } from "@/lib/mink/watches";
 import { logError } from "@/lib/observability/logger";
+import { purgeExpiredMinkMemories } from "@/lib/mink/memories";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -38,6 +39,11 @@ async function handle(request: Request) {
     let watchAlerts = 0;
     try {
       watchAlerts = await reconcileMinkWatches();
+    } catch (error) {
+      passError ??= error;
+    }
+    try {
+      await purgeExpiredMinkMemories();
     } catch (error) {
       passError ??= error;
     }

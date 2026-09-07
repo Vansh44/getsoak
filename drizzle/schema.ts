@@ -7895,3 +7895,69 @@ export const orderItemOffers = pgTable(
     unique("order_item_offers_item_key").on(table.orderItemId, table.offerId),
   ],
 );
+
+// Phase 8D: service-only, owner-scoped approved reference context.
+export const minkMemories = pgTable(
+  "mink_memories",
+  {
+    id: uuid().primaryKey(),
+    storeId: uuid("store_id")
+      .notNull()
+      .references(() => stores.id, { onDelete: "cascade" }),
+    adminId: text("admin_id").notNull(),
+    title: text().notNull(),
+    content: text().notNull(),
+    kind: text().notNull(),
+    version: integer().notNull().default(1),
+    scopeHash: text("scope_hash").notNull(),
+    requestKey: uuid("request_key").notNull(),
+    requestHash: text("request_hash").notNull(),
+    expiresAt: timestamp("expires_at", {
+      withTimezone: true,
+      mode: "string",
+    }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("mink_memories_owner_idx").on(
+      table.storeId,
+      table.adminId,
+      table.updatedAt.desc(),
+    ),
+    index("mink_memories_expiry_idx").on(table.expiresAt),
+    check(
+      "mink_memories_text_check",
+      sql`char_length(${table.title}) BETWEEN 1 AND 80 AND char_length(${table.content}) BETWEEN 1 AND 600`,
+    ),
+    check(
+      "mink_memories_kind_check",
+      sql`${table.kind} IN ('preference','brand_voice','business_context')`,
+    ),
+    check("mink_memories_version_check", sql`${table.version} > 0`),
+    check(
+      "mink_memories_hash_check",
+      sql`${table.scopeHash} ~ '^[a-f0-9]{64}$' AND ${table.requestHash} ~ '^[a-f0-9]{64}$'`,
+    ),
+  ],
+);
+export const minkMemoryDeletions = pgTable(
+  "mink_memory_deletions",
+  {
+    id: uuid().notNull(),
+    storeId: uuid("store_id")
+      .notNull()
+      .references(() => stores.id, { onDelete: "cascade" }),
+    adminId: text("admin_id").notNull(),
+    deletedAt: timestamp("deleted_at", { withTimezone: true, mode: "string" })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.storeId, table.adminId, table.id] }),
+  ],
+);

@@ -2002,8 +2002,13 @@ ranked response plans with explicit human approval/dismissal, 24-hour expiry,
 idempotent bounded read-only investigations and fresh evidence checks. Inventory
 details remain per-location (20 rows/3 locations); returns/payments cap at 20
 records without contacts. No business mutation is authorized by this approval.
-Migration 0083 and ECH-P8C cases require deployment acceptance. Phase
-8D approved memory/optional inputs remain unbuilt. Conversion monitoring
+Migration 0083 is owner-reported applied; ECH-P8C cases still require deployment
+acceptance. Phase 8D now adds explicitly approved owner/store memories with
+expiry, editing/deletion, exact-authority context checks and no model mutation
+tool. Reviewed local .txt/.md text may be added to the composer; import never
+sends, saves memory or grants action authority. Migration 0084 and ECH-P8D
+prompts cover this rollout. Optional screenshot/PDF/voice channels are a separate
+unbuilt 8E milestone, not capabilities of the text importer. Conversion monitoring
 requires a separately validated source and is not claimed by Phase 8A.
 
 ### Returns, exchanges, BORIS, credit notes

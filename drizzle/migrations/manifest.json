@@ -4037,6 +4037,63 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260907_0084_mink_phase_8d_memories",
+      "description": "Owner-approved expiring memories and reviewed text-document guidance",
+      "file": "sql/20260907_0084_mink_phase_8d_memories.sql",
+      "transaction": true,
+      "requires": ["20260906_0083_mink_phase_8c_responses"],
+      "verify": {
+        "tables": ["mink_memories", "mink_memory_deletions", "help_articles"],
+        "queries": [
+          {
+            "name": "Memory tables are service-only",
+            "sql": "select count(*)::text from pg_class where oid in ('public.mink_memories'::regclass,'public.mink_memory_deletions'::regclass) and relrowsecurity and not has_table_privilege('app_user',oid,'SELECT,INSERT,UPDATE,DELETE')",
+            "equals": "2"
+          },
+          {
+            "name": "Memory constraints installed",
+            "sql": "select count(*)::text from pg_constraint where conrelid='public.mink_memories'::regclass and conname in ('mink_memories_text_check','mink_memories_kind_check','mink_memories_version_check','mink_memories_hash_check')",
+            "equals": "4"
+          },
+          {
+            "name": "Memory ownership foreign keys",
+            "sql": "select count(*)::text from pg_constraint where conrelid in ('public.mink_memories'::regclass,'public.mink_memory_deletions'::regclass) and contype='f' and confrelid='public.stores'::regclass",
+            "equals": "2"
+          },
+          {
+            "name": "Memory and text input guide published",
+            "sql": "select count(*)::text from help_articles where slug='use-mink-ai-in-your-dashboard' and status='published' and category_id is not null and body like '%<h2>Approve private memories and review text documents</h2>%' and body like '%Content-free deletion markers%' and body like '%4,000 characters%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "tables": ["mink_memories", "mink_memory_deletions", "help_articles"],
+        "queries": [
+          {
+            "name": "Memory tables are service-only",
+            "sql": "select count(*)::text from pg_class where oid in ('public.mink_memories'::regclass,'public.mink_memory_deletions'::regclass) and relrowsecurity and not has_table_privilege('app_user',oid,'SELECT,INSERT,UPDATE,DELETE')",
+            "equals": "2"
+          },
+          {
+            "name": "Memory constraints installed",
+            "sql": "select count(*)::text from pg_constraint where conrelid='public.mink_memories'::regclass and conname in ('mink_memories_text_check','mink_memories_kind_check','mink_memories_version_check','mink_memories_hash_check')",
+            "equals": "4"
+          },
+          {
+            "name": "Memory ownership foreign keys",
+            "sql": "select count(*)::text from pg_constraint where conrelid in ('public.mink_memories'::regclass,'public.mink_memory_deletions'::regclass) and contype='f' and confrelid='public.stores'::regclass",
+            "equals": "2"
+          },
+          {
+            "name": "Memory and text input guide published",
+            "sql": "select count(*)::text from help_articles where slug='use-mink-ai-in-your-dashboard' and status='published' and category_id is not null and body like '%<h2>Approve private memories and review text documents</h2>%' and body like '%Content-free deletion markers%' and body like '%4,000 characters%'",
+            "equals": "1"
+          }
+        ]
+      }
     }
   ]
 }

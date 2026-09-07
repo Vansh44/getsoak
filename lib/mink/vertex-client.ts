@@ -30,6 +30,7 @@ export function createVertexMinkSession(
     history: MinkStoredMessage[];
     abortSignal?: AbortSignal;
     thinkingLevel?: MinkThinkingLevel;
+    memoryReference?: string;
   },
 ): MinkModelSession {
   if (!config.projectId) {
@@ -76,7 +77,11 @@ export function createVertexMinkSession(
 
   return {
     async sendUserMessage(message) {
-      return send(message);
+      return send(
+        options.memoryReference
+          ? [{ text: options.memoryReference }, { text: message }]
+          : message,
+      );
     },
     async sendToolResponses(responses) {
       const parts: Part[] = responses.map((result) => ({
