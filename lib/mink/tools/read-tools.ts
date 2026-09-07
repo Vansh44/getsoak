@@ -729,6 +729,39 @@ const startBusinessBrief: MinkTool = {
   },
 };
 
+const getMinkWatchResponses: MinkTool = {
+  declaration: {
+    name: "get_mink_watch_responses",
+    description:
+      "Read evidence-ranked response plans and recent approved investigations for one of this admin's watches. Use get_mink_watches to resolve its ID first. Plans need human approval in Watches; this tool cannot approve, dismiss or execute anything. A response is a bounded read-only investigation, never permission for inventory, price, order, refund or customer-message changes. Explain uncertainty and do not promise monetary impact.",
+    parametersJsonSchema: {
+      type: "object",
+      properties: {
+        watch_id: {
+          type: "string",
+          description: "Exact owned watch ID from get_mink_watches",
+        },
+      },
+      required: ["watch_id"],
+      additionalProperties: false,
+    },
+  },
+  permission: { section: "dashboard", action: "view" },
+  timeoutMs: 7000,
+  async execute(actor, args) {
+    if (
+      Object.keys(args).some((k) => k !== "watch_id") ||
+      typeof args.watch_id !== "string"
+    )
+      throw new MinkToolInputError("Choose one exact owned watch.");
+    const { listProactiveResponses } = await import("../proactive-responses");
+    return {
+      ...(await listProactiveResponses(actor, args.watch_id)),
+      dashboardPath: "/dashboard/mink-watches",
+    };
+  },
+};
+
 const getMinkWatches: MinkTool = {
   declaration: {
     name: "get_mink_watches",
@@ -1481,6 +1514,7 @@ export const minkReadToolRegistry = new MinkToolRegistry([
   listLowStock,
   startBusinessBrief,
   getMinkWatches,
+  getMinkWatchResponses,
   startWeeklyTradingReport,
   startRevenueDeclineInvestigation,
   startProductLaunchPreparation,

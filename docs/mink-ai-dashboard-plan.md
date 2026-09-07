@@ -1428,8 +1428,23 @@ Exit criteria:
   passed. All five opt-in PostgreSQL concurrency checks also passed during
   implementation. Migration 0082 passed isolated repeat,
   rollback, tenant-FK, restricted-role, deduplication and manifest checks.
-- **8C — Approved proactive responses: not implemented.** Evidence-ranked
-  proposed responses under explicit action scope, limits and approvals.
+- **8C — Approved proactive response investigations: implemented locally; deployment acceptance pending.**
+  Owner-only plans from evidenced watch alerts, fixed disclosed triage order,
+  unknown monetary impact, 24-hour expiry and exact evidence/version/scope hashes.
+  Human-only approval/dismissal queues one durable two-step read-only review;
+  duplicate approval returns the same workflow. Fresh evidence can invalidate a
+  remedy. Inventory details cap at 20 rows/3 affected locations; returns/payment
+  samples cap at 20 without contacts; sales compare recognized sales/orders.
+  Existing permissions, per-step authority, retries, cancellation, retention and
+  single-in-flight watch limits apply. No autonomous business mutation is added;
+  any subsequent correction, promotion or contact needs its existing separately
+  approved flow. Migration 0083, Help guidance and ECH-P8C tests cover rollout.
+  Local verification (2026-09-07): 6,271 regression tests passed (21 skipped),
+  plus all six opt-in isolated PostgreSQL checks for migration verification,
+  repeatability, rollback, concurrent approvals, pause races and tenant/role
+  isolation. TypeScript, lint, changed-file formatting and the production build
+  passed. The sandboxed build stalled; the unsandboxed local retry passed.
+  Live deployment, migration application and Echos acceptance are not yet verified.
 - **8D — Approved memory and optional inputs: not implemented.** Merchant-owned
   memories, retention/deletion and separately validated optional input channels.
 
@@ -1660,8 +1675,10 @@ after 0081 and deploy the matching revision. Run ECH-P8A-01–24 and
 ECH-P8B-01–30 on Echos using the existing workflow heartbeat. Verify consent,
 owner-only alerts, quiet hours, duplicate delivery, source errors and scope
 revocation. No new environment variables or recurring jobs are required.
-Phase 8C (approved proactive responses) is next; no automatic remediation is
-part of 8B.
+Phase 8C is implemented locally. Apply `20260906_0083_mink_phase_8c_responses`,
+deploy the dashboard/worker and run ECH-P8C acceptance tests on Echos. Approval
+authorizes only one read-only response investigation, never an automatic remedy.
+Phase 8D (merchant-approved memory and optional inputs) is next and remains unbuilt.
 Do not infer live model routing accuracy or production latency from unit tests.
 
 The Phase 7D deployment acceptance checklist remains applicable:

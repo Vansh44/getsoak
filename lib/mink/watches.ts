@@ -91,7 +91,7 @@ async function stop(
       .set({ cancelRequestedAt: new Date().toISOString() })
       .where(
         and(
-          eq(minkWorkflowRuns.id, w.lastRunId),
+          sql`${minkWorkflowRuns.status} IN ('queued','running')`,
           eq(minkWorkflowRuns.storeId, w.storeId),
           eq(minkWorkflowRuns.watchId, w.id),
         ),

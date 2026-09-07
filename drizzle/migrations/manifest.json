@@ -3962,6 +3962,81 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260906_0083_mink_phase_8c_responses",
+      "description": "Evidence-ranked private watch responses with one-time scoped investigation approvals",
+      "file": "sql/20260906_0083_mink_phase_8c_responses.sql",
+      "transaction": true,
+      "requires": ["20260905_0082_mink_phase_8b_watches"],
+      "verify": {
+        "tables": [
+          "mink_watch_responses",
+          "mink_workflow_runs",
+          "help_articles"
+        ],
+        "queries": [
+          {
+            "name": "Response approvals are service-only",
+            "sql": "select count(*)::text from pg_class where oid='public.mink_watch_responses'::regclass and relrowsecurity and not has_table_privilege('app_user',oid,'SELECT,INSERT,UPDATE,DELETE')",
+            "equals": "1"
+          },
+          {
+            "name": "Response tenant foreign keys installed",
+            "sql": "select count(*)::text from pg_constraint where conrelid='public.mink_watch_responses'::regclass and contype='f' and pg_get_constraintdef(oid) like '%store_id)%'",
+            "equals": "3"
+          },
+          {
+            "name": "Response workflow enabled",
+            "sql": "select count(*)::text from pg_constraint where conrelid='public.mink_workflow_runs'::regclass and conname='mink_workflow_runs_template_check' and pg_get_constraintdef(oid) like '%watch_response_review%'",
+            "equals": "1"
+          },
+          {
+            "name": "Response deduplication and approval constraints installed",
+            "sql": "select count(*)::text from pg_constraint where conrelid='public.mink_watch_responses'::regclass and conname in ('mink_watch_responses_source_key','mink_watch_responses_approval_check','mink_watch_responses_signal_check','mink_watch_responses_status_check')",
+            "equals": "4"
+          },
+          {
+            "name": "Response guidance published",
+            "sql": "select count(*)::text from public.help_articles where slug='use-mink-ai-in-your-dashboard' and status='published' and category_id is not null and body like '%<h2>Review and approve a response to a watch alert</h2>%' and body like '%Plans expire 24 hours%' and body like '%not business changes%' and body like '%at most 20 SKU rows%'",
+            "equals": "1"
+          }
+        ]
+      },
+      "adoptVerify": {
+        "tables": [
+          "mink_watch_responses",
+          "mink_workflow_runs",
+          "help_articles"
+        ],
+        "queries": [
+          {
+            "name": "Response approvals are service-only",
+            "sql": "select count(*)::text from pg_class where oid='public.mink_watch_responses'::regclass and relrowsecurity and not has_table_privilege('app_user',oid,'SELECT,INSERT,UPDATE,DELETE')",
+            "equals": "1"
+          },
+          {
+            "name": "Response tenant foreign keys installed",
+            "sql": "select count(*)::text from pg_constraint where conrelid='public.mink_watch_responses'::regclass and contype='f' and pg_get_constraintdef(oid) like '%store_id)%'",
+            "equals": "3"
+          },
+          {
+            "name": "Response workflow enabled",
+            "sql": "select count(*)::text from pg_constraint where conrelid='public.mink_workflow_runs'::regclass and conname='mink_workflow_runs_template_check' and pg_get_constraintdef(oid) like '%watch_response_review%'",
+            "equals": "1"
+          },
+          {
+            "name": "Response deduplication and approval constraints installed",
+            "sql": "select count(*)::text from pg_constraint where conrelid='public.mink_watch_responses'::regclass and conname in ('mink_watch_responses_source_key','mink_watch_responses_approval_check','mink_watch_responses_signal_check','mink_watch_responses_status_check')",
+            "equals": "4"
+          },
+          {
+            "name": "Response guidance published",
+            "sql": "select count(*)::text from public.help_articles where slug='use-mink-ai-in-your-dashboard' and status='published' and category_id is not null and body like '%<h2>Review and approve a response to a watch alert</h2>%' and body like '%Plans expire 24 hours%' and body like '%not business changes%' and body like '%at most 20 SKU rows%'",
+            "equals": "1"
+          }
+        ]
+      }
     }
   ]
 }

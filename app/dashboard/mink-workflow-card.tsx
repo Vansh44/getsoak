@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { MinkBusinessBrief } from "./mink-business-brief";
+import { MinkProactiveResponse } from "./mink-proactive-response";
+import type { ProactiveResponseResult } from "@/lib/mink/proactive-response-types";
 import type { BusinessBriefResult } from "@/lib/mink/business-brief-types";
 import {
   AlertTriangle,
@@ -229,6 +231,8 @@ function WorkflowResult({
 }) {
   if (template === "business_brief")
     return <MinkBusinessBrief result={result as BusinessBriefResult} />;
+  if (template === "watch_response_review")
+    return <MinkProactiveResponse result={result as ProactiveResponseResult} />;
   if (template === "revenue_decline_investigation") {
     return (
       <RevenueInvestigation

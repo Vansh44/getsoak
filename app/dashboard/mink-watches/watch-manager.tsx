@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { WATCH_KINDS } from "@/lib/mink/watch-policy";
 import type { WatchView } from "@/lib/mink/watches";
 import { MinkBusinessBrief } from "../mink-business-brief";
+import { MinkResponsePanel } from "./response-panel";
 
 type Data = { watches: WatchView[]; locations: string[]; timeZone: string };
 const LABELS = {
@@ -21,6 +22,7 @@ export function MinkWatchManager() {
   const [quiet, setQuiet] = useState(true);
   const [weekly, setWeekly] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
+  const [responseWatch, setResponseWatch] = useState<string | null>(null);
   const creationKey = useRef<string | null>(null);
   const form = useRef<HTMLFormElement>(null);
   const load = useCallback(async () => {
@@ -317,17 +319,32 @@ export function MinkWatchManager() {
                   </button>
                 </div>
                 {w.result ? (
-                  <details>
-                    <summary className="cursor-pointer">
-                      Latest completed check ·{" "}
-                      {new Date(w.result.dataAsOf).toLocaleString("en-IN", {
-                        timeZone: w.timeZone,
-                      })}
-                    </summary>
-                    <div className="mt-3">
-                      <MinkBusinessBrief result={w.result} />
-                    </div>
-                  </details>
+                  <div className="space-y-3">
+                    <button
+                      className={button}
+                      onClick={() =>
+                        setResponseWatch(responseWatch === w.id ? null : w.id)
+                      }
+                    >
+                      {responseWatch === w.id
+                        ? "Hide responses"
+                        : "Suggested responses"}
+                    </button>
+                    {responseWatch === w.id && (
+                      <MinkResponsePanel watchId={w.id} />
+                    )}
+                    <details>
+                      <summary className="cursor-pointer">
+                        Latest completed check ·{" "}
+                        {new Date(w.result.dataAsOf).toLocaleString("en-IN", {
+                          timeZone: w.timeZone,
+                        })}
+                      </summary>
+                      <div className="mt-3">
+                        <MinkBusinessBrief result={w.result} />
+                      </div>
+                    </details>
+                  </div>
                 ) : (
                   <p className="text-sm text-muted-foreground">
                     No accessible completed check yet.

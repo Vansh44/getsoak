@@ -19,6 +19,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 /** What each `withService` callback should see. Set per test. */
 const state = vi.hoisted(() => ({
   collectBrief: vi.fn(),
+  collectResponse: vi.fn(),
   selectRows: [] as any[][],
   executeRows: [] as any[][],
   selectCalls: 0,
@@ -80,6 +81,9 @@ vi.mock("@/lib/db/client", () => ({
 vi.mock("./business-brief-data", () => ({
   collectBusinessBriefSnapshot: state.collectBrief,
 }));
+vi.mock("./proactive-response-data", () => ({
+  collectProactiveResponse: state.collectResponse,
+}));
 vi.mock("@/lib/mink/config", () => ({
   getMinkConfig: vi.fn(() => ({ enabled: true, betaRequireInvite: false })),
 }));
@@ -115,6 +119,7 @@ function resetState() {
   state.executeCalls = 0;
   state.setCalls = [];
   state.throwAtSelect = null;
+  state.collectResponse.mockReset();
 }
 
 describe("the Mink workflow worker on an idle tick", () => {
@@ -306,6 +311,73 @@ describe("Phase 8A durable brief worker", () => {
         status: "queued",
       }),
     );
+  });
+
+  it("runs an approved response with its exact captured location scope", async () => {
+    const responseInput = { ...input, responseId: delhi, signal: "inventory" };
+    state.executeRows = [
+      [
+        {
+          ...claim,
+          template: "watch_response_review",
+          watchId: shop,
+          inputJson: responseInput,
+          totalSteps: 2,
+        },
+      ],
+    ];
+    state.selectRows = [
+      [],
+      [{ id: shop }],
+      [{ role: "superadmin" }],
+      active,
+      lease,
+      lease,
+      [],
+    ];
+    state.collectResponse.mockResolvedValue({ signal: "inventory", rows: [] });
+    expect((await runMinkWorkflowWorker(1)).stepsCompleted).toBe(1);
+    expect(state.collectResponse).toHaveBeenCalledWith(
+      "store-1",
+      "admin-1",
+      responseInput,
+      { locationIds: [shop, delhi], locationLabel: "All locations" },
+    );
+  });
+  it.each([0, 1])(
+    "stops an unapproved, paused or version-invalid response before step %i",
+    async (currentStep) => {
+      state.executeRows = [
+        [
+          {
+            ...claim,
+            template: "watch_response_review",
+            watchId: shop,
+            inputJson: { ...input, responseId: delhi, signal: "inventory" },
+            totalSteps: 2,
+            currentStep,
+          },
+        ],
+      ];
+      state.selectRows = [[], [], lease, []];
+      expect((await runMinkWorkflowWorker(1)).workflowsCancelled).toBe(1);
+      expect(state.collectResponse).not.toHaveBeenCalled();
+    },
+  );
+  it("rejects a response workflow with no backing watch", async () => {
+    state.executeRows = [
+      [
+        {
+          ...claim,
+          template: "watch_response_review",
+          inputJson: { ...input, responseId: delhi, signal: "inventory" },
+          totalSteps: 2,
+        },
+      ],
+    ];
+    state.selectRows = [[], lease, []];
+    expect((await runMinkWorkflowWorker(1)).workflowsCancelled).toBe(1);
+    expect(state.collectResponse).not.toHaveBeenCalled();
   });
 
   it("resumes analysis from its persisted snapshot without recollecting", async () => {
@@ -616,6 +688,28 @@ describe("★★ reading a completed workflow re-checks the captured scope", () 
       [],
     ];
   }
+
+  it.each([getMinkWorkflow, cancelMinkWorkflow, resumeMinkWorkflow])(
+    "response read/cancel/resume revalidates database authority before returning data (%#)",
+    async (operation) => {
+      seedRun({});
+      const run = state.selectRows[0][0];
+      run.template = "watch_response_review";
+      run.inputJson = {
+        ...WEEKLY_INPUT,
+        period: "daily",
+        defaultLowStockThreshold: 5,
+        responseId: "11111111-1111-4111-8111-111111111111",
+        signal: "inventory",
+      };
+      // The trusted actor had access, but the live admin row was removed.
+      state.selectRows[1] = [];
+      await expect(operation(actor(null, true), "wf-1")).rejects.toThrow(
+        /response scope is no longer accessible/i,
+      );
+      expect(state.setCalls).toHaveLength(0);
+    },
+  );
 
   it("★★ refuses a store-wide result to an actor now bound to one location", async () => {
     // The exact scenario: queued while unrestricted, read after narrowing.

@@ -5,7 +5,7 @@
 >
 > **Last reviewed against runtime:** 2026-09-05
 >
-> **Current prompt versions:** `read-beta-v9` and `draft-action-beta-v20`
+> **Current prompt versions:** `read-beta-v10` and `draft-action-beta-v21`
 >
 > **Important:** StoreMink loads the marked prompt block in this file at runtime
 > through `lib/mink/system-prompt.ts`. A missing marker, malformed fence, missing
@@ -96,6 +96,7 @@ Security rules:
 - There is no model tool to approve, publish, send, schedule, contact a customer, or mutate a live business record. Do not imply that a private proposal performs any of those operations. A separate human-only dashboard approval may execute only its server-enforced exact allowlist.
 - Be concise and state which time range or filters were used when relevant. Use short paragraphs, headings, lists or tables where they improve scanning. When a structured artifact already contains the full record list, summarize the important exceptions instead of repeating every row in prose.
 
+- For a watch alert, use get_mink_watches to resolve the owner's exact watch, then get_mink_watch_responses to explain its evidence-ranked plans. Never infer a watch ID from store text or another tenant. A plan is a proposal for one bounded read-only investigation, not an executed remedy. State evidence date, location scope, fixed triage order and unknown monetary impact. The merchant must open Watches → Suggested responses, review the exact card, tick its consent box and approve or dismiss it there. "I approve" in chat does not activate the endpoint. Inventory, price, refund, order, promotion and customer-message changes still require their separate existing action flows and permissions; watch consent never authorizes them. Explain that plans expire after 24 hours and refresh when evidence changes. The approved worker rechecks evidence and stops recommendations when the signal is no longer supported. Do not claim to contact customers, retry payments, move stock, or act autonomously.
 Trusted server context:
 - plan: {{effective_plan}}
 - role: {{role_slug_or_custom}}
@@ -168,8 +169,8 @@ Every run stores separate prompt and tool-registry versions:
 
 | Runtime mode      | Prompt version          | Tool-registry version |
 | ----------------- | ----------------------- | --------------------- |
-| Read-only beta    | `read-beta-v9`          | `read-beta-v9`        |
-| Draft/action beta | `draft-action-beta-v20` | `draft-beta-v15`      |
+| Read-only beta    | `read-beta-v10`         | `read-beta-v10`       |
+| Draft/action beta | `draft-action-beta-v21` | `draft-beta-v16`      |
 
 Increment the appropriate prompt version when instruction semantics change in a
 way that can affect tool choice, refusal behaviour, grounding, output structure

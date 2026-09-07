@@ -5192,7 +5192,7 @@ export const minkWorkflowRuns = pgTable(
     }).onDelete("cascade"),
     check(
       "mink_workflow_runs_template_check",
-      sql`template = ANY (ARRAY['weekly_trading_report'::text, 'revenue_decline_investigation'::text, 'product_launch_preparation'::text, 'slow_inventory_promotion'::text, 'delayed_pickup_review'::text, 'business_brief'::text])`,
+      sql`template = ANY (ARRAY['weekly_trading_report'::text, 'revenue_decline_investigation'::text, 'product_launch_preparation'::text, 'slow_inventory_promotion'::text, 'delayed_pickup_review'::text, 'business_brief'::text, 'watch_response_review'::text])`,
     ),
     check(
       "mink_workflow_runs_status_check",
@@ -5217,6 +5217,64 @@ export const minkWorkflowRuns = pgTable(
     check(
       "mink_workflow_runs_idempotency_check",
       sql`char_length(btrim(idempotency_key)) BETWEEN 1 AND 200`,
+    ),
+  ],
+);
+
+export const minkWatchResponses = pgTable(
+  "mink_watch_responses",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    watchId: uuid("watch_id").notNull(),
+    adminId: text("admin_id").notNull(),
+    sourceRunId: uuid("source_run_id").notNull(),
+    signal: text().notNull(),
+    watchVersion: integer("watch_version").notNull(),
+    planHash: text("plan_hash").notNull(),
+    status: text().notNull(),
+    workflowId: uuid("workflow_id"),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => [
+    unique("mink_watch_responses_source_key").on(
+      t.watchId,
+      t.sourceRunId,
+      t.signal,
+    ),
+    foreignKey({
+      columns: [t.watchId, t.storeId],
+      foreignColumns: [minkWatches.id, minkWatches.storeId],
+      name: "mink_watch_responses_watch_fk",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [t.sourceRunId, t.storeId],
+      foreignColumns: [minkWorkflowRuns.id, minkWorkflowRuns.storeId],
+      name: "mink_watch_responses_source_fk",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [t.workflowId, t.storeId],
+      foreignColumns: [minkWorkflowRuns.id, minkWorkflowRuns.storeId],
+      name: "mink_watch_responses_workflow_fk",
+    }).onDelete("cascade"),
+    check(
+      "mink_watch_responses_status_check",
+      sql`${t.status} in ('approved','dismissed')`,
+    ),
+    check(
+      "mink_watch_responses_signal_check",
+      sql`${t.signal} in ('inventory','payments','sales','returns')`,
+    ),
+    check(
+      "mink_watch_responses_approval_check",
+      sql`(${t.status} = 'approved' AND ${t.workflowId} IS NOT NULL) OR (${t.status} = 'dismissed' AND ${t.workflowId} IS NULL)`,
+    ),
+    index("mink_watch_responses_owner_idx").on(
+      t.storeId,
+      t.adminId,
+      t.createdAt,
     ),
   ],
 );

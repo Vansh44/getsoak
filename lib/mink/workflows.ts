@@ -19,6 +19,7 @@ import {
   minkWorkflowRuns,
   minkWorkflowSteps,
   minkWatches,
+  minkWatchResponses,
   platformAdmins,
   roles,
   storeLocations,
@@ -73,7 +74,15 @@ import {
   type WeeklyTradingReportSnapshot,
 } from "./workflow-types";
 
+import { collectProactiveResponse } from "./proactive-response-data";
+import {
+  isResponseSignal,
+  type ProactiveResponseInput,
+  type ProactiveResponseResult,
+} from "./proactive-response-types";
+
 const WORKFLOW_STEPS: Record<MinkWorkflowTemplate, readonly string[]> = {
+  watch_response_review: ["snapshot", "finalise"],
   business_brief: ["snapshot", "analyse", "finalise"],
   weekly_trading_report: ["snapshot", "analyse", "finalise"],
   revenue_decline_investigation: ["snapshot", "diagnose", "finalise"],
@@ -378,6 +387,15 @@ export async function getMinkWorkflow(
     }
     assertActorWorkflowAccess(actor, run.template, run.inputJson);
     assertActorStillSeesCapturedScope(actor, run.template, run.inputJson);
+    if (
+      run.template === "watch_response_review" &&
+      !(await revalidateWorkflowAuthority(run, true, db))
+    )
+      throw new MinkRequestError(
+        "mink_workflow_access_denied",
+        "The captured response scope is no longer accessible.",
+        403,
+      );
     const events = includeEvents
       ? await db
           .select()
@@ -436,6 +454,15 @@ export async function cancelMinkWorkflow(
     // "queued", so `active` is true and the Stop button renders on every
     // re-open.
     assertActorStillSeesCapturedScope(actor, run.template, run.inputJson);
+    if (
+      run.template === "watch_response_review" &&
+      !(await revalidateWorkflowAuthority(run, true, db))
+    )
+      throw new MinkRequestError(
+        "mink_workflow_access_denied",
+        "The captured response scope is no longer accessible.",
+        403,
+      );
     if (["completed", "failed", "cancelled"].includes(run.status)) {
       return toWorkflowView(run);
     }
@@ -516,6 +543,15 @@ export async function resumeMinkWorkflow(
     // Approving more work on a scope you can no longer see is the same
     // question as reading its result, so it gets the same answer.
     assertActorStillSeesCapturedScope(actor, run.template, run.inputJson);
+    if (
+      run.template === "watch_response_review" &&
+      !(await revalidateWorkflowAuthority(run, true, db))
+    )
+      throw new MinkRequestError(
+        "mink_workflow_access_denied",
+        "The captured response scope is no longer accessible.",
+        403,
+      );
     if (run.status !== "waiting_approval") {
       throw new MinkRequestError(
         "mink_workflow_not_resumable",
@@ -621,6 +657,11 @@ export async function runMinkWorkflowWorker(
         result.workflowsCancelled += 1;
         continue;
       }
+      if (run.template === "watch_response_review" && !run.watchId) {
+        await cancelClaimedWorkflow(run, workerId, "watch_inactive");
+        result.workflowsCancelled += 1;
+        continue;
+      }
       if (run.watchId) {
         const active = await withService((db) =>
           db
@@ -632,7 +673,9 @@ export async function runMinkWorkflowWorker(
                 eq(minkWatches.storeId, run.storeId),
                 eq(minkWatches.adminId, run.adminId),
                 eq(minkWatches.status, "active"),
-                eq(minkWatches.lastRunId, run.id),
+                run.template === "watch_response_review"
+                  ? sql`EXISTS (SELECT 1 FROM ${minkWatchResponses} r WHERE r.watch_id = ${minkWatches.id} AND r.store_id = ${run.storeId} AND r.admin_id = ${run.adminId} AND r.workflow_id = ${run.id} AND r.id::text = ${String((run.inputJson as Record<string, unknown>).responseId ?? "")} AND r.status = 'approved' AND r.watch_version = ${minkWatches.version})`
+                  : eq(minkWatches.lastRunId, run.id),
               ),
             )
             .limit(1),
@@ -777,7 +820,7 @@ export async function revalidateWorkflowAuthority(
     // A checkpoint can already contain a whole-scope brief. Never reuse it
     // after authority narrows, even at the finalisation step.
     if (
-      template === "business_brief" &&
+      (template === "business_brief" || template === "watch_response_review") &&
       (locationIds.length !== input.locationIds.length ||
         (input.includeUnassigned && bindings !== null && bindings.length > 0))
     )
@@ -854,7 +897,7 @@ function hasWorkflowPermissions(
   template: MinkWorkflowTemplate,
   isSuperadmin = false,
 ): boolean {
-  if (template === "business_brief") {
+  if (template === "business_brief" || template === "watch_response_review") {
     return (
       can(permissions, "analytics", "view", isSuperadmin) &&
       can(permissions, "products", "view", isSuperadmin) &&
@@ -1156,6 +1199,25 @@ async function executeClaimedStep(
   const stepKey = WORKFLOW_STEPS[run.template][run.currentStep];
   if (!stepKey) throw new Error("unsupported_workflow_step");
   await markStepStarted(run, workerId, stepKey);
+  if (run.template === "watch_response_review") {
+    const input = readProactiveResponseInput(run.inputJson);
+    if (stepKey === "snapshot") {
+      const result = await collectProactiveResponse(
+        run.storeId,
+        run.adminId,
+        input,
+        executionScope,
+      );
+      await completeIntermediateStep(run, workerId, stepKey, result);
+      return { completed: false };
+    }
+    return finalizeFromStep<ProactiveResponseResult>(
+      run,
+      workerId,
+      stepKey,
+      "snapshot",
+    );
+  }
   if (run.template === "business_brief") {
     const input = readBusinessBriefInput(run.inputJson);
     if (stepKey === "snapshot") {
@@ -1843,6 +1905,18 @@ function readBusinessBriefInput(value: unknown): BusinessBriefInput {
   };
 }
 
+function readProactiveResponseInput(value: unknown): ProactiveResponseInput {
+  const input = readBusinessBriefInput(value);
+  const row = readObject(value);
+  if (
+    typeof row.responseId !== "string" ||
+    !UUID_PATTERN.test(row.responseId) ||
+    !isResponseSignal(row.signal)
+  )
+    throw new Error("invalid_proactive_response_input");
+  return { ...input, responseId: row.responseId, signal: row.signal };
+}
+
 function readWorkflowInput(
   template: MinkWorkflowTemplate,
   value: unknown,
@@ -1853,6 +1927,8 @@ function readWorkflowInput(
   | ProductLaunchPreparationInput
   | SlowInventoryPromotionInput
   | DelayedPickupReviewInput {
+  if (template === "watch_response_review")
+    return readProactiveResponseInput(value);
   if (template === "business_brief") return readBusinessBriefInput(value);
   if (template === "revenue_decline_investigation") {
     return readRevenueInput(value);
@@ -1986,6 +2062,8 @@ function workflowStepKey(
 }
 
 function workflowLabel(template: MinkWorkflowTemplate): string {
+  if (template === "watch_response_review")
+    return "Approved watch response review";
   if (template === "business_brief") return "Business brief";
   if (template === "revenue_decline_investigation") {
     return "Revenue decline investigation";

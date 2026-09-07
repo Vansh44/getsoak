@@ -4025,6 +4025,20 @@ Migration 0082 and the existing authenticated workflow heartbeat are required.
 These are deployment acceptance stories; unit tests do not establish live
 scheduler timing or model routing accuracy.
 
+## 11o. Mink Phase 8C approved response acceptance
+
+| ID       | User story / acceptance                                                                                                                       |
+| -------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| PS-M8C.1 | Echos response plans appear only for evidenced attention at the owner's captured Shop/Delhi scope, with unknown monetary impact.              |
+| PS-M8C.2 | Only the exact reviewed checkbox/button approves one read-only investigation. Chat, watch consent or a different plan hash cannot approve it. |
+| PS-M8C.3 | Stock details remain local (20 rows/3 affected locations max) and label truncation. Delhi stock cannot conceal a Shop shortage.               |
+| PS-M8C.4 | Returns use original-order location; failed payments use order location/window. At most 20 records, no contacts, refunds or retries.          |
+| PS-M8C.5 | Recovery/insufficient evidence produces no invented remedy. Source failure retries rather than becoming healthy zeroes.                       |
+| PS-M8C.6 | Duplicate approvals yield one workflow. Expiry, newer evidence, changed version, dismissal conflicts and concurrent work fail safely.         |
+| PS-M8C.7 | Scope loss, suspension, archived locations or watch pause/delete stop pending reads; saved results still require current authority.           |
+| PS-M8C.8 | Every subsequent stock correction or business change retains its separate exact-target proposal and approval.                                 |
+| PS-M8C.9 | Approval, workflow, steps and audit commit or roll back together; tenant FKs and source/watch retention protect response decisions.           |
+
 ## 12. Known gaps
 
 Real and deliberate, so nobody files them as bugs:

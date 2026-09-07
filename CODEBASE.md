@@ -67,6 +67,48 @@ tokens were renamed to `--sm-*` and `WHOLESIP_STORE_ID` to `FALLBACK_STORE_ID`.
 > ordinary Echos merchant requests, separate tester expectations, clarification
 > conversations and a distinct technical security appendix.
 
+### Mink Phase 8C — Approved watch response investigations (2026-09-06)
+
+`lib/mink/proactive-response-types.ts` ranks evidenced attention signals in a
+fixed, disclosed order (inventory, payments, sales, returns), not a monetary
+impact forecast. `proactive-responses.ts` resolves owner-only source snapshots,
+hash-binds plans to evidence/scope/watch version/limits and enforces 24-hour
+expiry, explicit consent, idempotent approval/dismissal and one in-flight run
+per watch. The watch row lock is shared with scheduler/pause/delete; approval,
+two workflow steps and audit are one transaction. No model approval tool exists.
+`get_mink_watch_responses` only reads plans and links to human controls.
+
+`/api/mink/watch-responses` uses trusted host/session identity, same-origin
+POSTs, bounded bodies, rate limits and no-store results. The on-demand
+`mink-watches/response-panel.tsx` shows evidence, limits, consent, dismissal and
+the five latest retained investigations; `mink-proactive-response.tsx` renders
+escaped bounded details and allowlisted dashboard links. All four brief View
+permissions plus Dashboard View are required. Results and worker steps recheck
+scope (including Cancel/Resume result readbacks); the new `watch_response_review` template also requires its exact approved
+response and active watch version at each step. Pausing/deleting a watch cancels
+all its queued/running workflows; resume never reauthorizes an old response.
+
+`proactive-response-data.ts` rechecks the brief before proposing next steps.
+Inventory samples at most 20 rows across 3 affected locations (location-level,
+never all-location stock); return/payment details are capped at 20 and omit
+customer contacts. Sales reviews compare sales/orders and refer deeper diagnosis
+to the existing revenue workflow. Recovered/insufficient signals produce no
+remedy. These are read-only investigations, NOT stock transfers, refunds,
+payment retries or automatic remediation; later business actions retain their
+separate preview/approval gates. No new model calls, credit charge, environment
+variable or cron job. Response progress is available through the existing
+polling workflow card, not a new completion alert. Migration
+`20260906_0083_mink_phase_8c_responses.sql` adds service-only response decisions,
+tenant-bound source/watch/workflow FKs, deduplication and the Help guide. The
+existing 30-day source snapshot/watch cleanup cascades to response decisions.
+Prompt/registry versions are `read-beta-v10`, `draft-action-beta-v21` and
+`draft-beta-v16`. ECH-P8C prompts cover Echos rollout acceptance.
+`proactive-responses.postgres.test.ts` is opt-in via `MINK_RESPONSE_TEST_SOCKET`
+and requires an empty `mink_8c_verify` database on a task-owned temporary Unix
+socket at port 55483; it never reads application database credentials. It proves
+repeat/rollback migration checks, duplicate/concurrent approval behavior, pause
+races and tenant/role isolation. Ordinary tests skip this disposable fixture.
+
 ### Mink Phase 8B — Opt-in recurring watches (2026-09-05)
 
 `lib/mink/watch-policy.ts` validates daily/weekly schedules, captured-IANA-zone
