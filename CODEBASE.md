@@ -1717,7 +1717,25 @@ wholesip/
 │                              # 20260904). IDs stay unique via the date prefix so the
 │                              # ledger accepts them, and `out_of_order` does not flag
 │                              # it — that check only looks for applied-after-pending.
-│                              # Anything numbered 0085+ collides again.
+│                              # ⚠ DO NOT RENUMBER THEM. All nine are APPLIED on
+│                              # local, staging AND production. Renaming an applied
+│                              # id orphans its ledger row — migrationPlan puts the
+│                              # old id in `unknown` and the new one in `pending`,
+│                              # and assertHealthyPlan THROWS "Ledger contains
+│                              # unknown migrations", which stops apply, adopt and
+│                              # verify until the ledger is hand-repaired. Measured
+│                              # against a real database: renaming one entry gave
+│                              # unknown=1 plus a phantom pending. All nine means
+│                              # rewriting `id` AND `checksum` (the id feeds the
+│                              # computed checksum) across 27 ledger rows including
+│                              # production, for no functional gain — the ids are
+│                              # already unique. It is a naming wart, not a defect.
+│                              # ★ THE NEXT MIGRATION TAKES 0087. 0085 and 0086 are
+│                              # used by the offers series, so those collide too;
+│                              # 0087 is the first free number. `db-migrations-core.test.mjs`
+│                              # freezes the nine pairs, so a new entry reusing any
+│                              # existing number fails CI (it either adds a tenth
+│                              # duplicate group or makes an existing group a triple).
 │   └── sql/                   # New forward-only SQL. 0002 repairs the production
 │                              # credit-note formatter drift (bare lpad truncated
 │                              # legal serials beyond 9,999) and canonicalizes the

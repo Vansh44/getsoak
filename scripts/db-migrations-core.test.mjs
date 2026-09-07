@@ -1022,4 +1022,98 @@ describe("database migration controls", () => {
       "ADOPTION AUDIT — migration SQL and ledger writes are disabled.",
     );
   });
+
+  // ★★ NINE SEQUENCE NUMBERS ARE DUPLICATED, AND THEY STAY THAT WAY.
+  // The main -> minkai merge concatenated two independently numbered series
+  // (billing/offers 20260906-07 and Mink 7A-8D 20260904-07), so 0076-0084 each
+  // appear twice. The IDs are still unique via the date prefix, so the ledger,
+  // the planner and every checksum are unaffected — this is a naming wart, not
+  // a defect.
+  //
+  // ⚠ DO NOT "FIX" IT BY RENUMBERING. Every one of these is APPLIED on local,
+  // staging and production. Renaming an applied id orphans its ledger row:
+  // migrationPlan puts the old id in `unknown` and the new one in `pending`, and
+  // assertHealthyPlan THROWS "Ledger contains unknown migrations" — which stops
+  // apply, adopt AND verify until the ledger is hand-repaired. Measured against
+  // a real database: renaming one entry produced unknown=1 plus a phantom
+  // pending. Doing all nine means rewriting `id` AND `checksum` (the id feeds
+  // the computed checksum) across 27 rows of a checksummed audit ledger,
+  // including production, for zero functional gain.
+  //
+  // What this test protects is the FUTURE: the next migration must take an
+  // unused number (0087 at the time of writing). A new entry reusing any
+  // existing number either adds a tenth duplicate group or makes an existing
+  // group a triple, and both fail here. A correctly numbered addition changes
+  // nothing below, so there is no churn.
+  it("introduces no new migration sequence-number collision", async () => {
+    const HISTORICAL = {
+      "0076": [
+        "20260904_0076_mink_phase_7a_builder_context_help",
+        "20260906_0076_subscription_autopay_contact_help",
+      ],
+      "0077": [
+        "20260904_0077_mink_phase_7b_storefront_code_preview",
+        "20260906_0077_comped_plan_overlay",
+      ],
+      "0078": [
+        "20260904_0078_mink_phase_7c_builder_draft_save",
+        "20260906_0078_drop_subscription_comp_exemption",
+      ],
+      "0079": [
+        "20260904_0079_mink_phase_7d_storefront_publication",
+        "20260906_0079_mandate_rail_choice_help",
+      ],
+      "0080": [
+        "20260905_0080_mink_builder_chat_help",
+        "20260906_0080_plan_change_before_payment_help",
+      ],
+      "0081": [
+        "20260905_0081_mink_phase_8a_business_briefs",
+        "20260906_0081_offers_auto_apply_help",
+      ],
+      "0082": [
+        "20260905_0082_mink_phase_8b_watches",
+        "20260906_0082_offers_visibility_help",
+      ],
+      "0083": [
+        "20260906_0083_mink_phase_8c_responses",
+        "20260906_0083_offers_auto_apply_default_help",
+      ],
+      "0084": [
+        "20260906_0084_offers_set_limit_help",
+        "20260907_0084_mink_phase_8d_memories",
+      ],
+    };
+
+    const loaded = await loadManifest();
+    const bySequence = new Map();
+    for (const migration of loaded.migrations) {
+      const match = /^(\d{8})_(\d{4})_/.exec(migration.id);
+      expect(
+        match,
+        `migration id must be <YYYYMMDD>_<NNNN>_<name>: ${migration.id}`,
+      ).not.toBeNull();
+      const sequence = match[2];
+      bySequence.set(sequence, [
+        ...(bySequence.get(sequence) ?? []),
+        migration.id,
+      ]);
+    }
+
+    const duplicated = Object.fromEntries(
+      [...bySequence.entries()]
+        .filter(([, ids]) => ids.length > 1)
+        .map(([sequence, ids]) => [sequence, [...ids].sort()])
+        .sort(([a], [b]) => a.localeCompare(b)),
+    );
+
+    // Exactly the nine grandfathered pairs — no new group, and none grown to three.
+    expect(duplicated).toEqual(HISTORICAL);
+
+    // And the next number really is free, so the guidance above stays true.
+    const highest = Math.max(
+      ...[...bySequence.keys()].map((sequence) => Number(sequence)),
+    );
+    expect(bySequence.has(String(highest + 1).padStart(4, "0"))).toBe(false);
+  });
 });
