@@ -1,0 +1,42 @@
+import { MinkRequestError } from "./errors";
+export async function readMinkBoundedJson(
+  request: Request,
+  maxBytes: number,
+): Promise<Record<string, unknown>> {
+  if (!request.body)
+    throw new MinkRequestError("invalid_request", "Empty request.", 400);
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const part = await reader.read();
+      if (part.done) break;
+      size += part.value.byteLength;
+      if (size > maxBytes) {
+        await reader.cancel();
+        throw new MinkRequestError(
+          "request_too_large",
+          "Request is too large.",
+          413,
+        );
+      }
+      chunks.push(part.value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  let body: unknown;
+  try {
+    body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  } catch {
+    throw new MinkRequestError("invalid_request", "Invalid JSON request.", 400);
+  }
+  if (!body || typeof body !== "object" || Array.isArray(body))
+    throw new MinkRequestError(
+      "invalid_request",
+      "Request body must be a JSON object.",
+      400,
+    );
+  return body as Record<string, unknown>;
+}

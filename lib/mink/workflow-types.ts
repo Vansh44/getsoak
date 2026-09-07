@@ -1,6 +1,8 @@
 import type { BusinessBriefResult } from "./business-brief-types";
+import type { ProactiveResponseResult } from "./proactive-response-types";
 
 export const MINK_WORKFLOW_TEMPLATES = [
+  "watch_response_review",
   "business_brief",
   "weekly_trading_report",
   "revenue_decline_investigation",
@@ -407,6 +409,7 @@ export interface DelayedPickupReviewResult extends Omit<
 }
 
 export type MinkWorkflowResult =
+  | ProactiveResponseResult
   | BusinessBriefResult
   | WeeklyTradingReportResult
   | RevenueDeclineInvestigationResult

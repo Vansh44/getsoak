@@ -3,6 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const runWorker = vi.fn();
 const schedule = vi.fn();
 const reconcile = vi.fn();
+vi.mock("@/lib/mink/memories", () => ({
+  purgeExpiredMinkMemories: vi.fn(async () => ({ rows: [] })),
+}));
 vi.mock("@/lib/mink/watches", () => ({
   scheduleMinkWatches: schedule,
   reconcileMinkWatches: reconcile,

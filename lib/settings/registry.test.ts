@@ -156,3 +156,35 @@ describe("resolveRawNumberSetting", () => {
     expect(resolveRawNumberSetting(KEY, 250)).toBe(100);
   });
 });
+
+// ★★ THE DEFAULT THAT MADE EVERY AUTOMATIC OFFER INERT. `offers.autoApply`
+// shipped OFF and nothing ever wrote it true, so every store had it off and
+// `disqualify` refused every `delivery: "automatic"` offer — silently, with the
+// dashboard still calling the offer Active. It is ON now (owner's call,
+// 2026-09-06), which is a deliberate exception to invariant 1: a store that has
+// never touched the setting starts applying its active automatic offers.
+//
+// Pinned in BOTH directions, because each is a different failure. Off again and
+// the feature is dead; ignoring a stored `false` and a merchant who chose codes
+// only starts discounting without asking.
+describe("offers.autoApply", () => {
+  it("is on when the store has never set it", () => {
+    expect(resolveStoreSettings({}, "basic")["offers.autoApply"]).toBe(true);
+    expect(
+      resolveStoreSettings({ features: {} }, "basic")["offers.autoApply"],
+    ).toBe(true);
+  });
+
+  it("still honours a merchant who deliberately switched it off", () => {
+    expect(
+      resolveStoreSettings(
+        { features: { "offers.autoApply": false } },
+        "basic",
+      )["offers.autoApply"],
+    ).toBe(false);
+  });
+
+  it("is not plan-gated — a free store's offers apply too", () => {
+    expect(resolveStoreSettings({}, "free")["offers.autoApply"]).toBe(true);
+  });
+});

@@ -92,11 +92,13 @@ const collect = vi.hoisted(() => ({
 }));
 vi.mock("./collect", () => collect);
 
+const gateway = vi.hoisted(() => ({ RECURRING_CHARGE_VERIFIED: true }));
+vi.mock("./gateway", () => gateway);
+
 const receipts = vi.hoisted(() => ({ notifyPlanActivated: vi.fn() }));
 vi.mock("./receipts", () => receipts);
 
 import { confirmEnrolment, startEnrolment } from "./enrol";
-import { RECURRING_CHARGE_VERIFIED } from "./gateway";
 
 const STORE = "store-1";
 const INVOICE = "inv-1";
@@ -182,6 +184,7 @@ beforeEach(() => {
   store.reshapeDraftSubscriptionInvoice.mockResolvedValue(null);
   // No earlier enrolment invoice: the ordinary path, where nothing is stale.
   store.getCycleInvoice.mockResolvedValue(null);
+  gateway.RECURRING_CHARGE_VERIFIED = true;
   // Same trap again: the reshape tests below override the price, and
   // clearAllMocks clears CALLS, not IMPLEMENTATIONS.
   priceFor.mockResolvedValue({ planPaise: 5_000_00, locationPaise: 1_000_00 });
@@ -213,23 +216,115 @@ describe("startEnrolment", () => {
     expect(rzp.rzpCreateAuthorizationOrder.mock.calls[0][1].method).toBe("upi");
   });
 
-  it("defaults to card, so an absent choice behaves exactly as before", async () => {
+  it("★★ defaults to UPI Autopay — the AMOUNT picks the rail, not the merchant", async () => {
+    // The chooser is gone. A rail is fixed on the authorisation order and
+    // cannot be edited afterwards, so a merchant who picks one that cannot
+    // carry their renewal has authorised a mandate that will never fire, and
+    // nothing tells them. The charge is better placed to decide than they are.
     await startEnrolment(args);
+    expect(rzp.rzpCreateAuthorizationOrder.mock.calls[0][1].method).toBe("upi");
+  });
+
+  it("★★ never asks to authorise more than a mandate can ever debit", async () => {
+    // Basic yearly: a ₹15,000 charge sitting exactly at the AFA limit. The
+    // 1.18 × 1.5 provision would ask for ₹27,000 — but a charge of ₹15,001 is
+    // manual whatever the ceiling says, so the extra ₹12,000 of authority can
+    // never be exercised. It is only a bigger number on the Razorpay screen.
+    priceFor.mockResolvedValue({
+      planPaise: 15_000_00,
+      locationPaise: 10_000_00,
+    });
+    store.amountDueForInvoice.mockResolvedValue(15_000_00);
+
+    await startEnrolment({ ...args, plan: "basic", period: "yearly" });
+
+    expect(collect.beginAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({ mandateMaxPaise: 15_000_00 }),
+    );
+    expect(
+      rzp.rzpCreateAuthorizationOrder.mock.calls[0][1].terms.maxAmountPaise,
+    ).toBe(15_000_00);
+  });
+
+  it("★ but keeps real reprice headroom below the limit", async () => {
+    // Pro monthly: ₹2,400 charge, ₹5,000 ceiling. Both sides of a reprice stay
+    // under ₹15,000, so that headroom is genuinely usable — capping it flat at
+    // the charge would put the next price rise straight onto manual invoices.
+    await startEnrolment(args);
+    expect(collect.beginAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({ mandateMaxPaise: 9_000_00 }),
+    );
+  });
+
+  it("★★ asks for NO mandate when no rail could ever carry the renewal", async () => {
+    // RBI's AFA-exempt limit is ₹15,000 on BOTH cards and UPI, so Pro yearly at
+    // ₹24,000 can never be auto-debited without the merchant authenticating
+    // every single renewal. We used to register a ₹43,000 mandate for it
+    // anyway — authority shown on the Razorpay screen that could never be
+    // exercised. Cycle 1 goes through the plain, production-verified checkout.
+    priceFor.mockResolvedValue({
+      planPaise: 24_000_00,
+      locationPaise: 10_000_00,
+    });
+    store.amountDueForInvoice.mockResolvedValue(24_000_00);
+    rzp.rzpCreateOrder.mockResolvedValue({
+      ok: true,
+      data: { id: "order_plain_1" },
+    });
+
+    const res = await startEnrolment({ ...args, period: "yearly" });
+
+    expect(rzp.rzpCreateAuthorizationOrder).not.toHaveBeenCalled();
+    expect(rzp.rzpCreateOrder).toHaveBeenCalled();
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    // ★ The screen must say "invoiced", not imply autopay.
+    expect(res.data.autopay).toBe(false);
+    expect(res.data.providerOrderId).toBe("order_plain_1");
+  });
+
+  it("★★ the carve-out does NOT excuse an unverified endpoint", async () => {
+    // Two different situations that must not be conflated. Autopay being
+    // IMPOSSIBLE for the amount is the carve-out. Autopay being unavailable
+    // while it should work is the original refusal: turning that first cycle
+    // into an ordinary payment succeeds today and surprises the merchant with a
+    // manual invoice next renewal. A collectable amount still refuses.
+    gateway.RECURRING_CHARGE_VERIFIED = false;
+    try {
+      const res = await startEnrolment(args); // Pro monthly — collectable
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.error).toMatch(/autopay is unavailable/i);
+      expect(rzp.rzpCreateOrder).not.toHaveBeenCalled();
+    } finally {
+      gateway.RECURRING_CHARGE_VERIFIED = true;
+    }
+  });
+
+  it("★ reports autopay: true for a charge a mandate can carry", async () => {
+    const res = await startEnrolment(args);
+    expect(res.ok && res.data.autopay).toBe(true);
+  });
+
+  it("★ lets a merchant step across to card, because the rail is fixed", async () => {
+    // The escape hatch: Checkout shows only the rail on the order, so pinning
+    // UPI outright would leave a merchant with no UPI app unable to subscribe
+    // at all. Card is a sideways move — both sit under the AFA limit.
+    await startEnrolment({ ...args, mandateMethod: "card" });
     expect(rzp.rzpCreateAuthorizationOrder.mock.calls[0][1].method).toBe(
       "card",
     );
   });
 
-  it("★ coerces an unrecognised rail rather than passing it through", async () => {
-    // The value reaches the server from the browser. It picks a RAIL, never an
-    // amount — but it still may not reach Razorpay unvalidated.
+  it("★ an unrecognised rail falls back to the DERIVED one, never through", async () => {
+    // The value reaches the server from the browser. It selects a rail, never
+    // an amount — and only "card" is honoured, so anything else lands on what
+    // the charge itself supports rather than reaching Razorpay unvalidated.
     await startEnrolment({
       ...args,
       mandateMethod: "netbanking" as unknown as "card",
     });
-    expect(rzp.rzpCreateAuthorizationOrder.mock.calls[0][1].method).toBe(
-      "card",
-    );
+    expect(rzp.rzpCreateAuthorizationOrder.mock.calls[0][1].method).toBe("upi");
   });
 
   it("reports the rail back so the caller can open Checkout honestly", async () => {
@@ -239,7 +334,7 @@ describe("startEnrolment", () => {
 
   it("★★ offers a mandate while the autopay rollout is enabled", async () => {
     await startEnrolment(args);
-    expect(RECURRING_CHARGE_VERIFIED).toBe(true);
+    expect(gateway.RECURRING_CHARGE_VERIFIED).toBe(true);
     expect(rzp.rzpCreateCustomer).toHaveBeenCalled();
     expect(rzp.rzpCreateAuthorizationOrder).toHaveBeenCalled();
     expect(rzp.rzpCreateOrder).not.toHaveBeenCalled();

@@ -5192,7 +5192,7 @@ export const minkWorkflowRuns = pgTable(
     }).onDelete("cascade"),
     check(
       "mink_workflow_runs_template_check",
-      sql`template = ANY (ARRAY['weekly_trading_report'::text, 'revenue_decline_investigation'::text, 'product_launch_preparation'::text, 'slow_inventory_promotion'::text, 'delayed_pickup_review'::text, 'business_brief'::text])`,
+      sql`template = ANY (ARRAY['weekly_trading_report'::text, 'revenue_decline_investigation'::text, 'product_launch_preparation'::text, 'slow_inventory_promotion'::text, 'delayed_pickup_review'::text, 'business_brief'::text, 'watch_response_review'::text])`,
     ),
     check(
       "mink_workflow_runs_status_check",
@@ -5217,6 +5217,64 @@ export const minkWorkflowRuns = pgTable(
     check(
       "mink_workflow_runs_idempotency_check",
       sql`char_length(btrim(idempotency_key)) BETWEEN 1 AND 200`,
+    ),
+  ],
+);
+
+export const minkWatchResponses = pgTable(
+  "mink_watch_responses",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    watchId: uuid("watch_id").notNull(),
+    adminId: text("admin_id").notNull(),
+    sourceRunId: uuid("source_run_id").notNull(),
+    signal: text().notNull(),
+    watchVersion: integer("watch_version").notNull(),
+    planHash: text("plan_hash").notNull(),
+    status: text().notNull(),
+    workflowId: uuid("workflow_id"),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => [
+    unique("mink_watch_responses_source_key").on(
+      t.watchId,
+      t.sourceRunId,
+      t.signal,
+    ),
+    foreignKey({
+      columns: [t.watchId, t.storeId],
+      foreignColumns: [minkWatches.id, minkWatches.storeId],
+      name: "mink_watch_responses_watch_fk",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [t.sourceRunId, t.storeId],
+      foreignColumns: [minkWorkflowRuns.id, minkWorkflowRuns.storeId],
+      name: "mink_watch_responses_source_fk",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [t.workflowId, t.storeId],
+      foreignColumns: [minkWorkflowRuns.id, minkWorkflowRuns.storeId],
+      name: "mink_watch_responses_workflow_fk",
+    }).onDelete("cascade"),
+    check(
+      "mink_watch_responses_status_check",
+      sql`${t.status} in ('approved','dismissed')`,
+    ),
+    check(
+      "mink_watch_responses_signal_check",
+      sql`${t.signal} in ('inventory','payments','sales','returns')`,
+    ),
+    check(
+      "mink_watch_responses_approval_check",
+      sql`(${t.status} = 'approved' AND ${t.workflowId} IS NOT NULL) OR (${t.status} = 'dismissed' AND ${t.workflowId} IS NULL)`,
+    ),
+    index("mink_watch_responses_owner_idx").on(
+      t.storeId,
+      t.adminId,
+      t.createdAt,
     ),
   ],
 );
@@ -7684,6 +7742,15 @@ export const offers = pgTable(
      * same reason the reward's do.
      */
     conditions: jsonb().default([]).notNull(),
+    /**
+     * Opt in to listing this code in the storefront cart.
+     *
+     * ★ ONLY MEANINGFUL FOR CODE DELIVERY, and only ever read behind a narrow
+     * service-scoped filter: `offers.code` itself stays revoked from anon and
+     * authenticated (migration 0059), because shipping every active code to
+     * anyone who opens the network tab is the leak that grant prevents.
+     */
+    showOnStorefront: boolean("show_on_storefront").default(false).notNull(),
     /** Empty = every channel. */
     channels: text().array().default([]).notNull(),
     validFrom: timestamp("valid_from", { withTimezone: true, mode: "string" }),
@@ -7826,5 +7893,71 @@ export const orderItemOffers = pgTable(
       name: "order_item_offers_order_item_id_fkey",
     }).onDelete("cascade"),
     unique("order_item_offers_item_key").on(table.orderItemId, table.offerId),
+  ],
+);
+
+// Phase 8D: service-only, owner-scoped approved reference context.
+export const minkMemories = pgTable(
+  "mink_memories",
+  {
+    id: uuid().primaryKey(),
+    storeId: uuid("store_id")
+      .notNull()
+      .references(() => stores.id, { onDelete: "cascade" }),
+    adminId: text("admin_id").notNull(),
+    title: text().notNull(),
+    content: text().notNull(),
+    kind: text().notNull(),
+    version: integer().notNull().default(1),
+    scopeHash: text("scope_hash").notNull(),
+    requestKey: uuid("request_key").notNull(),
+    requestHash: text("request_hash").notNull(),
+    expiresAt: timestamp("expires_at", {
+      withTimezone: true,
+      mode: "string",
+    }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("mink_memories_owner_idx").on(
+      table.storeId,
+      table.adminId,
+      table.updatedAt.desc(),
+    ),
+    index("mink_memories_expiry_idx").on(table.expiresAt),
+    check(
+      "mink_memories_text_check",
+      sql`char_length(${table.title}) BETWEEN 1 AND 80 AND char_length(${table.content}) BETWEEN 1 AND 600`,
+    ),
+    check(
+      "mink_memories_kind_check",
+      sql`${table.kind} IN ('preference','brand_voice','business_context')`,
+    ),
+    check("mink_memories_version_check", sql`${table.version} > 0`),
+    check(
+      "mink_memories_hash_check",
+      sql`${table.scopeHash} ~ '^[a-f0-9]{64}$' AND ${table.requestHash} ~ '^[a-f0-9]{64}$'`,
+    ),
+  ],
+);
+export const minkMemoryDeletions = pgTable(
+  "mink_memory_deletions",
+  {
+    id: uuid().notNull(),
+    storeId: uuid("store_id")
+      .notNull()
+      .references(() => stores.id, { onDelete: "cascade" }),
+    adminId: text("admin_id").notNull(),
+    deletedAt: timestamp("deleted_at", { withTimezone: true, mode: "string" })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.storeId, table.adminId, table.id] }),
   ],
 );

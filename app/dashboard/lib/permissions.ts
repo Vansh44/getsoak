@@ -306,18 +306,26 @@ export const SECTIONS: DashboardSection[] = [
 
   // --- Marketing ------------------------------------------------------------
   {
+    // ★★ RETIRED AS A DESTINATION, exactly like `navigation` above. Marketing
+    // had ONE child — Offers — so `/dashboard/marketing` was a `redirect()`
+    // stub to `/dashboard/offers`: a parent you could click, that cost a round
+    // trip, and that landed on its only child. A nesting level which exists to
+    // hold one thing is a level to remove, so Offers is top-level now.
+    //
+    // ⚠ THE SECTION STAYS, AND REMOVING IT WOULD BREAK MORE THAN THE SIDEBAR.
+    // `marketing` is a LIVE permission key: coupon CRUD, coupon-email
+    // campaigns, the Mink `coupon_email`/`coupon_create` draft gates, the
+    // coupons CSV resource and the `marketing.showAllCoupons` setting all gate
+    // on it. Dropping it would revoke the grant on every saved role AND leave
+    // those checks pointing at a key nothing defines. `hiddenInNav` keeps the
+    // role editor honest while taking the dead link out of the sidebar.
     key: "marketing",
     label: "Marketing",
-    href: "/dashboard/marketing",
+    href: "/dashboard/offers",
     icon: "marketing",
+    hiddenInNav: true,
     group: "Marketing",
     actions: ["view", "manage"],
-    // ★ NO `Coupons` CHILD ANY MORE. It pointed at a path that now redirects
-    // to /dashboard/offers, which the `promotions` section below already
-    // renders nested here — two sidebar entries for one page. Removing the
-    // CHILD is safe where removing a SECTION would not be: a child carries no
-    // permission key, so no saved role loses a grant (that is exactly why the
-    // `promotions` key had to stay).
   },
   {
     // ★ THE KEY STAYS `promotions` THOUGH THE SECTION IS NOW "Offers". Roles
@@ -332,7 +340,35 @@ export const SECTIONS: DashboardSection[] = [
     icon: "promotions",
     group: "Marketing",
     actions: ["view", "manage"],
-    parent: "marketing",
+    // ★ NO `parent` ANY MORE — see the retired Marketing entry above. Offers
+    // is the Marketing group's only destination, so nesting it under a
+    // clickable parent that could only ever forward here was one level of
+    // navigation doing no work.
+    //
+    // ★ CHILDREN GIVE IT THE FOCUSED PANEL every other worked-in section has.
+    // `children` is what makes `dashboard-sidebar.tsx` swap the whole main rail
+    // for Back + this section's pages, the way Settings, Blogs, Point of Sale,
+    // Locations and Logs already do. Offers is a place a merchant settles into
+    // rather than passes through, so the rest of the dashboard is noise while
+    // they are in it.
+    //
+    // ⚠ A CHILD CARRIES NO PERMISSION KEY, deliberately — both pages are
+    // governed by `promotions` above, and the settings page additionally
+    // re-checks it per setting through `getStoreSettingsForEditor`. Anything
+    // needing its own grant has to be a SECTION (see the note on Categories
+    // and Inventory), not a child.
+    children: [
+      {
+        label: "All offers",
+        href: "/dashboard/offers",
+        icon: "promotions",
+      },
+      {
+        label: "Offer settings",
+        href: "/dashboard/offers/settings",
+        icon: "settings",
+      },
+    ],
   },
 
   // --- Settings: one entry, everything configuration-shaped behind it -------

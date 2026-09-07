@@ -7,11 +7,9 @@ import {
   Maximize2,
   MessageSquare,
   MessageSquarePlus,
-  Mic,
   Minimize2,
   PanelLeftClose,
   PanelLeftOpen,
-  Plus,
   RotateCcw,
   Square,
   Trash2,
@@ -30,6 +28,7 @@ import { useChat } from "./chat-context";
 import { MinkAnswer } from "./mink-answer";
 import { ASSISTANT_NAME, type MinkConversationSummary } from "./mink-ai";
 import { MinkMark } from "./mink-mark";
+import { MinkDocumentInput } from "./mink-document-input";
 import { MinkArtifacts } from "./mink-artifacts";
 import { MinkFeedbackControls } from "./mink-feedback";
 import { estimateMinkDraftIntent } from "@/lib/mink/draft-types";
@@ -335,6 +334,14 @@ export function DashboardChat({
 
         <div className="flex shrink-0 items-center gap-1 text-[#5c5f62]">
           <Link
+            href="/dashboard/mink-memories"
+            onNavigate={closeChat}
+            className="rounded-md px-2 py-1 text-xs hover:bg-[#f1f1f1]"
+            title="Review your private approved memories"
+          >
+            Memories
+          </Link>
+          <Link
             href="/dashboard/mink-watches"
             onNavigate={closeChat}
             className="rounded-md px-2 py-1 text-xs hover:bg-[#f1f1f1]"
@@ -502,6 +509,12 @@ export function DashboardChat({
                   </span>
                 </div>
               ) : null}
+              <MinkDocumentInput
+                key={activeConversationId ?? "new"}
+                message={input}
+                onAdd={setInput}
+                disabled={isReplying || isHistoryLoading}
+              />
               <form
                 onSubmit={(event) => {
                   event.preventDefault();
@@ -536,20 +549,6 @@ export function DashboardChat({
                   className="min-h-6 max-h-40 min-w-0 flex-1 resize-none border-none bg-transparent py-0.5 text-base leading-6 text-[#1a1a1a] outline-none placeholder:text-[#8c9196] sm:text-sm sm:leading-5"
                 />
                 <div className="ml-1 flex shrink-0 items-center gap-1 self-end text-[#8c9196] sm:ml-2">
-                  <button
-                    type="button"
-                    className="rounded-md p-1.5 transition-colors hover:bg-[#f1f1f1] hover:text-[#1a1a1a]"
-                    aria-label="Attach"
-                  >
-                    <Plus className="h-4 w-4" />
-                  </button>
-                  <button
-                    type="button"
-                    className="rounded-md p-1.5 transition-colors hover:bg-[#f1f1f1] hover:text-[#1a1a1a]"
-                    aria-label="Voice input"
-                  >
-                    <Mic className="h-4 w-4" />
-                  </button>
                   {isReplying ? (
                     <button
                       type="button"

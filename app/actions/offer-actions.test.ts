@@ -53,6 +53,7 @@ const form = (over: Partial<OfferFormData> = {}): OfferFormData => ({
   triggerType: "always",
   minSubtotal: 0,
   rewardType: "percent_off",
+  showOnStorefront: false,
   percent: 10,
   amount: 0,
   unitPrice: 0,

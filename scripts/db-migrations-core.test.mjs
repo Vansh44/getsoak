@@ -22,13 +22,22 @@ describe("database migration controls", () => {
   it("loads the repository manifest and checksums the enrolled SQL", async () => {
     const loaded = await loadManifest();
     expect(loaded.baseline.id).toBe("baseline:cloudsql-2026-08-14");
-    // 75 shared + five billing migrations + seven Mink migrations.
-    expect(loaded.migrations).toHaveLength(87);
-    // Keep the already-applied billing block before pending Mink migrations;
-    // otherwise the migration planner rejects the database as out_of_order.
+    // 75 shared + five billing + six offers + nine Mink migrations.
+    expect(loaded.migrations).toHaveLength(95);
+    // ★ PENDING BLOCKS GO LAST, applied ones first, or the planner reports the
+    // database out_of_order — an APPLIED migration sitting after an unapplied
+    // one is exactly what `sawGap` catches. The offers block precedes the Mink
+    // one because it merged to `main`, which is what deploys to production, so
+    // it is the block that will be applied first.
+    //
+    // ★★ NEITHER BLOCK WAS REWIRED WHEN THEY MERGED, and that was the point:
+    // `requires` is part of every entry's checksum, so editing one that is
+    // already applied somewhere reads as DRIFT and the runner refuses. Both
+    // chains hang off entries in the shared base rather than off each other,
+    // so concatenating them needed no edit at all.
     expect(loaded.migrations.at(-1)).toMatchObject({
-      id: "20260905_0082_mink_phase_8b_watches",
-      requires: ["20260905_0081_mink_phase_8a_business_briefs"],
+      id: "20260907_0084_mink_phase_8d_memories",
+      requires: ["20260906_0083_mink_phase_8c_responses"],
       transaction: true,
     });
     expect(loaded.migrations[0]).toMatchObject({

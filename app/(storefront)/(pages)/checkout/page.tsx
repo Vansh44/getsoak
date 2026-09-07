@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useMemo, useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
@@ -21,13 +21,21 @@ import {
   Search,
   X,
 } from "lucide-react";
-import { useCart } from "@/app/(storefront)/components/cart/CartProvider";
+import {
+  lineKey,
+  useCart,
+} from "@/app/(storefront)/components/cart/CartProvider";
+import CouponField from "@/app/(storefront)/components/cart/CouponField";
+import { cartLineMax } from "@/lib/inventory/status";
 import {
   defaultPaymentMethod,
   paymentMethodsFor,
   paymentOptionsFor,
 } from "@/lib/fulfilment/payment-policy";
-import { useCartTax } from "@/app/(storefront)/components/cart/useCartTax";
+import {
+  cartTaxFrom,
+  useCartTaxRates,
+} from "@/app/(storefront)/components/cart/useCartTax";
 import { useCartOffers } from "@/app/(storefront)/components/cart/useCartOffers";
 import { OfferNudge } from "@/app/(storefront)/components/cart/offer-nudge";
 import {
@@ -297,14 +305,10 @@ export default function CheckoutPage() {
       ? pendingPayment
       : null;
 
-  // Tax for the order summary — resolved once per product-set change, recomputed
-  // locally on quantity/coupon edits (see useCartTax). Display only; placeOrder
-  // recomputes authoritatively at order time.
-  const taxInfo = useCartTax(
-    cart.items,
-    cart.hydrated,
-    cart.couponValid ? cart.couponDiscount : 0,
-  );
+  // Per-line prices, rates, categories and pre-sale prices — one fetch per
+  // product-set change. Everything below recomputes locally from it, so a
+  // quantity edit costs no round trip.
+  const taxRates = useCartTaxRates(cart.items, cart.hydrated);
 
   // Automatic offers, for the near-miss nudge. Display only — `placeOrder`
   // re-resolves and re-prices authoritatively, and the nudge's whole value is
@@ -317,10 +321,55 @@ export default function CheckoutPage() {
   // ★ A PLAIN OBJECT, NOT A `useMemo`. The hook depends on the two PRIMITIVES
   // inside it, not on this object's identity, so memoising buys nothing — and
   // the React Compiler refuses a hand-written memo it cannot preserve here.
-  const offerInfo = useCartOffers(cart.items, cart.hydrated, taxInfo?.lines, {
+  const offerInfo = useCartOffers(cart.items, cart.hydrated, taxRates?.lines, {
     paymentMethod: resolvedPayMethod,
     fulfilmentType: fulfilment,
   });
+
+  // ★★ THE OFFER REACHES THE TOTAL NOW, AND IT DID NOT BEFORE. `offerInfo` was
+  // wired to the near-miss nudge alone, while `orderTotal` was
+  // `cart.total + shipping` and `cart.total` is `subtotal − couponDiscount` —
+  // `CartProvider` has never known offers exist. So an automatic offer was
+  // neither shown nor subtracted here while `placeOrder` applied it: the
+  // summary read ₹140 and the server charged ₹70. Nobody was overcharged, but
+  // the summary disagreed with the order, and the offer was invisible at
+  // exactly the moment it is meant to persuade.
+  //
+  // ★ OFFERS WIN, COUPON IS THE FALLBACK — the same precedence `placeOrder`
+  // applies, in the same order. Running both would double-count a migrated
+  // coupon, which IS an offer since 20260902_0059.
+  const offersApplied = (offerInfo?.applied.length ?? 0) > 0;
+  const offerDiscount = offersApplied ? (offerInfo?.discount ?? 0) : 0;
+  const couponDiscount =
+    !offersApplied && cart.couponValid ? cart.couponDiscount : 0;
+  const discount = offerDiscount + couponDiscount;
+
+  // What each line got, for the tax base. ★ Keyed by `lineKey`, which is the
+  // id `useCartOffers` gives every line it prices, so the two cannot drift.
+  const offerLineDiscounts = useMemo(() => {
+    const map = new Map<string, number>();
+    if (!offersApplied) return map;
+    for (const l of offerInfo?.lines ?? []) {
+      if (l.offerDiscount > 0) map.set(l.id, l.offerDiscount);
+    }
+    return map;
+  }, [offersApplied, offerInfo]);
+
+  // Whatever the engine did NOT put on a line is still order-level and is
+  // spread proportionally — mirroring `placeOrder`'s own remainder.
+  const orderLevelDiscount = useMemo(() => {
+    let allocated = 0;
+    offerLineDiscounts.forEach((v: number) => {
+      allocated += v;
+    });
+    return Math.max(0, discount - allocated);
+  }, [discount, offerLineDiscounts]);
+
+  const taxInfo = useMemo(
+    () =>
+      cartTaxFrom(taxRates, cart.items, orderLevelDiscount, offerLineDiscounts),
+    [taxRates, cart.items, orderLevelDiscount, offerLineDiscounts],
+  );
 
   const selectedShippingOption =
     shippingOptions.find((option) => option.id === selectedShippingRateId) ??
@@ -330,10 +379,11 @@ export default function CheckoutPage() {
     fulfilment === "pickup" ? 0 : (selectedShippingOption?.amount ?? 0);
 
   // The amount the order is actually FOR, before any credit is applied.
+  const discountedSubtotal = Math.max(0, cart.subtotal - discount);
   const orderTotal =
     taxInfo?.enabled && !taxInfo.inclusive
-      ? cart.total + taxInfo.tax + shippingAmount
-      : cart.total + shippingAmount;
+      ? discountedSubtotal + taxInfo.tax + shippingAmount
+      : discountedSubtotal + shippingAmount;
 
   // Preview of the credit split, using the SAME pure function the server uses
   // — so what is shown here and what is charged cannot disagree on the rule.
@@ -1412,48 +1462,142 @@ export default function CheckoutPage() {
             <div className={styles.summaryCard}>
               <h2 className={styles.summaryTitle}>Order Summary</h2>
 
+              {/* ★★ THE QUANTITY IS EDITABLE HERE. It was a read-only bubble,
+                  so a shopper who wanted two of something had to go BACK to the
+                  cart, change it, and walk through checkout again — and on an
+                  offer like buy-one-get-one that is exactly what the nudge two
+                  rows below is asking them to do. Same stepper the cart drawer
+                  uses, against the same `setQuantity`, which clamps centrally
+                  to `cartLineMax` — so stock is enforced in one place. */}
               <ul className={styles.items}>
-                {cart.items.map((item, idx) => (
-                  <li key={idx} className={styles.item}>
-                    <div className={styles.thumb}>
-                      {item.image ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img src={item.image} alt={item.name} />
-                      ) : (
-                        <span className={styles.thumbFallback}>
-                          <ShoppingBag size={18} />
-                        </span>
-                      )}
-                      <span className={styles.qtyBubble}>{item.quantity}</span>
-                    </div>
-                    <div className={styles.itemBody}>
-                      <div className={styles.itemName}>{item.name}</div>
-                      {item.variantName && (
-                        <div className={styles.itemVariant}>
-                          {item.variantName}
+                {cart.items.map((item) => {
+                  const key = lineKey(item.productId, item.variantId);
+                  const max = cartLineMax(item);
+                  const atMax = item.quantity >= max;
+                  return (
+                    <li key={key} className={styles.item}>
+                      <div className={styles.thumb}>
+                        {item.image ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={item.image} alt={item.name} />
+                        ) : (
+                          <span className={styles.thumbFallback}>
+                            <ShoppingBag size={18} />
+                          </span>
+                        )}
+                      </div>
+                      <div className={styles.itemBody}>
+                        <div className={styles.itemName}>{item.name}</div>
+                        {item.variantName && (
+                          <div className={styles.itemVariant}>
+                            {item.variantName}
+                          </div>
+                        )}
+                        <div className={styles.itemStepper}>
+                          <button
+                            type="button"
+                            className={styles.stepperBtn}
+                            onClick={() =>
+                              cart.setQuantity(key, item.quantity - 1)
+                            }
+                            aria-label={`Decrease quantity of ${item.name}`}
+                          >
+                            −
+                          </button>
+                          <span className={styles.stepperValue}>
+                            {item.quantity}
+                          </span>
+                          <button
+                            type="button"
+                            className={styles.stepperBtn}
+                            onClick={() =>
+                              cart.setQuantity(key, item.quantity + 1)
+                            }
+                            disabled={atMax}
+                            aria-label={`Increase quantity of ${item.name}`}
+                          >
+                            +
+                          </button>
+                          {/* ★ Says WHY the plus is dead. A disabled control
+                              with no reason reads as a broken page. */}
+                          {atMax && max < 99 && (
+                            <span className={styles.itemMax}>
+                              Only {max} left
+                            </span>
+                          )}
                         </div>
-                      )}
-                    </div>
-                    <div className={styles.itemPrice}>
-                      {formatPrice(item.price * item.quantity)}
-                    </div>
-                  </li>
-                ))}
+                      </div>
+                      <div className={styles.itemPrice}>
+                        {formatPrice(item.price * item.quantity)}
+                      </div>
+                    </li>
+                  );
+                })}
               </ul>
+
+              {/* ★★ THE COUPON FIELD WAS ONLY IN THE CART. A shopper who
+                  reached checkout with a code in hand had to go back for it,
+                  which is the point at which people abandon.
+
+                  ★ HIDDEN WHILE AN AUTOMATIC OFFER IS APPLYING, because
+                  `placeOrder` runs offers OR the coupon and never both — so a
+                  code entered here would be accepted, show a discount, and
+                  then be silently ignored at the charge. Saying so is better
+                  than a field that quietly does nothing (§23's rule). */}
+              {offersApplied ? (
+                <p className={styles.couponNote}>
+                  An automatic offer is already applied to this order, so a
+                  discount code cannot be added on top.
+                </p>
+              ) : (
+                <CouponField />
+              )}
 
               <div className={styles.rows}>
                 <div className={styles.row}>
                   <span>Subtotal</span>
                   <span>{formatPrice(cart.subtotal)}</span>
                 </div>
-                {cart.appliedCoupon &&
-                  cart.couponValid &&
-                  cart.couponDiscount > 0 && (
-                    <div className={`${styles.row} ${styles.rowDiscount}`}>
-                      <span>Discount ({cart.appliedCoupon.code})</span>
-                      <span>−{formatPrice(cart.couponDiscount)}</span>
+                {/* ★ ONE DISCOUNT ROW PER OFFER, NAMED. An unexplained "−₹70"
+                    reads as an error on a receipt; the offer's own name is
+                    what tells the shopper why their basket got cheaper, and it
+                    is the same name that will print on the invoice. */}
+                {offersApplied &&
+                  offerInfo?.applied.map((a) => (
+                    <div
+                      key={a.offerId}
+                      className={`${styles.row} ${styles.rowDiscount}`}
+                    >
+                      <span>{a.offerName}</span>
+                      <span>−{formatPrice(a.amount)}</span>
                     </div>
-                  )}
+                  ))}
+                {couponDiscount > 0 && cart.appliedCoupon && (
+                  <div className={`${styles.row} ${styles.rowDiscount}`}>
+                    <span>Discount ({cart.appliedCoupon.code})</span>
+                    <span>−{formatPrice(couponDiscount)}</span>
+                  </div>
+                )}
+                {/* Free delivery and a free gift are separate axes from the
+                    merchandise discount (plan §14, §12), so they are their own
+                    lines rather than money off the subtotal. */}
+                {offerInfo?.shipping && shippingAmount === 0 && (
+                  <div className={`${styles.row} ${styles.rowDiscount}`}>
+                    <span>{offerInfo.shipping.offerName}</span>
+                    <span>Free delivery</span>
+                  </div>
+                )}
+                {offerInfo?.gift && (
+                  <div className={`${styles.row} ${styles.rowDiscount}`}>
+                    <span>{offerInfo.gift.offerName}</span>
+                    <span>
+                      Free gift
+                      {offerInfo.gift.quantity > 1
+                        ? ` × ${offerInfo.gift.quantity}`
+                        : ""}
+                    </span>
+                  </div>
+                )}
                 <div className={styles.row}>
                   <span>
                     {fulfilment === "pickup" ? "Pickup in store" : "Shipping"}

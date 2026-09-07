@@ -599,11 +599,27 @@ export const SETTINGS: readonly SettingDef[] = [
     group: "Offers",
     section: "promotions",
     type: "boolean",
-    // ★ BACKFILLS OFF. Invariant 1: a migration may not change what a live
-    // store does, and a store that has only ever had discount CODES must not
-    // wake up applying discounts by itself. New stores get it on at signup —
-    // a creation default and a backfill value are different questions.
-    defaultValue: false,
+    // ★★ ON. It shipped OFF, and that was the wrong call twice over.
+    //
+    // The reasoning was invariant 1 — a live store that had only ever run
+    // discount CODES must not wake up discounting by itself — and it was
+    // sound in the abstract. In practice NOTHING ever wrote it true, so every
+    // store on the platform had it off, and `disqualify` refused every
+    // automatic offer with `auto_apply_off`: silently, with no error at
+    // checkout or at the till, and with the Offers list still reporting the
+    // offer as Active. The whole automatic half of the feature was inert from
+    // the day it shipped.
+    //
+    // ⚠ THE COST OF FLIPPING IT, STATED PLAINLY. Any existing store that has
+    // never touched this setting stores nothing, so it now resolves to ON —
+    // and any automatic offer that store has ACTIVE begins applying. That is
+    // exactly what invariant 1 warns about. It is accepted deliberately
+    // (owner's call, 2026-09-06): an automatic offer is not something a
+    // merchant creates by accident, the dashboard has to be able to promise
+    // that an Active offer runs, and a store that genuinely wants codes only
+    // switches this off once. A store that has already set it either way
+    // keeps its stored value — an explicit `false` still wins.
+    defaultValue: true,
   },
   {
     key: "offers.showBadges",

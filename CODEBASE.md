@@ -67,6 +67,91 @@ tokens were renamed to `--sm-*` and `WHOLESIP_STORE_ID` to `FALLBACK_STORE_ID`.
 > ordinary Echos merchant requests, separate tester expectations, clarification
 > conversations and a distinct technical security appendix.
 
+### Mink Phase 8D — Approved memories and reviewed text input (2026-09-07)
+
+`/dashboard/mink-memories` and `/api/mink/memories` provide private per-store,
+per-admin reference context. `lib/mink/memory-policy.ts` validates explicit
+consent, exact fields, categories, 80/600-character bounds and 30/90/365-day
+retention. `memories.ts` serializes changes with an owner-specific transaction
+advisory lock, enforces 10 memories, exact-version edits and idempotent save
+keys. No model memory mutation tool exists. Same-origin POSTs, actual streamed
+body limits, rate limits and trusted host/session ownership guard management.
+Inspection/deletion remain available with Dashboard View when generation is
+disabled; saves require current Mink access. Content-free deletion markers
+prevent delayed requests resurrecting deleted or physically expired text.
+
+Every new chat turn loads only active owner memories before run/credit
+reservation. An exact role/permissions/location-binding hash withholds context
+after authority changes until explicit reapproval. The Vertex session receives
+JSON reference data as a separate user-message part, never system policy; it is
+not copied into persisted user messages or background workflows. Current user
+requests take precedence over preferences and live facts still require tools.
+Deletion/expiry affect future turns, not in-flight provider context or existing
+conversation mentions. Saves have no separate AI-credit charge; context adds
+normal input tokens. No new environment variables, model or scheduled job.
+
+`mink-document-input.tsx` reads one .txt/.md file locally (UTF-8, 8 KiB,
+3,000 characters), requires review/consent, then adds labelled reference text
+to the editable composer within its existing 4,000-character total. Nothing
+uploads before Send; text follows existing conversation persistence/deletion.
+`document-input.ts` rejects binary controls, invalid encoding and oversized
+input without truncation. No PDF, screenshot, audio/voice, spreadsheet, URL
+fetch, media upload or document-library ingestion is implemented by this phase.
+Pending local document previews reset on conversation changes. Previously inert
+attach/microphone icons are replaced by the functional text-document control.
+
+Migration `20260907_0084_mink_phase_8d_memories.sql` adds service-only
+`mink_memories`/`mink_memory_deletions`, store FKs, bounds/indexes and published
+Help guidance. The existing workflow heartbeat independently purges up to 500
+expired texts per pass; expiry is enforced on reads even without cron. The
+optional `memories.postgres.test.ts` fixture uses a fresh `mink_8d_verify`
+database on `MINK_MEMORY_TEST_SOCKET`, port 55484, never application credentials.
+Prompt versions advance to `read-beta-v11`/`draft-action-beta-v22`; registry
+versions stay unchanged. `bounded-json.ts` also closes the chat body's missing/
+forged Content-Length loophole. ECH-P8D prompts cover review, privacy and stress.
+
+### Mink Phase 8C — Approved watch response investigations (2026-09-06)
+
+`lib/mink/proactive-response-types.ts` ranks evidenced attention signals in a
+fixed, disclosed order (inventory, payments, sales, returns), not a monetary
+impact forecast. `proactive-responses.ts` resolves owner-only source snapshots,
+hash-binds plans to evidence/scope/watch version/limits and enforces 24-hour
+expiry, explicit consent, idempotent approval/dismissal and one in-flight run
+per watch. The watch row lock is shared with scheduler/pause/delete; approval,
+two workflow steps and audit are one transaction. No model approval tool exists.
+`get_mink_watch_responses` only reads plans and links to human controls.
+
+`/api/mink/watch-responses` uses trusted host/session identity, same-origin
+POSTs, bounded bodies, rate limits and no-store results. The on-demand
+`mink-watches/response-panel.tsx` shows evidence, limits, consent, dismissal and
+the five latest retained investigations; `mink-proactive-response.tsx` renders
+escaped bounded details and allowlisted dashboard links. All four brief View
+permissions plus Dashboard View are required. Results and worker steps recheck
+scope (including Cancel/Resume result readbacks); the new `watch_response_review` template also requires its exact approved
+response and active watch version at each step. Pausing/deleting a watch cancels
+all its queued/running workflows; resume never reauthorizes an old response.
+
+`proactive-response-data.ts` rechecks the brief before proposing next steps.
+Inventory samples at most 20 rows across 3 affected locations (location-level,
+never all-location stock); return/payment details are capped at 20 and omit
+customer contacts. Sales reviews compare sales/orders and refer deeper diagnosis
+to the existing revenue workflow. Recovered/insufficient signals produce no
+remedy. These are read-only investigations, NOT stock transfers, refunds,
+payment retries or automatic remediation; later business actions retain their
+separate preview/approval gates. No new model calls, credit charge, environment
+variable or cron job. Response progress is available through the existing
+polling workflow card, not a new completion alert. Migration
+`20260906_0083_mink_phase_8c_responses.sql` adds service-only response decisions,
+tenant-bound source/watch/workflow FKs, deduplication and the Help guide. The
+existing 30-day source snapshot/watch cleanup cascades to response decisions.
+Prompt/registry versions are `read-beta-v10`, `draft-action-beta-v21` and
+`draft-beta-v16`. ECH-P8C prompts cover Echos rollout acceptance.
+`proactive-responses.postgres.test.ts` is opt-in via `MINK_RESPONSE_TEST_SOCKET`
+and requires an empty `mink_8c_verify` database on a task-owned temporary Unix
+socket at port 55483; it never reads application database credentials. It proves
+repeat/rollback migration checks, duplicate/concurrent approval behavior, pause
+races and tenant/role isolation. Ordinary tests skip this disposable fixture.
+
 ### Mink Phase 8B — Opt-in recurring watches (2026-09-05)
 
 `lib/mink/watch-policy.ts` validates daily/weekly schedules, captured-IANA-zone
@@ -7677,6 +7762,71 @@ way — an entry there is a deliberate act, not a way to silence the guard.
       second charge. ⚠ Only a `processing` attempt is resumable: the index also
       covers `created` (no order exists yet) and `authorized` (money already
       authorized — re-opening checkout would invite a second authorization).
+    - **★★ THE AMOUNT PICKS THE MANDATE RAIL, AND SOMETIMES THERE ISN'T ONE**
+      (`autopayRailFor`, `lib/billing/mandate-types.ts`). RBI's AFA-exempt limit
+      is **₹15,000 on cards and UPI ALIKE** — the intuition that a card is more
+      permissive is wrong, and Razorpay's own wording is quoted at the constant
+      so it is not re-litigated: above it, _"an Additional Factor Authentication
+      (AFA) is required from customers for every subsequent debit"_. The
+      ₹1,00,000 exemption reaches only mutual funds, insurance and credit-card
+      bills. So Pro yearly at ₹24,000 could NEVER be auto-debited, and we asked
+      the merchant to authorise **₹43,000** for it anyway — authority shown on
+      the Razorpay screen that could not be exercised. Now: the charge chooses
+      the rail (UPI Autopay by default), and when no rail can carry it **no
+      mandate is requested at all** — cycle 1 goes through the plain,
+      production-verified checkout and the screen says renewals are invoiced.
+    - **★ THE CARVE-OUT IS NARROW, AND A TEST KEEPS IT THAT WAY.** The refusal
+      it sits beside exists because turning a first cycle into an ordinary
+      payment SILENTLY surprises the merchant with a manual invoice next
+      renewal — that is autopay failing when it should have worked. This is the
+      other case: autopay is structurally impossible, so there is nothing to
+      fail, and refusing would mean not selling a yearly plan at all. An
+      unverified endpoint still refuses.
+    - **★ THE CEILING IS CAPPED AT THE AFA LIMIT.** The 1.18 × 1.5 provision is
+      real headroom while both the old and new charge stay under ₹15,000 (Pro
+      monthly: ₹2,400 charge, ₹5,000 ceiling, a reprice to ₹4,000 still
+      collects). Above the limit it buys nothing, because a charge of ₹15,001 is
+      manual whatever the ceiling says — Basic yearly was asking for ₹27,000
+      against a ₹15,000 charge already at the maximum a mandate can carry.
+    - **★ AND THE CHOOSER IS GONE, WITH ONE ESCAPE.** A rail is fixed on the
+      order and cannot be edited after, so a merchant who picked one their
+      renewal cannot carry had authorised a mandate that would never fire. The
+      charge is better placed to decide. ⚠ Checkout shows ONLY the rail on the
+      order, so pinning UPI outright would leave a merchant with no UPI app
+      unable to subscribe: a "pay by card instead" link is the sideways move,
+      and both rails sit under the limit. ⚠ `openRazorpayModal` sends
+      `recurring: true` whenever a customer id is present, so `customerId` is
+      omitted on a no-mandate order — asking Checkout to treat a plain order as
+      recurring is the same mismatch that produced the Cards-only screen.
+    - **★★ `autopay` NOW MEANS THE CHARGE WILL ACTUALLY BE TAKEN.** It read
+      `mandateStatus === "active"` on the Plans page and `!!row.mandateId` in
+      the renewal notice — so every yearly subscriber was shown autopay ON and
+      emailed _"we'll charge your saved payment method — there's nothing you
+      need to do"_, while `collectionRoute` sent each renewal to manual. The
+      Plans page contradicted the invoice, and the merchant trusted the
+      reassuring one. Both now consult the ceilings.
+    - **★★ AND THE ROUTE REASON IS NO LONGER THROWN AWAY.** `collectionRoute`
+      has always said WHY (`over_mandate` / `over_afa_limit` / `no_mandate`),
+      `collectInvoice` returned it, and `classify` collapsed all three into
+      "manual" — no log, no metric, nothing. So an operator reprice that pushed
+      a cohort past a ceiling was invisible: invoices simply stopped being paid
+      automatically. It is logged as `billing.renewal_not_auto_collectable`.
+    - **★ A REPRICE IS NAMED IN THE RENEWAL EMAIL.** Renewals are priced LIVE
+      (`priceFor` → `getPlanPricingLive`), so an operator change reaches existing
+      subscribers at their next cycle — correct, and previously silent: the
+      4-day notice carried the new figure without saying it was new. It now
+      reads the previous cycle's invoice and names the difference, **in the
+      right direction** — "your price has changed" reads as a rise to everyone,
+      so a merchant whose bill went DOWN would write in to ask what went wrong.
+      Equal amounts say nothing; noise on an unchanged bill is what teaches
+      people to stop reading billing email.
+    - ⚠ **PHASE 2, NOT BUILT: Emandate (NPCI eNACH)** would make yearly genuinely
+      automatic — ₹1 crore ceiling, no per-debit AFA, real-time registration.
+      Two things shape it: an eNACH authorisation order is **`amount: 0`** (it
+      registers and charges nothing; "charge during registration" is HDFC/ICICI
+      only), and the subsequent-debit endpoint has still never succeeded in
+      production. So cycle 1 must stay on the verified one-time checkout, and
+      `MANDATE_MAX_GATEWAY_PAISE` (₹99,999) has to become per-rail.
     - **★★ AND CYCLE 1's INVOICE PINNED THE PLAN AND PERIOD THE SAME WAY.**
       `ensureRenewalInvoice` is idempotent on (store, kind, cycle_seq) — exactly
       right for a RENEWAL, wrong for an ENROLMENT, where the invoice is raised
@@ -8586,6 +8736,209 @@ way — an entry there is a deliberate act, not a way to silence the guard.
     Coupons were the only discount mechanism and were order-level only: a
     percentage or a rupee amount off the whole cart, on a code, online only.
     Offers replace that with one engine reaching both counters.
+    - **★★ AN AUTOMATIC OFFER NEEDS `offers.autoApply`, AND NOTHING EVER
+      TURNED IT ON.** `disqualify` refuses every `delivery: "automatic"` offer
+      with `auto_apply_off` before the engine values it, so a merchant's
+      buy-1-get-1 charged full price online AND at the till — no error at
+      checkout, none in the log, and the Offers list still reporting **Active**.
+      The registry's own comment claimed "new stores get it on at signup"; that
+      was never built. `createStore` wrote `settings` with `template`, `brand`,
+      `launched` and `business` and no `features` key at all, and grepping the
+      tree found no other writer — so the switch was off for **every store on
+      the platform**, and the whole automatic half of the feature was inert
+      from the day it shipped. Three parts:
+      - **★ THE DEFAULT STAYS `false`; CREATION WRITES `true`.** They answer
+        different questions and conflating them is what caused this. Off is the
+        right BACKFILL value — invariant 1, a store that has only ever had
+        discount CODES must not wake up discounting by itself — and flipping
+        the registry default would start giving discounts on every existing
+        store at once. `createStore` now writes
+        `features: { "offers.autoApply": true }` explicitly, the same split
+        `launched` makes two lines above it. Pinned by its own test in
+        `store-signup.test.ts`, separate from the whole-settings-blob
+        assertion, because that one reads as "the shape" and this is a
+        behaviour.
+      - **★★ AND THE DASHBOARD SAYS SO, because "Active" was the lie.** The
+        list renders a third state — an amber **Not applying** badge for an
+        active automatic offer while the switch is off — plus a banner counting
+        them and linking to `/dashboard/offers/settings`, because the switch is
+        on another page and a merchant who does not know it exists has to be
+        taken there. The offer editor warns next to the Delivery select, where
+        the choice is actually made. §23's rule: a control that always fails is
+        worse than no control, and this one did not even look like it was
+        failing. `offers-view.test.tsx` pins all three states in both
+        directions, and mutation-checks the badge.
+      - **★ IT FAILS TOWARD SILENCE.** `loadOffersAutoApply` returns `true` on
+        an unreadable setting and the list defaults the same way, because a
+        warning is a CLAIM: "this will not apply" on an offer that works is a
+        worse lie than the one it replaces. The list derives the value from the
+        `getStoreSettingsForEditor("Offers")` read it already makes; the
+        new/edit pages take the acting-store-scoped loader, so it is right for
+        a platform operator too (the `dashboard/inventory/data.ts` pattern).
+        ⚠ Demo stores (`platform.ts`, `scripts/seed-demo-store.ts`) deliberately
+        get no such seed — `applyTheme` seeds no offers, and `placeOrder` refuses
+        a demo store an order anyway.
+    - **★★ AN OFFER WAS INVISIBLE ON EVERY STOREFRONT SURFACE THAT MATTERS**,
+      each for a different reason, so fixing one would not have shown a
+      merchant their own offer working. All three found together:
+      - **THE CHECKOUT SUMMARY NEITHER SHOWED NOR SUBTRACTED IT.**
+        `useCartOffers` was wired to the near-miss nudge ALONE — its comment
+        said so — while `orderTotal` was `cart.total + shipping` and
+        `cart.total` is `subtotal − couponDiscount` (`CartProvider` has never
+        known offers exist), and the tax preview was handed only the coupon.
+        Meanwhile `placeOrder` applied the offer. The screen read ₹140 and the
+        server charged ₹70: nobody was overcharged, but the summary disagreed
+        with the order, and the discount was absent at exactly the moment it is
+        meant to persuade. `useCartTax` is now split into `useCartTaxRates`
+        (the fetch) + the pure `cartTaxFrom`, because as one hook it is a CYCLE
+        — tax needs the discount, the discount needs the rates, the rates
+        arrive with the tax. The checkout mirrors `placeOrder`'s own
+        precedence: **offers win, the legacy coupon is the fallback**, never
+        both, and the per-line offer discounts feed the tax base directly
+        rather than being spread. Free delivery and a free gift render as their
+        own lines, not as money off, since neither changes what the goods cost.
+      - **A PRODUCT WITH A BUY-X-GET-Y CARRIED NO MARKER AT ALL.** The only one
+        was `offerBadgeFor`, which prices a ONE-UNIT cart — correct, and
+        precisely why buy-X-get-Y, bundles and volume breaks score zero there:
+        none of them is a claim about buying one. So the whole family showed
+        nothing. **`offerTagFor` is a SECOND function, not a loosened first
+        one**: it quotes the offer's TERMS ("Buy 1, get 1 free"), which is
+        honest at any quantity, and it still proves the offer would apply by
+        pricing the smallest cart that could earn it — so every gate the cart
+        applies (channel, dates, auto-apply, conditions, sale-price mode,
+        scope) has been passed by anything that returns a tag. One marker per
+        product, price badge preferred. ⚠ The PRODUCT PAGE had no marker of any
+        kind and now shows one in both the classic and grocery layouts.
+      - **THE NUDGE LIED ABOUT A SPENT SET CAP.** `collectUnitNearMiss` ignored
+        `reward.maxSets`, so on "buy 1 get 1 free, max 1 set" a cart of three
+        was told "add 1 more and one is free" — and the fourth earned nothing.
+        A nudge is a promise about what happens if you add something, made
+        after the shopper has already put it in the basket.
+      - **★★ AND `maxSets` DEFAULTED TO 1, IN A FIELD READING "No limit".**
+        `offer-form.tsx` initialised `offer?.maxSets ?? 1`, so EVERY new
+        buy-X-get-Y offer arrived capped at one set: "Buy 1, get 1 free" on a
+        basket of four gave ONE free item, not two. The offer stopped meaning
+        what its own name says, with nothing on screen to explain it — and the
+        hint even read "Leave the limit blank only if you mean the offer to
+        repeat without end", which is written as though the field starts empty.
+        The guard rail it reached for is real (an uncapped buy-1-get-1 on a
+        hundred-unit basket gives away fifty), but **a set cap is the wrong
+        instrument**: it bounds each ORDER by redefining the offer, where the
+        thing a merchant needs bounded is total exposure. The BUDGET does that
+        directly, in rupees, claimed atomically by `reserve_offer_use` — which
+        is why the Limits section leads with it. Default is blank now (`0`,
+        which `rewardConfigFor` omits entirely), and both hints state the
+        outcome rather than the mechanism: "a basket of 4 means the customer
+        pays for 2 and 2 come free", or, when a cap IS set, what it costs.
+    - **★★ THE OFFERS LIST DESCRIBED EVERY MODERN REWARD AS "0% off".**
+      `rewardLabel` was a three-branch stub written when there were three
+      reward types and never extended, so everything Phases C–H added fell
+      through to `${percent ?? 0}% off` — a working buy-1-get-1, a bundle, a
+      gift, cashback and free delivery all listed as giving nothing. The offer
+      EDITOR had the complete version as a nested-ternary chain the whole time.
+      `lib/offers/describe.ts` is now the one implementation, shared by both,
+      with an exhaustive `switch` so the next reward type fails to COMPILE
+      rather than rendering as a wrong phrase. Client-safe by construction (the
+      `lib/logs/failure-types.ts` split); `rewardDescriptor` adapts the
+      engine's `OfferReward` (discriminant `type`) to the flat row/form shape
+      (`rewardType`), which is the whole of the difference between them.
+    - **★ THE OFFERS PAGE WAS ONE LONG SCROLL, TWICE OVER.** The list carried
+      NINE columns — three of which printed the same value on nearly every row
+      ("Any order", "Online & POS", "₹0") — and is six now, with each fact
+      folded into the cell that owns it and shown only when it is not the
+      default. The editor was TEN unlabelled fieldsets in one scroll, seven of
+      them optional and sitting at defaults on most offers; it is four named
+      **cards, laid out the way Shopify's discount editor is** — which is not
+      cargo-culting: the accordion that preceded it made the form shorter
+      without making it legible, because what the offer WAS lived across four
+      headers a merchant opened one at a time, and a section they had not
+      opened was a question they did not know they had answered. Three parts:
+      **type first** (the type decides which cards exist at all, so asking
+      inside the form changes the form's shape under the merchant while they
+      read it); **flat cards, one question each**, in answering order — how they
+      get it → what it gives → what it covers → who → how many → where → when;
+      and **a pinned Summary column**, which is what makes flat affordable, and
+      the thing the accordion could not do — the whole offer readable beside the
+      field being edited rather than a sentence at the top that scrolls away.
+      Each card still carries its VALUE as a subtitle ("on any order", "No
+      limits"), the same phrases the list and the summary use. **Back, Cancel
+      and Save share one PINNED header** — two columns leave the form no single
+      end, so a save button under either of them is somewhere a merchant has to
+      go looking for; it reuses `.dash-savebar`'s two sticky workarounds, both
+      load-bearing (negative side margins to span the scroll column, a negative
+      TOP inset because `top: 0` parks the bar below the container's padding
+      and lets content show above it). The picker is full width at three
+      columns, since a menu you scroll past the fold is one whose last options
+      are never read. On a phone the header tightens rather than stacking — a
+      pinned bar that wraps costs that height on every screen of the form. The
+      reward dropdown's eleven flat options are grouped by what the discount
+      acts on. `How offers behave` moved from the bottom of the page to **its
+      own route**, `/dashboard/offers/settings`. It was briefly a header dialog;
+      a page is better for the same reason the anchor was worse than the dialog
+      — the editor's auto-apply warning and the list banner both need to send a
+      merchant straight to that switch, and a route is an address where
+      `?settings=1` is a workaround. It is also what gives the section its
+      second child.
+    - **★ MARKETING IS RETIRED AS A DESTINATION** (`hiddenInNav`), the
+      `navigation` precedent. It had ONE child, so `/dashboard/marketing` was a
+      `redirect()` stub to `/dashboard/offers`: a parent you could click that
+      cost a round trip and landed on its only child. Offers is top-level now.
+      ⚠ **The SECTION stays** — `marketing` is a live permission key behind
+      coupon CRUD, coupon-email campaigns, the Mink `coupon_email`/
+      `coupon_create` draft gates, the coupons CSV resource and
+      `marketing.showAllCoupons`; removing it would revoke every saved role's
+      grant AND leave those checks pointing at a key nothing defines.
+    - **★★ A CODE CREATED IN THE OFFERS UI COULD NOT BE APPLIED AT ALL.**
+      `validateCoupon` selects `from(coupons)` and offers never joined it — so
+      a code with no `coupons` row was rejected in the cart as invalid, and
+      because `placeOrder` only ever receives `cart.appliedCoupon?.code`, the
+      cart gate blocked it before the engine (which honours a code perfectly
+      well) was ever asked. Codes MIGRATED from the coupon era kept working,
+      because they still have a `coupons` row; every code created after the
+      migration was dead online. `validateCodeOffer` is the fallback —
+      **coupons first**, so a migrated pair (same id, same code, both tables)
+      resolves exactly as before and nothing about an existing code changes.
+      - **★ ORDER-LEVEL PERCENT/AMOUNT ONLY.** The cart previews a coupon with
+        its own arithmetic; a buy-X-get-Y or a bundle on a code can only be
+        priced by the engine. Those still apply at ORDER time — `placeOrder`
+        passes the code through — but cannot be PREVIEWED, so they are refused
+        here with **"this code is applied automatically at checkout, not
+        here"** rather than "invalid", which would send a shopper to support
+        over a code working exactly as configured.
+      - **★ SERVICE SCOPE, AND THE FILTER IS THE BOUNDARY.** `offers.code` is
+        revoked from anon and authenticated (0059) so the API cannot be asked
+        to list every active code, which means this cannot run under
+        `withAnon`. It reads one row on an exact code the caller already
+        supplied, scoped to store + active + code delivery.
+    - **★ AND A MERCHANT CAN PUBLISH ONE** (`offers.show_on_storefront`,
+      migration 0085). `coupons.show_on_storefront` has driven the cart's
+      "Available coupons" list since the coupon era and offers never carried it
+      across. **Default false**, and not merely from caution: most codes are
+      targeted — emailed to a segment, printed on a flyer — and listing one
+      publicly undoes exactly the targeting the merchant set up. The checkbox
+      appears only for a coupon on a code, and `buildRow` forces the column
+      false for anything else regardless, because a hidden control is not a
+      boundary. ⚠ `marketing.showAllCoupons` deliberately does NOT reach
+      offers: on coupons it is a legacy convenience, and a store-wide switch
+      that silently published every targeted code is the opposite of what the
+      per-offer flag is for.
+    - **★ "COUPON" IS A UI FAMILY, NOT A STORED REWARD TYPE.** `percent_off`
+      and `amount_off` are one dropdown entry — _"A coupon — a percentage or an
+      amount off"_ — with a type control beside the value, because to a
+      merchant they are one thing and every other entry in that list describes
+      a mechanic. They stay two reward types in the column: the engine prices
+      them differently, and the schema is not the place to express a UI
+      grouping. The family is also the real boundary the storefront checkbox
+      hangs off, which is what keeps it from being a label.
+    - **★ A SPEND LADDER IS EXEMPT FROM THE NEAR-MISS FLOOR.** The floor hides
+      a gap bigger than `max(₹500, subtotal)` — right for a one-off threshold,
+      since telling a ₹100 basket it is ₹4,900 short is not encouragement. But
+      "spend more, save more" IS an invitation to spend and the ladder is the
+      whole offer. It bit exactly where it was least wanted: on a 1,000 → 5%
+      ladder a ₹490 basket (gap ₹510, allowance ₹500) saw nothing while ₹560
+      (gap ₹440, allowance ₹560) saw the bar — same offer, one item apart, and
+      the shopper further along was the one told. `tiered` only; every other
+      shape keeps the floor.
     - **★ A CODE IS A DELIVERY METHOD, NOT A KIND OF OFFER.** One `offers`
       table with `delivery` ∈ `automatic | code | link`; every coupon row
       migrated in place. Two systems would mean two engines, two stacking

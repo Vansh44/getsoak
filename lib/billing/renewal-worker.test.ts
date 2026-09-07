@@ -34,6 +34,7 @@ const repo = vi.hoisted(() => ({
   loadInvoiceParties: vi.fn(),
   ensureRenewalInvoice: vi.fn(),
   finalizeInvoiceClaimed: vi.fn(),
+  getCycleInvoice: vi.fn(),
   amountDueForInvoice: vi.fn(),
 }));
 vi.mock("./invoice-store", () => repo);
@@ -117,6 +118,8 @@ beforeEach(() => {
     claimed: true,
   });
   repo.amountDueForInvoice.mockResolvedValue(7_000_00);
+  // No previous cycle by default, so the reprice line stays out of the notice.
+  repo.getCycleInvoice.mockResolvedValue(null);
   collector.collectInvoice.mockResolvedValue({
     status: "paid",
     attemptId: "att-1",
@@ -221,10 +224,79 @@ describe("collectDueRenewals", () => {
       expect(dunning.notifyInvoiceIssued.mock.calls[0][0].autopay).toBe(false);
     });
 
-    it("autopay TRUE only with both", async () => {
+    it("★★ names a reprice, so it does not arrive as a surprise", async () => {
+      // Plan prices are operator-editable and renewals are priced LIVE, so an
+      // existing subscriber's amount can change with nothing saying so. The
+      // 4-day email already carried the new figure; it did not say it was new.
+      repo.getCycleInvoice.mockResolvedValue({
+        id: "inv-prev",
+        status: "paid",
+        totalPaise: 5_000_00,
+        cycleSeq: 1,
+        invoiceRef: "INV-1",
+        finalizedAt: "2026-08-01T00:00:00.000Z",
+        periodStart: null,
+        periodEnd: null,
+      });
       seed([[DUE_ROW]]);
+      await collectDueRenewals({ now: NOW, charge: null, priceFor });
+      expect(
+        dunning.notifyInvoiceIssued.mock.calls[0][0].previousAmountPaise,
+      ).toBe(5_000_00);
+    });
+
+    it("★ says nothing when the price did not move", async () => {
+      // A "your price changed" line on an unchanged bill is noise, and noise is
+      // what teaches people to stop reading billing email.
+      repo.getCycleInvoice.mockResolvedValue({
+        id: "inv-prev",
+        status: "paid",
+        totalPaise: 7_000_00,
+        cycleSeq: 1,
+        invoiceRef: "INV-1",
+        finalizedAt: "2026-08-01T00:00:00.000Z",
+        periodStart: null,
+        periodEnd: null,
+      });
+      seed([[DUE_ROW]]);
+      await collectDueRenewals({ now: NOW, charge: null, priceFor });
+      // Passed through as-is; `notifyInvoiceIssued` drops an equal amount.
+      expect(
+        dunning.notifyInvoiceIssued.mock.calls[0][0].previousAmountPaise,
+      ).toBe(7_000_00);
+    });
+
+    const LIVE_MANDATE = {
+      id: "mandate-1",
+      status: "active",
+      maxAmountPaise: 15_000_00,
+      providerTokenId: "token_1",
+      providerCustomerId: "cust_1",
+    };
+
+    it("autopay TRUE only with a gateway AND a mandate that can carry it", async () => {
+      seed([[DUE_ROW], [LIVE_MANDATE]]);
       await collectDueRenewals({ now: NOW, charge, priceFor });
       expect(dunning.notifyInvoiceIssued.mock.calls[0][0].autopay).toBe(true);
+    });
+
+    it("★★ autopay FALSE when the charge is over the mandate's own ceiling", async () => {
+      // "We'll charge your saved payment method — nothing to do" is the single
+      // most dangerous thing to say wrongly: the merchant does nothing and is
+      // downgraded. A ceiling is fixed at authorisation and cannot be raised,
+      // so an operator reprice past it silently ends autopay for that store.
+      seed([[DUE_ROW], [{ ...LIVE_MANDATE, maxAmountPaise: 5_000_00 }]]);
+      await collectDueRenewals({ now: NOW, charge, priceFor });
+      expect(dunning.notifyInvoiceIssued.mock.calls[0][0].autopay).toBe(false);
+    });
+
+    it("★★ autopay FALSE when the charge is over the AFA-exempt limit", async () => {
+      // ₹15,000 is RBI's line on BOTH cards and UPI. A generous mandate does
+      // not move it — the merchant would have to authenticate every debit.
+      repo.amountDueForInvoice.mockResolvedValue(24_000_00);
+      seed([[DUE_ROW], [{ ...LIVE_MANDATE, maxAmountPaise: 43_000_00 }]]);
+      await collectDueRenewals({ now: NOW, charge, priceFor });
+      expect(dunning.notifyInvoiceIssued.mock.calls[0][0].autopay).toBe(false);
     });
   });
 

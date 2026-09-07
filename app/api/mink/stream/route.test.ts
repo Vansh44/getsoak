@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+vi.mock("@/lib/mink/memories", () => ({
+  loadMinkMemoryReference: vi.fn(async () => ""),
+}));
 
 const holder = vi.hoisted(() => ({
   enabled: true,
@@ -61,6 +64,7 @@ vi.mock("@/lib/observability/logger", () => ({
 }));
 
 import { POST } from "./route";
+import { loadMinkMemoryReference } from "@/lib/mink/memories";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -220,6 +224,41 @@ describe("POST /api/mink/stream", () => {
     expect(response.status).toBe(400);
     expect(holder.run).not.toHaveBeenCalled();
     expect(holder.startRun).not.toHaveBeenCalled();
+  });
+
+  it("loads fresh approved context but never persists it as the user's message", async () => {
+    vi.mocked(loadMinkMemoryReference).mockResolvedValueOnce(
+      "Private approved preference",
+    );
+    const response = await POST(request({ message: "Hello" }));
+    await response.text();
+    expect(holder.createSession).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({
+        memoryReference: "Private approved preference",
+      }),
+    );
+    expect(holder.startRun).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Hello" }),
+    );
+  });
+  it("fails closed on a memory read error before reserving credits or calling Vertex", async () => {
+    vi.mocked(loadMinkMemoryReference).mockRejectedValueOnce(
+      new Error("Memory DB unavailable"),
+    );
+    const response = await POST(request({ message: "Hello" }));
+    expect(response.status).toBe(503);
+    expect(holder.startRun).not.toHaveBeenCalled();
+    expect(holder.createSession).not.toHaveBeenCalled();
+  });
+  it("bounds the actual body even without a length header", async () => {
+    const response = await POST(
+      request({ message: "Hello", padding: "x".repeat(20000) }),
+    );
+    expect(response.status).toBe(413);
+    expect(holder.actor).not.toHaveBeenCalled();
   });
 
   it("rate limits per actor before calling Vertex", async () => {

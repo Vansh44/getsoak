@@ -1428,10 +1428,47 @@ Exit criteria:
   passed. All five opt-in PostgreSQL concurrency checks also passed during
   implementation. Migration 0082 passed isolated repeat,
   rollback, tenant-FK, restricted-role, deduplication and manifest checks.
-- **8C — Approved proactive responses: not implemented.** Evidence-ranked
-  proposed responses under explicit action scope, limits and approvals.
-- **8D — Approved memory and optional inputs: not implemented.** Merchant-owned
-  memories, retention/deletion and separately validated optional input channels.
+- **8C — Approved proactive response investigations: implemented locally; deployment acceptance pending.**
+  Owner-only plans from evidenced watch alerts, fixed disclosed triage order,
+  unknown monetary impact, 24-hour expiry and exact evidence/version/scope hashes.
+  Human-only approval/dismissal queues one durable two-step read-only review;
+  duplicate approval returns the same workflow. Fresh evidence can invalidate a
+  remedy. Inventory details cap at 20 rows/3 affected locations; returns/payment
+  samples cap at 20 without contacts; sales compare recognized sales/orders.
+  Existing permissions, per-step authority, retries, cancellation, retention and
+  single-in-flight watch limits apply. No autonomous business mutation is added;
+  any subsequent correction, promotion or contact needs its existing separately
+  approved flow. Migration 0083, Help guidance and ECH-P8C tests cover rollout.
+  Local verification (2026-09-07): 6,271 regression tests passed (21 skipped),
+  plus all six opt-in isolated PostgreSQL checks for migration verification,
+  repeatability, rollback, concurrent approvals, pause races and tenant/role
+  isolation. TypeScript, lint, changed-file formatting and the production build
+  passed. The sandboxed build stalled; the unsandboxed local retry passed.
+  Migration 0083 was reported applied by the owner on 2026-09-07. Live deployment
+  and Echos acceptance are not independently verified.
+- **8D — Approved memory and reviewed text input: implemented locally; deployment acceptance pending.**
+  Private owner/store memories, explicit human consent, 10-entry cap, 80/600
+  character limits, 30/90/365-day expiry, optimistic edits, idempotent saves and
+  physical text deletion with content-free retry tombstones. Fresh chat turns
+  use only unexpired memories matching current role/permission/location scope;
+  memories are untrusted reference parts, not system prompts, live facts or
+  action authority. Management stays available for deletion when generation
+  is disabled. Existing worker purges expired text in bounded batches.
+  Optional .txt/.md input supports local UTF-8 validation, explicit text review
+  and addition to the composer, never automatic sending or saving as memory.
+  File cap 8 KiB / 3,000 characters; combined message remains 4,000 characters.
+  Migration 0084 and ECH-P8D test prompts accompany this implementation.
+  Local verification (2026-09-07): 6,318 regression tests passed, plus all
+  twelve isolated PostgreSQL checks (including migration repeat/rollback,
+  role isolation, concurrent cap/edits, deletion retries and expiry/delete races).
+  TypeScript, lint and the production build passed. Migration 0084 has not been
+  applied to a live database by this implementation, and live Vertex/Echos
+  behavior still requires the documented acceptance prompts.
+- **8E — Optional multimodal inputs: not implemented.** Screenshot/image,
+  PDF/document extraction and voice input require separate MIME/size/decoder,
+  privacy, provider-capability and cost validation. The 8D text importer does
+  not implement these channels. Specialist multi-agent planning also remains
+  evaluation-driven, not automatically enabled.
 
 Phase 8A does not start schedules or perform actions in response to a signal.
 The remaining original Phase 8 objectives below belong to later subphases.
@@ -1660,8 +1697,12 @@ after 0081 and deploy the matching revision. Run ECH-P8A-01–24 and
 ECH-P8B-01–30 on Echos using the existing workflow heartbeat. Verify consent,
 owner-only alerts, quiet hours, duplicate delivery, source errors and scope
 revocation. No new environment variables or recurring jobs are required.
-Phase 8C (approved proactive responses) is next; no automatic remediation is
-part of 8B.
+Phase 8C is committed and migration 0083 is reported applied. Deploy the
+dashboard/worker and run ECH-P8C acceptance tests on Echos. Approval
+authorizes only one read-only response investigation, never an automatic remedy.
+Phase 8D adds approved memories and reviewed text input locally. Apply migration
+`20260907_0084_mink_phase_8d_memories`, deploy, and run ECH-P8D acceptance before
+enabling wider usage. Optional multimodal channels (8E) remain unbuilt.
 Do not infer live model routing accuracy or production latency from unit tests.
 
 The Phase 7D deployment acceptance checklist remains applicable:
