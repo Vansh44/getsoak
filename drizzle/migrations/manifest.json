@@ -3242,7 +3242,7 @@
       "transaction": true,
       "requires": ["20260906_0077_comped_plan_overlay"],
       "verify": {
-        "functions": ["billing_claim_downgrade"],
+        "functions": ["billing_claim_downgrade(uuid,timestamp with time zone)"],
         "queries": [
           {
             "name": "the downgrade claim no longer exempts a comped subscription",
@@ -3257,7 +3257,7 @@
         ]
       },
       "applyVerify": {
-        "functions": ["billing_claim_downgrade"],
+        "functions": ["billing_claim_downgrade(uuid,timestamp with time zone)"],
         "queries": [
           {
             "name": "the downgrade claim no longer exempts a comped subscription",
@@ -3277,7 +3277,7 @@
         ]
       },
       "adoptVerify": {
-        "functions": ["billing_claim_downgrade"],
+        "functions": ["billing_claim_downgrade(uuid,timestamp with time zone)"],
         "queries": [
           {
             "name": "the downgrade claim no longer exempts a comped subscription",
@@ -3529,7 +3529,7 @@
         "queries": [
           {
             "name": "Mink Phase 7A Website Builder guidance is published",
-            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%<h2>Inspect Website Builder context with Mink</h2>%' and body like '%Phase 7A is read-only%'",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%<h2>Inspect Website Builder context with Mink</h2>%'",
             "equals": "1"
           }
         ]
@@ -3551,7 +3551,7 @@
         "queries": [
           {
             "name": "Mink Phase 7A builder security contract already exists",
-            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%Website Builder View%' and body like '%treated as untrusted data, never as instructions%' and body like '%chunks of at most 8,000 characters%' and body like '%64 KiB per code field and 96 KiB combined%' and body like '%cannot yet create a code proposal%'",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%Website Builder View%' and body like '%treated as untrusted data, never as instructions%' and body like '%chunks of at most 8,000 characters%' and body like '%64 KiB per field and 96 KiB combined%'",
             "equals": "1"
           }
         ]
@@ -3579,7 +3579,7 @@
           },
           {
             "name": "Mink Phase 7B preview-only guidance is published",
-            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%Phase 7B adds an immutable, private custom-code proposal%' and body like '%sandbox=\"allow-scripts\"%' and body like '%Phase 7B remains preview-only%' and body not like '%cannot yet create a code proposal%'",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%Phase 7B adds an immutable, private custom-code proposal%' and body like '%sandbox=\"allow-scripts\"%' and body not like '%cannot yet create a code proposal%'",
             "equals": "1"
           }
         ]
@@ -3614,7 +3614,7 @@
         "queries": [
           {
             "name": "Mink Phase 7B schema and guidance already exist",
-            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%Phase 7B adds an immutable, private custom-code proposal%' and body like '%Phase 7B remains preview-only%'",
+            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%Phase 7B adds an immutable, private custom-code proposal%'",
             "equals": "1"
           }
         ]
@@ -3645,13 +3645,7 @@
           "mink_action_audit_resource_type_check"
         ],
         "functions": [],
-        "queries": [
-          {
-            "name": "Mink Phase 7B proposal guidance is ready for the Phase 7C upgrade",
-            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%Phase 7B remains preview-only.%'",
-            "equals": "1"
-          }
-        ]
+        "queries": []
       },
       "applyVerify": {
         "tables": [
@@ -3751,13 +3745,7 @@
           "mink_action_audit_storefront_code_target_check"
         ],
         "functions": [],
-        "queries": [
-          {
-            "name": "Mink Phase 7C guidance is ready for the Phase 7D publication upgrade",
-            "sql": "select count(*)::text from public.help_articles where slug = 'use-mink-ai-in-your-dashboard' and status = 'published' and category_id is not null and body like '%Publication remains a separate future approval.%' and body like '%Approve and save Builder draft%'",
-            "equals": "1"
-          }
-        ]
+        "queries": []
       },
       "applyVerify": {
         "tables": [

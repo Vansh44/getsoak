@@ -1676,6 +1676,48 @@ wholesip/
 │                              # SHA-256 checksums and object-level postconditions.
 │                              # `schema_migrations` itself is bootstrapped by the
 │                              # admin-only runner; it is not an application table.
+│                              # ★★ TWO CONTRACT-AUTHORING RULES, both learned from
+│                              # entries that jammed the adopt queue (2026-09-07):
+│                              # (1) A FUNCTION NAME NEEDS ITS ARGUMENT TYPES.
+│                              # verifyContract uses `to_regprocedure`, which
+│                              # REQUIRES them — `to_regprocedure('public.foo')` is
+│                              # always NULL, so such a check can never pass whatever
+│                              # the schema holds. Every other entry gets this right
+│                              # (`sm_pad(integer,integer)`); 0078 shipped a bare
+│                              # `billing_claim_downgrade` and blocked all 18 pending
+│                              # migrations, since `adopt` only records the FIRST
+│                              # pending one. Write `foo(uuid,timestamp with time zone)`.
+│                              # (2) DURABLE `verify` MUST NOT ASSERT TRANSITIONAL
+│                              # COPY OR PRECONDITIONS. It is re-checked for every
+│                              # APPLIED migration on every status/verify run, so a
+│                              # phrase a LATER phase legitimately removes ("Phase 7A
+│                              # is read-only", "remains preview-only", "cannot yet
+│                              # create a code proposal") turns into a permanent
+│                              # failure in every environment. Worse, 7C/7D put a
+│                              # READINESS check there — text their own SQL deletes —
+│                              # which can never hold post-apply; the runner has no
+│                              # "before" hook, so a precondition has no home. Put
+│                              # exact wording in `applyVerify` (immediate) or
+│                              # `adoptVerify` (evolved schema) and keep `verify` to
+│                              # what stays true: tables, columns, constraints,
+│                              # indexes, privileges. `0018_help_embedding_hardening`
+│                              # is the model; the Help-baseline note below states the
+│                              # same rule for content migrations.
+│                              # ⚠ Editing a PENDING entry is safe (nothing recorded
+│                              # it, so no checksum drift); editing an APPLIED one
+│                              # rewrites its computed checksum and the runner refuses.
+│                              # The computed sum is sha256(canonicalJson(entry minus
+│                              # `file`) + NUL + sql), so a `verify` edit changes it —
+│                              # which is exactly why only pending entries may move.
+│                              # ⚠ NINE COLLIDING SEQUENCE NUMBERS (0076-0084): the
+│                              # main -> minkai merge concatenated two independently
+│                              # numbered series (billing/offers 20260906-07, mink
+│                              # 7A-8D 20260904-07), so the manifest's order is not
+│                              # date order (entry 86 is 20260907, entry 87 is
+│                              # 20260904). IDs stay unique via the date prefix so the
+│                              # ledger accepts them, and `out_of_order` does not flag
+│                              # it — that check only looks for applied-after-pending.
+│                              # Anything numbered 0085+ collides again.
 │   └── sql/                   # New forward-only SQL. 0002 repairs the production
 │                              # credit-note formatter drift (bare lpad truncated
 │                              # legal serials beyond 9,999) and canonicalizes the
@@ -1779,6 +1821,24 @@ wholesip/
 │   │                          # never falls back to the app login, whose ledger grants are
 │   │                          # removed by migration 0018.
 │   ├── db-migrations-core.mjs # pure manifest/checksum/planning primitives (tested)
+│   ├── db-local-ctl.sh        # ★ LOCAL dev Postgres cluster (Homebrew postgresql@17)
+│   │                          # on port 5544 — NOT 5432, which this Mac's EDB
+│   │                          # PostgreSQL 15/16/17 installs hold as the system
+│   │                          # `postgres` user (invisible to a non-root lsof, so
+│   │                          # the port looks free). Sets LC_ALL, without which
+│   │                          # the postmaster dies "became multithreaded during
+│   │                          # startup". start/stop/status/psql.
+│   ├── db-local-sync.sh       # ★ rebuild storemink_local from staging by dump +
+│                              # restore. ★★ pg_dump runs --role=app_service: the
+│                              # `app` login has rolbypassrls=false, so a dump as
+│                              # `app` returns ZERO rows for every RLS-protected
+│                              # (service-only) table with no error. A dump rather
+│                              # than replayed SQL because manifest.json's baseline
+│                              # is a VERIFICATION baseline (asserts tables exist)
+│                              # and creates nothing, and the 153 supabase/*.sql
+│                              # files carry apply-order traps + post-apply edits
+│                              # that re-run as silent no-ops. Refuses on expired
+│                              # ADC, a dead proxy, or pg_dump older than the server.
 │   └── help-content-migrations.test.mjs # static contract for the 0019–0024 public Help
 │                              # baseline: exact file/order/article counts, unique slugs,
 │                              # complete metadata/substantial bodies, valid internal links,
@@ -9784,6 +9844,26 @@ npm run dev -- --no-fs-cache  # force it OFF (DEV_FS_CACHE=0); default is OFF on
 npm run dev:all     # ↑ dev + the Cloud SQL Auth Proxy together (concurrently) — one command
 npm run dev:all:lean # ↑ force the 2 GB heap + proxy (normally identical on this 8 GB Mac)
 npm run dev:all:full # ↑ uncapped dev + proxy
+npm run db:local:start  # ★ start the LOCAL dev Postgres (Homebrew @17, port 5544)
+npm run db:local:status # cluster state + storemink_local table count
+npm run db:local:sync   # rebuild storemink_local from staging (add -- --schema-only to skip data)
+npm run db:local:psql   # psql into storemink_local
+npm run db:local:stop   # stop the cluster
+npm run db:migrate:local # ledger status/apply against --environment local (ENV_DATABASES.local
+                    #   is null, so there is no database-name guard)
+                    #   ★ With .env.local present the app uses the LOCAL database and you run
+                    #   `npm run dev`, NOT `dev:all` — there is no proxy to start. Warm renders
+                    #   drop from ~1.2 s of application-code to ~1-3 ms per query. Rationale,
+                    #   measurements and the Identity-Platform pairing warning are in
+                    #   docs/local-dev-performance.md.
+                    # ★★ db:migrate:staging and db:migrate:prod PIN DB_HOST=127.0.0.1
+                    #   DB_PORT=6543 (the Cloud SQL proxy). They set DB_NAME but used to
+                    #   inherit host/port from the env files, so an .env.local pointing at a
+                    #   local cluster redirected them. It failed safely only because no local
+                    #   database carried those names — and the environment guard compares the
+                    #   database NAME, not the host, so a local database called `storemink`
+                    #   would let `db:migrate:prod apply` target LOCAL while reporting success
+                    #   as production. Pinning the host removes that ambiguity entirely.
 npm run db:proxy    # just the Cloud SQL Auth Proxy → staging DB on localhost:6543 (needs
                     #   `gcloud auth application-default login` once for ADC). Points at the
                     #   `storemink-prod-db` INSTANCE; local dev uses its `storemink_staging`
