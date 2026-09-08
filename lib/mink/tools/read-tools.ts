@@ -12,7 +12,7 @@ import {
   readMinkCatalogHealth,
   readMinkCatalogHealthByLocation,
 } from "../catalog-health-read";
-import { MinkToolInputError } from "../errors";
+import { MinkRequestError, MinkToolInputError } from "../errors";
 import {
   readMinkStorefrontDesignContext,
   readMinkStorefrontPageContext,
@@ -755,10 +755,23 @@ const getMinkWatchResponses: MinkTool = {
     )
       throw new MinkToolInputError("Choose one exact owned watch.");
     const { listProactiveResponses } = await import("../proactive-responses");
-    return {
-      ...(await listProactiveResponses(actor, args.watch_id)),
-      dashboardPath: "/dashboard/mink-watches",
-    };
+    try {
+      return {
+        ...(await listProactiveResponses(actor, args.watch_id)),
+        dashboardPath: "/dashboard/mink-watches",
+      };
+    } catch (error) {
+      // ★ A REFUSAL IS INPUT FEEDBACK, NOT A SERVER FAILURE. This reader is
+      // shared with the HTTP route, which needs MinkRequestError for its
+      // status codes — but the tool registry maps only MinkToolInputError to
+      // `invalid_tool_input`. Left as-is, an unknown watch ID or a narrowed
+      // location scope became a logged ERROR plus an unactionable "couldn't
+      // finish right now", so the model could neither call get_mink_watches
+      // first nor explain that permissions changed.
+      if (error instanceof MinkRequestError)
+        throw new MinkToolInputError(error.message);
+      throw error;
+    }
   },
 };
 
