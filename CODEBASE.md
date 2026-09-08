@@ -3828,8 +3828,12 @@ the trusted `store_id`, and direct customer PII is minimized/masked.
      Migration
      `20260902_0058_mink_phase_6a_durable_workflows` owns the tables, tenant
      composite keys, lease/completion invariants, service grants and Help
-     contract. Cloud Scheduler must add `storemink-mink-workflows` only after
-     that migration and matching application deploy.
+     contract. ✅ Cloud Scheduler `storemink-mink-workflows` EXISTS on production as
+     of 2026-09-08 (`* * * * *`), created only after the tables, the route's
+     HTTP 200 on an empty queue, and the 401 gate were each verified against
+     production; see docs/cron-jobs.md for the evidence. It must still be added
+     only after that migration and matching application deploy in any other
+     environment.
 
      Phase 6B reuses that runtime for
      `revenue_decline_investigation`. The model-visible queue tool requires an

@@ -135,14 +135,14 @@ gcloud builds submit --project storemink-prod --region global --config=cloudbuil
 > production does not match it.** This is the exact gap the section above
 > describes, so it is recorded rather than quietly corrected:
 >
-> | Job                           | Table says   | Actually            |
-> | ----------------------------- | ------------ | ------------------- |
-> | `storemink-send-emails`       | `* * * * *`  | ✅ fixed 2026-09-08 |
-> | `storemink-search-metrics`    | `30 2 * * *` | **PAUSED**          |
-> | `storemink-analytics-rollup`  | `40 * * * *` | **PAUSED**          |
-> | `storemink-help-embeddings`   | `50 * * * *` | **absent**          |
-> | `storemink-mink-publications` | `* * * * *`  | **absent**          |
-> | `storemink-mink-workflows`    | `* * * * *`  | **absent**          |
+> | Job                           | Table says   | Actually              |
+> | ----------------------------- | ------------ | --------------------- |
+> | `storemink-send-emails`       | `* * * * *`  | ✅ fixed 2026-09-08   |
+> | `storemink-search-metrics`    | `30 2 * * *` | **PAUSED**            |
+> | `storemink-analytics-rollup`  | `40 * * * *` | **PAUSED**            |
+> | `storemink-help-embeddings`   | `50 * * * *` | **absent**            |
+> | `storemink-mink-publications` | `* * * * *`  | **absent**            |
+> | `storemink-mink-workflows`    | `* * * * *`  | ✅ created 2026-09-08 |
 >
 > ⚠ **An earlier version of this note called the `send-emails` schedule a LIVE
 > cost. That was wrong, and the correction is the useful part.** Measured on
@@ -203,8 +203,27 @@ then it would 404 or query an incomplete table.** Also,
 until migration `20260901_0052_mink_phase_5d_blog_publication` and the matching
 route are deployed. Create it with the same CRON_SECRET bearer contract only
 after both application and database verification pass.** Also,
-**`storemink-mink-workflows` was introduced in Phase 6A and must stay
-absent/paused until migration `20260902_0058_mink_phase_6a_durable_workflows`
+✅ **`storemink-mink-workflows` EXISTS as of 2026-09-08** (`* * * * *`, 300s
+deadline, retryCount 3, same CRON_SECRET bearer contract), created only after
+every precondition below was checked against production rather than assumed:
+`mink_workflow_runs`, `mink_workflow_steps` and `mink_workflow_events` all
+EXIST; the route answers **HTTP 200 on an empty queue** across three calls
+(0.25-0.45s) with `claims:0`, which is the specific thing to verify — CODEBASE.md
+§20a records a version where `parseClaimedWorkflow` threw on an empty claim, so
+the minute cron answered **500 on every idle tick** and the completion fan-out
+below it was unreachable; unauthenticated requests get 401; the queue was empty
+(0 runs) so nothing was stranded; and 2 stores have Mink enabled, so the feature
+is live and did need a worker. Verified after creation by three consecutive
+firings a minute apart (13:49:09, 13:50:05, 13:51:05), all HTTP 200, the job's
+own status code empty, no app-side errors, tables still clean.
+⚠ Each execution logs TWO Cloud Scheduler entries — one carrying
+`httpRequest.status: 200` and one with the field absent — so a filter of
+`httpRequest.status!=200` looks like failures and is not. Judge by the job's
+`status.code` (blank = success).
+
+The original caveat, kept because it still applies to any environment where this
+has not been done: it **must stay absent/paused until migration
+`20260902_0058_mink_phase_6a_durable_workflows`
 and the matching route are deployed. Phase 6B/6C additionally requires
 `20260903_0072_mink_phase_6bc_workflows` before the matching application deploy.
 Create or resume it with the shared CRON_SECRET bearer contract only after the
