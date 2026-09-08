@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import type { Metadata } from "next";
+import { STOREMINK_ICONS } from "@/lib/brand-assets";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import { Toaster } from "@/components/ui/sonner";
 import { getCurrentStore } from "@/lib/store/resolve";
@@ -47,7 +48,7 @@ export const metadata: Metadata = {
     default: "StoreMink — Operations Centre",
     template: "%s — StoreMink",
   },
-  icons: { icon: "/brand/storemink-mark.png" },
+  icons: STOREMINK_ICONS,
 };
 
 export default async function DashboardLayout({

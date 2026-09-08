@@ -2,6 +2,7 @@
 "use client";
 
 import Link from "next/link";
+import { STOREMINK_MARK } from "@/lib/brand-assets";
 import styles from "./Footer.module.css";
 import { useBrand } from "@/app/(storefront)/components/brand-provider";
 import { useChrome } from "@/app/(storefront)/components/chrome-provider";
@@ -280,8 +281,11 @@ export default function Footer() {
             <>
               <strong>Powered by</strong>
               <img
-                src="/icon.svg"
+                src={STOREMINK_MARK}
                 alt="StoreMink"
+                width={18}
+                height={18}
+                loading="lazy"
                 className={styles.creditLogo}
                 aria-hidden="true"
               />

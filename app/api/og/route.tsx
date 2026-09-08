@@ -60,8 +60,7 @@ function clamp(s: string | null, max: number): string {
  * Read off disk and inlined rather than given to Satori as a URL: an <img src>
  * makes the renderer fetch over the network while a crawler waits, and a slow
  * or failed fetch produces a BROKEN share card — the one image you never get a
- * second chance at. Read once at module scope; it is a 63 KB file that never
- * changes between deploys.
+ * second chance at. Cached by its versioned asset path between deploys.
  *
  * ⚠ Only a path under public/ is accepted, and only from our own callers. A
  * remote URL is deliberately NOT supported: it would let any query string make
@@ -139,7 +138,12 @@ export function GET(request: NextRequest) {
           width={104}
           height={104}
           alt=""
-          style={{ marginBottom: 36 }}
+          style={{
+            marginBottom: 36,
+            backgroundColor: "white",
+            borderRadius: 16,
+            padding: 8,
+          }}
         />
       ) : (
         // No logo (a store that hasn't uploaded one) keeps the plain rule —

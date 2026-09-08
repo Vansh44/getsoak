@@ -239,7 +239,9 @@ describe("bounded watch scheduler and outbox", () => {
     h.selects = [[watch]];
     h.scopes.mockResolvedValue(null);
     expect(await scheduleMinkWatches(now)).toBe(0);
-    expect(h.writes[0].value).toMatchObject({
+    // By table, not by position: stop() cancels the watch's runs FIRST and
+    // does so unconditionally now, so the pause is no longer the first write.
+    expect(h.writes.find((w) => w.table === minkWatches).value).toMatchObject({
       status: "paused",
       errorCode: "authorization_revoked",
     });

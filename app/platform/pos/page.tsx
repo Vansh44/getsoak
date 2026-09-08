@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { STOREMINK_LOGO } from "@/lib/brand-assets";
 import Image from "next/image";
 import Link from "next/link";
 import posDevicesImage from "@/public/brand/storemink-pos-multidevice.png";
@@ -42,7 +43,7 @@ const POS_OG_IMAGE = new URL(
     title: "StoreMink Point of Sale",
     subtitle: "Sell in store. Stay connected everywhere.",
     color: "#120f2d",
-    logo: "/brand/storemink-mark.png",
+    logo: STOREMINK_LOGO,
     footer: "pos.storemink.com",
   }),
   PLATFORM_URL,

@@ -29,6 +29,31 @@ converted to multi-tenant in phases. It still exists as the fallback store
 so some naming (repo name `wholesip`, `brand/`) is legacy. The `--wholesip-*` CSS
 tokens were renamed to `--sm-*` and `WHOLESIP_STORE_ID` to `FALLBACK_STORE_ID`.
 
+### StoreMink brand assets (2026-09-08)
+
+The platform uses the owner's purple shopping-bag artwork from
+`brand/assets/storemink-master.png` (original 2508×2508 transparent PNG).
+`npm run brand:build` runs `scripts/build-brand-assets.mjs`: alpha-bound cropping
+preserves the exact colours, white detail and proportions, then exports a
+512px PNG, lossless 256px WebP, tightly framed 16/32/48px favicons, a multi-size
+ICO and an opaque white 180px Apple touch icon with mask-safe padding.
+`lib/brand-assets.ts` supplies versioned `/brand/20260908/` URLs to public
+navigation, login/signup, themes, POS marketing, dashboard chrome, Help,
+storefront credits, share cards and publisher/Organization schema. `BrandMark`
+uses Next 16 image preloading and intrinsic square dimensions. Dashboard and
+share-card marks have white backing for contrast on dark surfaces. Root and
+dashboard metadata share the dedicated favicon sizes; `app/icon.png` and
+`app/apple-icon.png` retain Next's generated metadata URLs. Legacy
+`/brand/storemink-mark.png`, `.webp`, `/icon.svg` and `/favicon.ico` are rebuilt
+too so old links serve the new artwork. Future replacements must regenerate
+all derivatives and advance the versioned directory/constants together.
+
+Merchant-uploaded logos and their storefront favicon override remain separate;
+StoreMink is only the no-logo fallback. This is a brand presentation change,
+not a POS/inventory/fulfilment capability or workflow change. Forward-only
+`20260908_0087_storemink_logo_help.sql` appends platform-versus-merchant branding
+and cached-icon troubleshooting to the published storefront-branding guide.
+
 ## 2. Tech stack
 
 | Layer     | Tech                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
@@ -40,7 +65,7 @@ tokens were renamed to `--sm-*` and `WHOLESIP_STORE_ID` to `FALLBACK_STORE_ID`.
 | AI        | Gemini (`lib/ai/gemini.ts`); per-store brand voice (`lib/ai/brand-voice.ts` + `store_brand_profiles`) with plan-capped usage metering (`lib/ai/quota.ts`); task prompts in `brand/tasks/`. The dashboard Mink drawer has a default-on, invitation-gated Vertex/Gemini 3.7 beta in `lib/mink/` + `app/api/mink/`: its marked runtime system prompt is `docs/mink-ai-system-prompt.md`, validated and rendered by `lib/mink/system-prompt.ts`. Phase 2 streams permission/location-aware store, catalogue, sales, order, inventory and Help reads; vague multi-location catalogue-stock questions now produce permission-safe multiple-choice clarification instead of silently using a combined total, while explicit comparison returns shelf-level counts. Phase 3 adds separately opted-in private proposals. Phase 4A adds independently gated product description/SEO actions; 4B adds unpublished, untracked draft-product creation; 4C adds disabled/hidden coupon create/update; and 4D adds customer-group metadata create/update. Phase 5A adds an independently gated, human-approved adjustment for one exact tracked SKU at one exact active accessible location; Phase 5B adds a separate 5-credit, maximum-20-line bulk inventory proposal and atomic approval; Phase 5C adds a separate one-credit, one-order, one-forward-step online-delivery status proposal/approval for pending → processing → shipped → delivered; Phase 5D adds a separate immediate/scheduled publication approval for one exact saved blog proposal plus a bounded conflict-safe worker; Phase 5E adds independently gated coupon-email audience selection, exact non-PII preview, final confirmation and immediate/scheduled queueing; Phase 5F adds an independently gated 1–20 exact-SKU bulk price proposal, one-unit basket impact review and atomic conflict-safe execution. Phase 6A adds a durable leased workflow runtime and an idempotent, read-only weekly trading report with persisted steps/events, safe cancellation, token-free waiting and background completion notification. Phase 6B adds a bounded, read-only 7/30/90-day revenue-decline investigation across exact channels, locations and leading products; Phase 6C adds a private exact-SKU product-launch readiness package covering catalogue, media, SEO, valid pricing, scoped inventory and shipping without live changes; Phase 6D adds a bounded location-aware slow-inventory workflow and a private, margin-guarded promotion recommendation that cannot create or activate an offer; Phase 6E adds a bounded PII-minimized delayed-pickup review, staff-confirmed preparation-delay copy and duplicate-safe handoff to the existing one-time reminder sweep. Phase 7A adds permission-gated current-store Website Builder page/section/design readers and strict code validation; Phase 7B adds one immutable 5-credit exact-section proposal with an isolated desktop/mobile preview; Phase 7C adds a separate default-off, human-only five-minute exact-diff approval that transactionally saves only that reviewed replacement to the private Builder draft with idempotency, conflict checks and audit. Every live action uses exact short-lived human approval, tenant/permission/tool/version rechecks, idempotent transactional execution and append-only outcomes; Phase 4 supports checkpointed safe rollback, while inventory, order-status, blog-publication, campaign, price and Builder corrections use fresh/manual domain workflows. Gemini receives checkpoint/proposal tools but no live execute tool; its durable workflow tools queue deterministic internal read work only. Transfers, cancellation/refunds/payment/shipment changes, pickup/POS lifecycle mutations, product/bulk publication, arbitrary customer contact/group membership, unbounded catalogue repricing and arbitrary repository coding remain unavailable; Phase 7D adds separately gated human publication checks, approval and exact rollback after a completed Phase 7C save. Mink cannot add sections, edit header/footer, access shell/repository or deploy. Operators control every gate and inspect redacted metrics at `/dashboard/mink`; the live harness is `npm run mink:eval`, and the phase-wise manual catalogue is `docs/mink-ai-test-prompts.md`. An explicit global disable or missing invite retains the canned coming-soon response. Architecture and phased rollout are tracked in `docs/mink-ai-dashboard-plan.md`. |
 | Testing   | Vitest + Testing Library + jsdom, coverage via v8 (`coverage/` is generated output — never edit)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | Browsers  | **`browserslist` in package.json is the stated floor: Chrome/Edge 111, Firefox 128, Safari/iOS 16.4.** Not a preference — Tailwind v4 depends on `@property` and `color-mix()` and does not work below it, so this records a constraint a dependency already imposed rather than inventing one. Two authored CSS features sit BELOW that floor and so are always available: `:has()` (Chrome 105+/Safari 15.4+/Firefox 121+) and container queries (Chrome 105+/Safari 16+/Firefox 110+), both used by the dashboard table compaction, which is nonetheless wrapped in `@supports selector(:has(+ *)) and (container-type: inline-size)` so the dependency is stated where it is used and stays graceful if the floor is ever lowered. **⚠ There is NO cross-browser test infrastructure** — vitest runs in jsdom, which renders nothing. Chrome is the only browser this has been exercised in                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| Deploy    | **Google Cloud Run** via branch-specific Cloud Build triggers (`dev` → `storemink-web-dev`, `staging` → `storemink-web`, `main` → `storemink-web-prod`; Dockerfile + `cloudbuild.yaml`). The Cloud Build deploy owns the complete runtime environment; Mink's model/limit settings and separate invited-beta requirement are declared as substitutions. The global runtime defaults enabled, while the per-store invitation requirement defaults on and remains the fail-closed merchant boundary. CI on GitHub Actions (`.github/workflows/ci.yml`: lint → typecheck → test → test:shuffle → prettier → build); `npm run typecheck` runs `next typegen` before `tsc --noEmit` because the Next-managed `next-env.d.ts` is deliberately gitignored and a clean checkout otherwise has no static-image or route declarations. Database DDL is a separate, checksummed release gate (`npm run db:migrate`; see `drizzle/manual/README.md`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Deploy    | **Google Cloud Run** via branch-specific Cloud Build triggers (`dev` → `storemink-web-dev`, `main` → `storemink-web-prod`; Dockerfile + `cloudbuild.yaml`). ⚠ The STAGING DEPLOYMENT was removed 2026-09-08 — no `staging` branch, no `storemink-web` service, no `staging.storemink.com`; **dev is the only pre-production environment**. The `storemink_staging` DATABASE remains and is dev's, so `db:migrate:staging` and `db:drift:staging` still target a live database despite the name. The Cloud Build deploy owns the complete runtime environment; Mink's model/limit settings and separate invited-beta requirement are declared as substitutions. The global runtime defaults enabled, while the per-store invitation requirement defaults on and remains the fail-closed merchant boundary. CI on GitHub Actions (`.github/workflows/ci.yml`: lint → typecheck → test → test:shuffle → prettier → build); `npm run typecheck` runs `next typegen` before `tsc --noEmit` because the Next-managed `next-env.d.ts` is deliberately gitignored and a clean checkout otherwise has no static-image or route declarations. Database DDL is a separate, checksummed release gate (`npm run db:migrate`; see `drizzle/manual/README.md`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 
 > **Mink Phase 7D map update (2026-09-05):** With drafting plus Builder
 > Manage, Mink may create one 5-credit immutable private generated-code
@@ -329,6 +354,23 @@ wholesip/
 │                              # runtime-only. Cloud Build owns the complete Cloud Run env,
 │                              # including default-on Mink + fail-closed invitation substitutions.
 │                              # Build linux/amd64 (Cloud Build or --platform).
+├── cloudbuild-drift.yaml      # ★ Scheduled production schema-drift check, run by the
+│                              # `storemink-schema-drift` Cloud Build trigger (manual)
+│                              # via Cloud Scheduler `0 4 * * *` UTC. Runs
+│                              # `db-migrate drift --environment production` behind a
+│                              # version-pinned cloud-sql-proxy. ★★ A BUILD, NOT an
+│                              # /api/cron route like the other jobs: the check needs the
+│                              # ledger digest as well as the fingerprint, and reading
+│                              # schema_migrations needs the postgres SUPERUSER login that
+│                              # migration 0018 denied the app — a credential that must not
+│                              # live in the internet-facing Cloud Run runtime. Required two
+│                              # IAM grants the build SA did NOT have: secretAccessor scoped
+│                              # to CLOUDSQL_PROD_POSTGRES_PW, and cloudsql.client.
+│                              # ⚠ CREATED PAUSED until this file reaches `main`; the
+│                              # trigger reads it from refs/heads/main and otherwise fails
+│                              # "File cloudbuild-drift.yaml not found". Full contract,
+│                              # verification evidence and the resume commands are in
+│                              # docs/cron-jobs.md.
 ├── vercel.json                # INERT schedule record (prod = Cloud Scheduler):
 │                              # send-emails, plan-expiry, expire-pending-payments,
 │                              # seo-refresh, search-metrics, domain-reconcile, prune-logs,
@@ -638,7 +680,7 @@ wholesip/
 │   │                          # httpOnly Firebase session cookie), signout/route.ts (clear it)
 │   ├── auth/                  # Store-host auth: login (email+pw + Google popup),
 │   │                          # forgot/set/update-password (Firebase; callback route removed)
-│   ├── help/                  # Help centre (served at help.storemink.com)
+│   ├── help/                  # Request-rendered Help Centre; error.tsx retries failed reads
 │   ├── themes/                # ★ Public metadata-driven theme catalog served at
 │   │                          # themes.storemink.com; own canonical/OG/CSS, industry
 │   │                          # filters, truthful demo/release/plan state, and a
@@ -1676,6 +1718,138 @@ wholesip/
 │                              # SHA-256 checksums and object-level postconditions.
 │                              # `schema_migrations` itself is bootstrapped by the
 │                              # admin-only runner; it is not an application table.
+│                              # ★★ TWO CONTRACT-AUTHORING RULES, both learned from
+│                              # entries that jammed the adopt queue (2026-09-07):
+│                              # (1) A FUNCTION NAME NEEDS ITS ARGUMENT TYPES.
+│                              # verifyContract uses `to_regprocedure`, which
+│                              # REQUIRES them — `to_regprocedure('public.foo')` is
+│                              # always NULL, so such a check can never pass whatever
+│                              # the schema holds. Every other entry gets this right
+│                              # (`sm_pad(integer,integer)`); 0078 shipped a bare
+│                              # `billing_claim_downgrade` and blocked all 18 pending
+│                              # migrations, since `adopt` only records the FIRST
+│                              # pending one. Write `foo(uuid,timestamp with time zone)`.
+│                              # (2) DURABLE `verify` MUST NOT ASSERT TRANSITIONAL
+│                              # COPY OR PRECONDITIONS. It is re-checked for every
+│                              # APPLIED migration on every status/verify run, so a
+│                              # phrase a LATER phase legitimately removes ("Phase 7A
+│                              # is read-only", "remains preview-only", "cannot yet
+│                              # create a code proposal") turns into a permanent
+│                              # failure in every environment. Worse, 7C/7D put a
+│                              # READINESS check there — text their own SQL deletes —
+│                              # which can never hold post-apply; the runner has no
+│                              # "before" hook, so a precondition has no home. Put
+│                              # exact wording in `applyVerify` (immediate) or
+│                              # `adoptVerify` (evolved schema) and keep `verify` to
+│                              # what stays true: tables, columns, constraints,
+│                              # indexes, privileges. `0018_help_embedding_hardening`
+│                              # is the model; the Help-baseline note below states the
+│                              # same rule for content migrations.
+│                              # ⚠ Editing a PENDING entry is safe (nothing recorded
+│                              # it, so no checksum drift); editing an APPLIED one
+│                              # rewrites its computed checksum and the runner refuses.
+│                              # The computed sum is sha256(canonicalJson(entry minus
+│                              # `file`) + NUL + sql), so a `verify` edit changes it —
+│                              # which is exactly why only pending entries may move.
+│                              # ⚠ NINE COLLIDING SEQUENCE NUMBERS (0076-0084): the
+│                              # main -> minkai merge concatenated two independently
+│                              # numbered series (billing/offers 20260906-07, mink
+│                              # 7A-8D 20260904-07), so the manifest's order is not
+│                              # date order (entry 86 is 20260907, entry 87 is
+│                              # 20260904). IDs stay unique via the date prefix so the
+│                              # ledger accepts them, and `out_of_order` does not flag
+│                              # it — that check only looks for applied-after-pending.
+│                              # ⚠ DO NOT RENUMBER THEM. All nine are APPLIED on
+│                              # local, staging AND production. Renaming an applied
+│                              # id orphans its ledger row — migrationPlan puts the
+│                              # old id in `unknown` and the new one in `pending`,
+│                              # and assertHealthyPlan THROWS "Ledger contains
+│                              # unknown migrations", which stops apply, adopt and
+│                              # verify until the ledger is hand-repaired. Measured
+│                              # against a real database: renaming one entry gave
+│                              # unknown=1 plus a phantom pending. All nine means
+│                              # rewriting `id` AND `checksum` (the id feeds the
+│                              # computed checksum) across 27 ledger rows including
+│                              # production, for no functional gain — the ids are
+│                              # already unique. It is a naming wart, not a defect.
+│                              # ★ THE NEXT MIGRATION TAKES 0089. 0085 and 0086 are
+│                              # used by the offers series, so those collide too;
+│                              # 0087 documents the StoreMink logo refresh.
+│                              # 0088 documents Help first-visit/error recovery.
+│                              # 0089 is the first free number. `db-migrations-core.test.mjs`
+│                              # freezes the nine pairs, so a new entry reusing any
+│                              # existing number fails CI (it either adds a tenth
+│                              # duplicate group or makes an existing group a triple).
+│   ├── schema-fingerprint.json # ★★ THE DRIFT TRIPWIRE. A committed per-environment
+│   │                          # baseline of `schema_sha256` plus a digest of WHICH
+│   │                          # migration ids are recorded. `db:migrate drift`
+│   │                          # recomputes both and compares.
+│   │                          # ★ THE TWO SIGNALS TOGETHER ARE THE WHOLE POINT.
+│   │                          # schemaFingerprint() EXCLUDES schema_migrations, so
+│   │                          # recording a migration cannot move it. That yields
+│   │                          # four states, and only one is the alarm:
+│   │                          #   same/same  -> clean
+│   │                          #   same/moved -> ledger_only  (an `adopt`)
+│   │                          #   moved/moved-> migrated     (the runner ran)
+│   │                          #   moved/same -> out_of_band  ← DDL bypassed the runner
+│   │                          # That last state is exactly what produced the
+│   │                          # 78-of-96 gap: the schema advanced on staging AND
+│   │                          # production while the ledger recorded nothing, so the
+│   │                          # gate could not have caught an error in those 18.
+│   │                          # ⚠ The fingerprint is DDL-ONLY and data-independent —
+│   │                          # proven by prod (4 stores/2 orders) and staging
+│   │                          # (8 stores/53 orders) sharing one fingerprint.
+│   │                          # ★ EVERY non-clean verdict exits 1, including a
+│   │                          # legitimate migration: the baseline is a COMMITTED
+│   │                          # file, so a real migration must land with its
+│   │                          # refreshed baseline or the next run cannot tell a
+│   │                          # migration from someone's manual DDL. Refresh with
+│   │                          # `--update-baseline <environment>` (it must name the
+│   │                          # environment, the same confirmation shape `adopt`
+│   │                          # uses, because rewriting the baseline is what
+│   │                          # silences the detector) and commit it.
+│   │                          # ★ An environment absent from the file is
+│   │                          # `unbaselined` and also exits 1 — it fails closed
+│   │                          # rather than reporting a database it has never seen
+│   │                          # as healthy. Verified end-to-end against a real
+│   │                          # database: a hand-added column gave out_of_band with
+│   │                          # the ledger unchanged and exit 1; a bare ledger
+│   │                          # insert gave ledger_only. classifyDrift is pure and
+│   │                          # mutation-tested in db-migrations-core.test.mjs.
+│   │                          # ★★ WHERE THE CHECK RUNS, AND WHY NOT GITHUB CI.
+│   │                          # The FILE is validated in CI today — shape, all
+│   │                          # ENV_DATABASES environments present, 64-hex hashes,
+│   │                          # and a count never exceeding the manifest — through
+│   │                          # the existing `npm run test` step, needing no
+│   │                          # database and no credentials. That catches a
+│   │                          # malformed or half-armed baseline being committed.
+│   │                          # The DATABASE check is NOT in GitHub CI, for two
+│   │                          # reasons. (1) It needs the postgres SUPERUSER
+│   │                          # password — migration 0018 revoked the app login's
+│   │                          # grants on schema_migrations, so `app` gets
+│   │                          # "permission denied" — and CI holds no GCP
+│   │                          # credentials at all today, while running on
+│   │                          # `pull_request`. Wiring the most privileged
+│   │                          # credential in the system into PR workflow runs is a
+│   │                          # large surface increase. (2) It is the wrong shape
+│   │                          # for CI: a pull request cannot cause production
+│   │                          # drift, drift happens at arbitrary times rather than
+│   │                          # at PR time, and a per-PR check would block
+│   │                          # unrelated work whenever somebody ran manual DDL.
+│   │                          # It belongs on a SCHEDULE inside GCP — Cloud Build
+│   │                          # already holds Secret Manager and Cloud SQL access
+│   │                          # for the deploy triggers, so a Cloud Scheduler entry
+│   │                          # invoking it needs no GitHub secret whatsoever.
+│   │                          # ★ BUILT: cloudbuild-drift.yaml + the
+│   │                          # `storemink-schema-drift` trigger and Cloud Scheduler
+│   │                          # job (`0 4 * * *` UTC), CREATED PAUSED until that
+│   │                          # file reaches `main`. The build ran green against
+│   │                          # production before any schedule was attached. Until
+│   │                          # it is resumed, `npm run db:drift:prod` by hand is the
+│   │                          # check. See docs/cron-jobs.md for the contract, the
+│   │                          # evidence and the resume commands — and its standing
+│   │                          # lesson that a job documented but never created is a
+│   │                          # job that does not run.
 │   └── sql/                   # New forward-only SQL. 0002 repairs the production
 │                              # credit-note formatter drift (bare lpad truncated
 │                              # legal serials beyond 9,999) and canonicalizes the
@@ -1779,6 +1953,24 @@ wholesip/
 │   │                          # never falls back to the app login, whose ledger grants are
 │   │                          # removed by migration 0018.
 │   ├── db-migrations-core.mjs # pure manifest/checksum/planning primitives (tested)
+│   ├── db-local-ctl.sh        # ★ LOCAL dev Postgres cluster (Homebrew postgresql@17)
+│   │                          # on port 5544 — NOT 5432, which this Mac's EDB
+│   │                          # PostgreSQL 15/16/17 installs hold as the system
+│   │                          # `postgres` user (invisible to a non-root lsof, so
+│   │                          # the port looks free). Sets LC_ALL, without which
+│   │                          # the postmaster dies "became multithreaded during
+│   │                          # startup". start/stop/status/psql.
+│   ├── db-local-sync.sh       # ★ rebuild storemink_local from staging by dump +
+│                              # restore. ★★ pg_dump runs --role=app_service: the
+│                              # `app` login has rolbypassrls=false, so a dump as
+│                              # `app` returns ZERO rows for every RLS-protected
+│                              # (service-only) table with no error. A dump rather
+│                              # than replayed SQL because manifest.json's baseline
+│                              # is a VERIFICATION baseline (asserts tables exist)
+│                              # and creates nothing, and the 153 supabase/*.sql
+│                              # files carry apply-order traps + post-apply edits
+│                              # that re-run as silent no-ops. Refuses on expired
+│                              # ADC, a dead proxy, or pg_dump older than the server.
 │   └── help-content-migrations.test.mjs # static contract for the 0019–0024 public Help
 │                              # baseline: exact file/order/article counts, unique slugs,
 │                              # complete metadata/substantial bodies, valid internal links,
@@ -1788,7 +1980,8 @@ wholesip/
 │                              # runtime by product actions + traced into the serverless bundle via
 │                              # next.config.ts. brand.md + the file-based /product-desc & /seo-meta
 │                              # skills were retired — brand voice is per-store in the DB (§16).
-├── public/                    # Static assets (favicon, svgs)
+├── brand/assets/              # Owner's original StoreMink master logo (not served)
+├── public/                    # Static assets; versioned brand exports + legacy aliases
 └── coverage/                  # GENERATED test coverage report — do not edit
 ```
 
@@ -3663,8 +3856,12 @@ the trusted `store_id`, and direct customer PII is minimized/masked.
      Migration
      `20260902_0058_mink_phase_6a_durable_workflows` owns the tables, tenant
      composite keys, lease/completion invariants, service grants and Help
-     contract. Cloud Scheduler must add `storemink-mink-workflows` only after
-     that migration and matching application deploy.
+     contract. ✅ Cloud Scheduler `storemink-mink-workflows` EXISTS on production as
+     of 2026-09-08 (`* * * * *`), created only after the tables, the route's
+     HTTP 200 on an empty queue, and the 401 gate were each verified against
+     production; see docs/cron-jobs.md for the evidence. It must still be added
+     only after that migration and matching application deploy in any other
+     environment.
 
      Phase 6B reuses that runtime for
      `revenue_decline_investigation`. The model-visible queue tool requires an
@@ -3776,8 +3973,29 @@ the trusted `store_id`, and direct customer PII is minimized/masked.
     eventual-consistency). Drizzle tables added to `drizzle/schema.ts`
     (`helpCategories`, `helpArticles`; the generated `search` column is
     intentionally absent — search uses a raw `sql` predicate).
-    - **Public site** (`app/help/*`, statically generated + ISR, fully
-      crawlable): `/help` (search + category grid + popular). The category +
+    - **Public site** (`app/help/*`, request-rendered with tagged data caching, fully
+      crawlable): `/help` (search + category grid + popular).
+      **First-visit reliability (2026-09-08):** the home page and category page/
+      metadata call Next 16 `connection()` before reads; category build-time
+      `generateStaticParams` is removed. Docker builds have no DB credentials,
+      so pre-rendering previously converted DB errors to empty lists and baked
+      an empty Help home into the image. The first request could serve that
+      stale ISR page while revalidating; a reload then showed the real guides.
+      Core reads in `lib/help/queries.ts` now reject errors inside
+      `unstable_cache`, with `read-v2` keys to bypass old poisoned entries, and
+      retry a classified transient connection failure once in their SELECT-only
+      anonymous scope. Successful data still caches for 300 seconds under
+      `TAGS.help`; genuine empty results/missing slugs remain valid. The shared
+      DB transaction runner and write retry semantics are unchanged. Persistent
+      failures record the DB error code in the Help read log and reach
+      `app/help/error.tsx`, whose
+      **Try again** uses Next 16.2 `unstable_retry` to fetch server content again;
+      no public loading boundary is added, preserving missing-page 404 behavior.
+      Migration `20260908_0088_help_first_visit_recovery.sql` appends recovery
+      guidance to the signup/login/store-access troubleshooting guide.
+      Query and page tests cover first-request retry, failed-cache recovery,
+      request-time gating and the retry button.
+      The category +
       article pages use a **3-pane docs layout** (`.hc-docs`): a fixed left
       **Topics tree** (`getHelpNavTree` → collapsible client `help-sidebar.tsx`,
       active category expanded/highlighted), the scrolling content, and a fixed
@@ -9784,6 +10002,42 @@ npm run dev -- --no-fs-cache  # force it OFF (DEV_FS_CACHE=0); default is OFF on
 npm run dev:all     # ↑ dev + the Cloud SQL Auth Proxy together (concurrently) — one command
 npm run dev:all:lean # ↑ force the 2 GB heap + proxy (normally identical on this 8 GB Mac)
 npm run dev:all:full # ↑ uncapped dev + proxy
+npm run db:local:start  # ★ start the LOCAL dev Postgres (Homebrew @17, port 5544)
+npm run db:local:status # cluster state + storemink_local table count
+npm run db:local:sync   # rebuild storemink_local from staging (add -- --schema-only to skip data)
+npm run db:local:psql   # psql into storemink_local
+npm run db:local:stop   # stop the cluster
+npm run db:drift:local  # ★ has DDL reached this database without the runner?
+npm run db:drift:staging #   same for staging (via the proxy; needs gcloud auth for the secret)
+npm run db:drift:prod   #   and production. Exit 0 = clean, 1 = drift or stale baseline.
+                    #   After a real migration: re-run with `-- --update-baseline <env>`
+                    #   and COMMIT drizzle/migrations/schema-fingerprint.json in the
+                    #   same change, or the detector cannot tell the next manual DDL
+                    #   from the migration you just applied.
+npm run db:migrate:local # ledger status/apply against --environment local (ENV_DATABASES.local
+                    #   is null, so there is no database-name guard)
+                    #   ★ With .env.local present the app uses the LOCAL database and you run
+                    #   `npm run dev`, NOT `dev:all` — there is no proxy to start. Warm renders
+                    #   drop from ~1.2 s of application-code to ~1-3 ms per query. Rationale,
+                    #   measurements and the Identity-Platform pairing warning are in
+                    #   docs/local-dev-performance.md.
+                    # ★★ ALL SIX db:migrate:* / db:drift:* SCRIPTS PIN DB_HOST AND DB_PORT
+                    #   (staging and prod at 127.0.0.1:6543 via the proxy, local at
+                    #   127.0.0.1:5544). None of them may inherit host/port from the env
+                    #   files, and the two failure directions are different:
+                    #   • staging/prod set DB_NAME but used to inherit host/port, so an
+                    #     .env.local pointing at a local cluster redirected them. That failed
+                    #     safely ONLY because no local database carried those names — and the
+                    #     environment guard compares the database NAME, not the host, so a
+                    #     local database called `storemink` would let `db:migrate:prod apply`
+                    #     write to LOCAL while reporting success as production.
+                    #   • the LOCAL scripts pinned nothing at all, and `ENV_DATABASES.local`
+                    #     is null, so there is NO name guard on that side either. Delete
+                    #     .env.local and `db:migrate:local apply` would have written to
+                    #     storemink_staging while calling itself local — the more likely
+                    #     accident, since deleting .env.local is the documented way to look
+                    #     at staging. Verified after pinning by moving .env.local aside: it
+                    #     still reports database=storemink_local.
 npm run db:proxy    # just the Cloud SQL Auth Proxy → staging DB on localhost:6543 (needs
                     #   `gcloud auth application-default login` once for ADC). Points at the
                     #   `storemink-prod-db` INSTANCE; local dev uses its `storemink_staging`

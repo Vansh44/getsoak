@@ -1,0 +1,80 @@
+# Scheduled production schema-drift check.
+#
+# Answers one question: has DDL reached the database WITHOUT going through
+# db:migrate? Eighteen migrations once did, the ledger recorded nothing, and the
+# checksummed release gate could not have caught a mistake in any of them.
+#
+# ★★ WHY A BUILD AND NOT AN /api/cron/* ROUTE, unlike the other ten jobs.
+# The check needs BOTH signals — the schema fingerprint and a digest of which
+# migration ids are recorded — because schemaFingerprint() excludes
+# schema_migrations, and that exclusion is what separates "a migration ran" from
+# "somebody ran DDL by hand". Reading the ledger needs the postgres SUPERUSER
+# login: migration 0018 revoked the app login's grants on schema_migrations, and
+# a durable verify contract asserts they stay revoked. Putting that credential in
+# the internet-facing Cloud Run runtime would be a real downgrade; Cloud Build is
+# not internet-facing and already holds roles/run.admin, so it can already deploy
+# code that reaches the database. It also runs the SAME `db-migrate drift` code
+# path a human runs, rather than a second implementation that could drift from it.
+#
+# ★ EXIT CODE IS THE ALARM. `drift` exits 0 only when the live schema and ledger
+# both match the committed baseline; any other verdict exits 1 and fails the
+# build, which is what surfaces in Cloud Build history and Error Reporting.
+steps:
+  - name: node:20
+    id: drift
+    entrypoint: bash
+    secretEnv: ["DB_ADMIN_PASSWORD"]
+    env:
+      - "DB_HOST=127.0.0.1"
+      - "DB_PORT=6543"
+      - "DB_NAME=${_DB_NAME}"
+      - "DB_ADMIN_USER=postgres"
+      - "CLOUDSQL_PROXY_VERSION=${_CLOUDSQL_PROXY_VERSION}"
+      - "DB_CONN=${_DB_CONN}"
+    args:
+      - -c
+      - |
+        set -euo pipefail
+
+        # Pinned proxy release, not "latest": a scheduled job that silently
+        # changes one of its own components is a job whose failures cannot be
+        # attributed.
+        curl -sSfL -o /workspace/cloud-sql-proxy \
+          "https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v$${CLOUDSQL_PROXY_VERSION}/cloud-sql-proxy.linux.amd64"
+        chmod +x /workspace/cloud-sql-proxy
+
+        # --run-connection-test so an auth or networking failure kills the proxy
+        # at startup instead of leaving it LISTENING and resetting every query —
+        # the failure mode that made a stale local proxy look healthy for 21 hours.
+        /workspace/cloud-sql-proxy --port "$${DB_PORT}" --run-connection-test "$${DB_CONN}" &
+        PROXY_PID=$$!
+        trap 'kill $${PROXY_PID} 2>/dev/null || true' EXIT
+
+        for _ in $$(seq 1 30); do
+          if (echo > /dev/tcp/127.0.0.1/$${DB_PORT}) 2>/dev/null; then break; fi
+          if ! kill -0 $${PROXY_PID} 2>/dev/null; then
+            echo "cloud-sql-proxy exited before accepting connections" >&2
+            exit 1
+          fi
+          sleep 1
+        done
+
+        npm ci --omit=dev --no-audit --no-fund
+        node scripts/db-migrate.mjs drift --environment production
+
+availableSecrets:
+  secretManager:
+    - versionName: projects/${PROJECT_ID}/secrets/CLOUDSQL_PROD_POSTGRES_PW/versions/latest
+      env: DB_ADMIN_PASSWORD
+
+substitutions:
+  _DB_CONN: storemink-prod:asia-south1:storemink-prod-db
+  # ⚠ MUST be the production DATABASE, not the instance: staging and production
+  # are two databases in one instance and lib/db/client.ts selects by DB_NAME.
+  # `drift --environment production` additionally refuses any other name.
+  _DB_NAME: storemink
+  _CLOUDSQL_PROXY_VERSION: "2.14.1"
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+timeout: 600s

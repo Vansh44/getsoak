@@ -85,17 +85,22 @@ async function stop(
   status: "paused" | "deleted",
   errorCode: string | null = null,
 ) {
-  if (w.lastRunId)
-    await db
-      .update(minkWorkflowRuns)
-      .set({ cancelRequestedAt: new Date().toISOString() })
-      .where(
-        and(
-          sql`${minkWorkflowRuns.status} IN ('queued','running')`,
-          eq(minkWorkflowRuns.storeId, w.storeId),
-          eq(minkWorkflowRuns.watchId, w.id),
-        ),
-      );
+  // ★ UNCONDITIONAL. This used to be gated on `w.lastRunId`, which only ever
+  // tracks a SCHEDULED check — an approved watch_response_review run is
+  // queued with watchId set and never touches it, and resume clears lastRunId
+  // while keeping processedRunId, so a response investigation could be queued
+  // with lastRunId null and then escape cancellation. The WHERE clause below
+  // already selects by watchId, so the guard bought nothing.
+  await db
+    .update(minkWorkflowRuns)
+    .set({ cancelRequestedAt: new Date().toISOString() })
+    .where(
+      and(
+        sql`${minkWorkflowRuns.status} IN ('queued','running')`,
+        eq(minkWorkflowRuns.storeId, w.storeId),
+        eq(minkWorkflowRuns.watchId, w.id),
+      ),
+    );
   await db
     .update(minkWatches)
     .set({

@@ -8,9 +8,10 @@
  * absent: search engines would see two different descriptions of the thing at
  * `https://storemink.com/#organization`.
  *
- * Pure — imports only from lib/store/host.ts (dependency-free, edge-safe).
+ * Pure — imports only dependency-free host and brand-asset constants.
  */
 import { PLATFORM_URL } from "@/lib/store/host";
+import { STOREMINK_LOGO } from "@/lib/brand-assets";
 
 /**
  * Official profiles, for schema.org `sameAs`.
@@ -69,7 +70,7 @@ export function platformOrganizationSchema(): Record<string, unknown> {
     name: "StoreMink",
     alternateName: ALTERNATE_NAMES,
     url: PLATFORM_URL,
-    logo: `${PLATFORM_URL}/icon.svg`,
+    logo: `${PLATFORM_URL}${STOREMINK_LOGO}`,
     description: BRAND_DESCRIPTION,
     sameAs: [...BRAND_SAME_AS],
     contactPoint: {

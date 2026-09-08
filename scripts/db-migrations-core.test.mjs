@@ -8,6 +8,8 @@ import {
   parseCli,
   sha256,
   validateEnvironment,
+  classifyDrift,
+  ENV_DATABASES,
 } from "./db-migrations-core.mjs";
 
 const manifest = {
@@ -22,8 +24,8 @@ describe("database migration controls", () => {
   it("loads the repository manifest and checksums the enrolled SQL", async () => {
     const loaded = await loadManifest();
     expect(loaded.baseline.id).toBe("baseline:cloudsql-2026-08-14");
-    // 75 shared + five billing + six offers + nine Mink migrations.
-    expect(loaded.migrations).toHaveLength(95);
+    // 75 shared + five billing + six offers + nine Mink + two Help fixes.
+    expect(loaded.migrations).toHaveLength(97);
     // ★ PENDING BLOCKS GO LAST, applied ones first, or the planner reports the
     // database out_of_order — an APPLIED migration sitting after an unapplied
     // one is exactly what `sawGap` catches. The offers block precedes the Mink
@@ -35,9 +37,19 @@ describe("database migration controls", () => {
     // already applied somewhere reads as DRIFT and the runner refuses. Both
     // chains hang off entries in the shared base rather than off each other,
     // so concatenating them needed no edit at all.
-    expect(loaded.migrations.at(-1)).toMatchObject({
+    expect(loaded.migrations.at(-3)).toMatchObject({
       id: "20260907_0084_mink_phase_8d_memories",
       requires: ["20260906_0083_mink_phase_8c_responses"],
+      transaction: true,
+    });
+    expect(loaded.migrations.at(-2)).toMatchObject({
+      id: "20260908_0087_storemink_logo_help",
+      requires: ["20260826_0020_storefront_domains_help"],
+      transaction: true,
+    });
+    expect(loaded.migrations.at(-1)).toMatchObject({
+      id: "20260908_0088_help_first_visit_recovery",
+      requires: ["20260826_0019_getting_started_account_help"],
       transaction: true,
     });
     expect(loaded.migrations[0]).toMatchObject({
@@ -1021,5 +1033,227 @@ describe("database migration controls", () => {
     expect(runner).toContain(
       "ADOPTION AUDIT — migration SQL and ledger writes are disabled.",
     );
+  });
+
+  // ★★ NINE SEQUENCE NUMBERS ARE DUPLICATED, AND THEY STAY THAT WAY.
+  // The main -> minkai merge concatenated two independently numbered series
+  // (billing/offers 20260906-07 and Mink 7A-8D 20260904-07), so 0076-0084 each
+  // appear twice. The IDs are still unique via the date prefix, so the ledger,
+  // the planner and every checksum are unaffected — this is a naming wart, not
+  // a defect.
+  //
+  // ⚠ DO NOT "FIX" IT BY RENUMBERING. Every one of these is APPLIED on local,
+  // staging and production. Renaming an applied id orphans its ledger row:
+  // migrationPlan puts the old id in `unknown` and the new one in `pending`, and
+  // assertHealthyPlan THROWS "Ledger contains unknown migrations" — which stops
+  // apply, adopt AND verify until the ledger is hand-repaired. Measured against
+  // a real database: renaming one entry produced unknown=1 plus a phantom
+  // pending. Doing all nine means rewriting `id` AND `checksum` (the id feeds
+  // the computed checksum) across 27 rows of a checksummed audit ledger,
+  // including production, for zero functional gain.
+  //
+  // What this test protects is the FUTURE: the next migration must take an
+  // unused number (0087 at the time of writing). A new entry reusing any
+  // existing number either adds a tenth duplicate group or makes an existing
+  // group a triple, and both fail here. A correctly numbered addition changes
+  // nothing below, so there is no churn.
+  it("introduces no new migration sequence-number collision", async () => {
+    const HISTORICAL = {
+      "0076": [
+        "20260904_0076_mink_phase_7a_builder_context_help",
+        "20260906_0076_subscription_autopay_contact_help",
+      ],
+      "0077": [
+        "20260904_0077_mink_phase_7b_storefront_code_preview",
+        "20260906_0077_comped_plan_overlay",
+      ],
+      "0078": [
+        "20260904_0078_mink_phase_7c_builder_draft_save",
+        "20260906_0078_drop_subscription_comp_exemption",
+      ],
+      "0079": [
+        "20260904_0079_mink_phase_7d_storefront_publication",
+        "20260906_0079_mandate_rail_choice_help",
+      ],
+      "0080": [
+        "20260905_0080_mink_builder_chat_help",
+        "20260906_0080_plan_change_before_payment_help",
+      ],
+      "0081": [
+        "20260905_0081_mink_phase_8a_business_briefs",
+        "20260906_0081_offers_auto_apply_help",
+      ],
+      "0082": [
+        "20260905_0082_mink_phase_8b_watches",
+        "20260906_0082_offers_visibility_help",
+      ],
+      "0083": [
+        "20260906_0083_mink_phase_8c_responses",
+        "20260906_0083_offers_auto_apply_default_help",
+      ],
+      "0084": [
+        "20260906_0084_offers_set_limit_help",
+        "20260907_0084_mink_phase_8d_memories",
+      ],
+    };
+
+    const loaded = await loadManifest();
+    const bySequence = new Map();
+    for (const migration of loaded.migrations) {
+      const match = /^(\d{8})_(\d{4})_/.exec(migration.id);
+      expect(
+        match,
+        `migration id must be <YYYYMMDD>_<NNNN>_<name>: ${migration.id}`,
+      ).not.toBeNull();
+      const sequence = match[2];
+      bySequence.set(sequence, [
+        ...(bySequence.get(sequence) ?? []),
+        migration.id,
+      ]);
+    }
+
+    const duplicated = Object.fromEntries(
+      [...bySequence.entries()]
+        .filter(([, ids]) => ids.length > 1)
+        .map(([sequence, ids]) => [sequence, [...ids].sort()])
+        .sort(([a], [b]) => a.localeCompare(b)),
+    );
+
+    // Exactly the nine grandfathered pairs — no new group, and none grown to three.
+    expect(duplicated).toEqual(HISTORICAL);
+
+    // And the next number really is free, so the guidance above stays true.
+    const highest = Math.max(
+      ...[...bySequence.keys()].map((sequence) => Number(sequence)),
+    );
+    expect(bySequence.has(String(highest + 1).padStart(4, "0"))).toBe(false);
+  });
+
+  // ★★ THE TWO SIGNALS MUST BE READ TOGETHER. schemaFingerprint() excludes
+  // schema_migrations, so recording a migration cannot move it. That is what
+  // separates "a migration ran" from "somebody ran DDL by hand" — the exact
+  // distinction nothing could make when staging and production drifted 18
+  // migrations ahead of their ledgers. Verified end to end against a real
+  // database: adding a column by hand gave drift=out_of_band with the ledger
+  // unchanged and exit code 1; inserting a ledger row alone gave ledger_only.
+  describe("schema drift classification", () => {
+    const base = {
+      fingerprint: "aaa",
+      ledger: { count: 96, digest: "led-aaa" },
+    };
+
+    it("passes when the schema and ledger both match the baseline", () => {
+      expect(classifyDrift(base, { ...base })).toMatchObject({
+        verdict: "clean",
+        ok: true,
+      });
+    });
+
+    it("flags DDL applied outside the runner: schema moved, ledger did not", () => {
+      const result = classifyDrift(base, { ...base, fingerprint: "bbb" });
+      expect(result.verdict).toBe("out_of_band");
+      expect(result.ok).toBe(false);
+      expect(result.detail).toContain("outside db:migrate");
+    });
+
+    it("distinguishes a migration (both moved) from out-of-band DDL", () => {
+      expect(
+        classifyDrift(base, {
+          fingerprint: "bbb",
+          ledger: { count: 97, digest: "led-bbb" },
+        }),
+      ).toMatchObject({ verdict: "migrated", ok: false });
+    });
+
+    it("distinguishes an adopt (ledger moved, schema did not)", () => {
+      expect(
+        classifyDrift(base, {
+          fingerprint: "aaa",
+          ledger: { count: 97, digest: "led-bbb" },
+        }),
+      ).toMatchObject({ verdict: "ledger_only", ok: false });
+    });
+
+    // ★ A SWAPPED ID KEEPS THE COUNT, so the digest — not the count — is what
+    // the verdict turns on. Renaming an applied migration is exactly this shape.
+    it("notices a ledger change that leaves the row count identical", () => {
+      expect(
+        classifyDrift(base, {
+          fingerprint: "aaa",
+          ledger: { count: 96, digest: "led-swapped" },
+        }),
+      ).toMatchObject({ verdict: "ledger_only", ok: false });
+    });
+
+    // ★ FAILS CLOSED: an environment with no committed baseline is not "fine".
+    it("refuses an environment that has never been baselined", () => {
+      expect(classifyDrift(null, { ...base })).toMatchObject({
+        verdict: "unbaselined",
+        ok: false,
+      });
+    });
+  });
+
+  // ★ THE COMMITTED BASELINE IS ONLY USEFUL IF IT IS WELL FORMED AND COMPLETE.
+  // These run in CI through the existing `npm run test` step and need NO
+  // database and NO credentials — they check the file, not the server. The
+  // server-side check (`db:drift:prod`) needs the postgres SUPERUSER password,
+  // because migration 0018 revoked the app login's grants on schema_migrations,
+  // so it deliberately does not run here: a pull request cannot cause
+  // production drift, and putting that credential within reach of PR workflow
+  // runs buys nothing. See CODEBASE.md for where that check belongs.
+  describe("committed schema baseline", () => {
+    const load = async () =>
+      JSON.parse(
+        await readFile(
+          path.resolve(
+            import.meta.dirname,
+            "../drizzle/migrations/schema-fingerprint.json",
+          ),
+          "utf8",
+        ),
+      );
+
+    it("covers every environment the runner recognises", async () => {
+      const file = await load();
+      expect(Object.keys(file.environments).sort()).toEqual(
+        Object.keys(ENV_DATABASES).sort(),
+      );
+    });
+
+    it("stores a full-length hash for both signals", async () => {
+      const file = await load();
+      for (const [environment, entry] of Object.entries(file.environments)) {
+        expect(entry.fingerprint, environment).toMatch(/^[0-9a-f]{64}$/);
+        expect(entry.ledger.digest, environment).toMatch(/^[0-9a-f]{64}$/);
+      }
+    });
+
+    // ★ A baseline claiming MORE recorded migrations than the manifest defines
+    // means the two have diverged — the file was refreshed against a database
+    // carrying migrations this checkout does not know about. The reverse is
+    // legitimate and NOT asserted: a manifest entry not yet deployed leaves the
+    // recorded count lower until it is applied.
+    it("never claims more applied migrations than the manifest defines", async () => {
+      const file = await load();
+      const ceiling = (await loadManifest()).migrations.length + 1; // + baseline row
+      for (const [environment, entry] of Object.entries(file.environments)) {
+        expect(Number.isInteger(entry.ledger.count), environment).toBe(true);
+        expect(entry.ledger.count, environment).toBeGreaterThan(0);
+        expect(entry.ledger.count, environment).toBeLessThanOrEqual(ceiling);
+      }
+    });
+
+    // ⚠ Deliberately NOT asserted: that the three fingerprints are equal. They
+    // match today only because all three databases are level. Staging being a
+    // migration ahead of production is a normal, correct state, and a test that
+    // forbade it would fail every time a migration was deployed in stages.
+    it("permits environments to sit at different fingerprints", async () => {
+      const file = await load();
+      const distinct = new Set(
+        Object.values(file.environments).map((entry) => entry.fingerprint),
+      );
+      expect(distinct.size).toBeGreaterThanOrEqual(1);
+    });
   });
 });

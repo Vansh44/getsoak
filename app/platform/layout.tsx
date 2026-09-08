@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { STOREMINK_LOGO } from "@/lib/brand-assets";
 import { brandOgImageUrl } from "@/lib/seo/og-card";
 import { BRAND_DESCRIPTION, BRAND_TAGLINE } from "@/lib/seo/brand-identity";
 import { getPlanPricing } from "@/lib/plans/pricing";
@@ -14,7 +15,7 @@ const OG_IMAGE = brandOgImageUrl({
   title: "StoreMink",
   subtitle: BRAND_TAGLINE,
   color: "#17130f",
-  logo: "/brand/storemink-mark.png",
+  logo: STOREMINK_LOGO,
   footer: "storemink.com",
 });
 

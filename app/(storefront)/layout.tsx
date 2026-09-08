@@ -31,6 +31,7 @@ import {
   normalizeGoogleVerificationToken,
 } from "@/lib/seo/store-indexing";
 import { SESSION_COOKIE } from "@/lib/auth/constants";
+import { STOREMINK_ICONS } from "@/lib/brand-assets";
 import "./storefront-theme.css";
 
 // Per-store default title/template + canonical origin. Individual pages may set
@@ -46,7 +47,7 @@ export async function generateMetadata(): Promise<Metadata> {
   if (!store) {
     return {
       title: "Store not found",
-      icons: { icon: "/brand/storemink-mark.png" },
+      icons: STOREMINK_ICONS,
       robots: { index: false, follow: false },
     };
   }
@@ -63,9 +64,7 @@ export async function generateMetadata(): Promise<Metadata> {
     metadataBase: new URL(siteUrl),
     title: { default: brand.name, template: `%s | ${brand.name}` },
     description: brand.tagline ?? undefined,
-    icons: brand.logoUrl
-      ? { icon: brand.logoUrl }
-      : { icon: "/brand/storemink-mark.png" },
+    icons: brand.logoUrl ? { icon: brand.logoUrl } : STOREMINK_ICONS,
     ...(googleVerification
       ? { verification: { google: googleVerification } }
       : {}),

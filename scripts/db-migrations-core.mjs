@@ -193,16 +193,87 @@ export function migrationPlan(manifest, appliedRows) {
   };
 }
 
+/**
+ * Classify schema drift by comparing a committed baseline against what the
+ * database currently reports.
+ *
+ * ★★ THE TWO SIGNALS TOGETHER ARE WHAT MAKES THIS USEFUL. schemaFingerprint()
+ * deliberately EXCLUDES schema_migrations, so recording a migration cannot move
+ * it — which is why adopting 18 rows left the fingerprint identical. That gives
+ * four distinguishable states, and only one of them is the alarm:
+ *
+ *   schema | ledger | verdict       meaning
+ *   -------|--------|-------------------------------------------------------
+ *   same   | same   | clean         nothing happened
+ *   same   | moved  | ledger_only   rows recorded without DDL (an `adopt`)
+ *   moved  | moved  | migrated      a migration ran through the runner
+ *   moved  | same   | out_of_band   ← DDL applied WITHOUT the runner
+ *
+ * `out_of_band` is the case that produced the 78-of-96 ledger gap: the schema
+ * advanced on staging and production while the ledger recorded nothing, so the
+ * release gate could not have caught a mistake in any of those 18 migrations.
+ *
+ * Every non-clean verdict is a failure, because the baseline is a committed
+ * file: a legitimate migration must land together with its refreshed baseline,
+ * or the next run cannot tell a real migration from someone's manual DDL.
+ */
+export function classifyDrift(expected, actual) {
+  if (!expected) {
+    return {
+      verdict: "unbaselined",
+      ok: false,
+      detail: "no committed baseline for this environment",
+    };
+  }
+  const schemaMoved = expected.fingerprint !== actual.fingerprint;
+  const ledgerMoved = expected.ledger.digest !== actual.ledger.digest;
+  if (!schemaMoved && !ledgerMoved) {
+    return {
+      verdict: "clean",
+      ok: true,
+      detail: "schema and ledger match the committed baseline",
+    };
+  }
+  if (schemaMoved && !ledgerMoved) {
+    return {
+      verdict: "out_of_band",
+      ok: false,
+      detail:
+        "the schema changed but the ledger did not — DDL was applied outside db:migrate",
+    };
+  }
+  if (!schemaMoved && ledgerMoved) {
+    return {
+      verdict: "ledger_only",
+      ok: false,
+      detail:
+        "ledger rows changed with no DDL (an adopt); refresh the baseline and commit it",
+    };
+  }
+  return {
+    verdict: "migrated",
+    ok: false,
+    detail:
+      "schema and ledger both advanced (a migration ran); refresh the baseline and commit it",
+  };
+}
+
 export function parseCli(argv) {
   const [command, ...rest] = argv;
   if (
     !command ||
-    !["status", "baseline", "apply", "verify", "audit", "adopt"].includes(
-      command,
-    )
+    ![
+      "status",
+      "baseline",
+      "apply",
+      "verify",
+      "audit",
+      "adopt",
+      "drift",
+    ].includes(command)
   ) {
     throw new Error(
-      "Usage: db-migrate <status|baseline|apply|verify|audit|adopt> --environment <local|staging|production>",
+      "Usage: db-migrate <status|baseline|apply|verify|audit|adopt|drift> --environment <local|staging|production>",
     );
   }
   const allowedFlags = {
@@ -216,6 +287,7 @@ export function parseCli(argv) {
     apply: new Set(["environment", "manifest", "commit", "confirm-production"]),
     verify: new Set(["environment", "manifest"]),
     audit: new Set(["environment", "through"]),
+    drift: new Set(["environment", "manifest", "update-baseline"]),
     adopt: new Set([
       "environment",
       "migration",
@@ -248,6 +320,17 @@ export function parseCli(argv) {
   }
   if (!options.environment) throw new Error("--environment is required");
   if (options.through) assertIdentifier(options.through, "migration");
+  if (
+    command === "drift" &&
+    options["update-baseline"] !== undefined &&
+    options["update-baseline"] !== options.environment
+  ) {
+    // Rewriting the committed baseline is what silences the detector, so it
+    // takes the same shape of confirmation the adopt guards use.
+    throw new Error(
+      "drift --update-baseline must name the environment, e.g. --update-baseline staging",
+    );
+  }
   if (command === "adopt") {
     if (!options.migration) {
       throw new Error("adopt requires --migration <migration-id>");

@@ -209,3 +209,129 @@ Configuration checks verify the development values, override validation, retaine
 source-map/cache settings, and absence of the callback in production. Targeted
 ESLint and formatting checks also pass. No production build is needed for these
 internal development settings.
+
+## Local Postgres for development (2026-09-07)
+
+### Why
+
+Measured on a freshly restarted Webpack dev server, compilation is no longer the
+dominant cost on a **repeat** visit; the database is. Same routes, cold then warm:
+
+| Route          |  Cold |   Warm | Warm split                                       |
+| -------------- | ----: | -----: | ------------------------------------------------ |
+| platform `/`   | 2.3 s | 0.22 s | next.js 43 ms, application-code 156 ms           |
+| `help/help`    | 8.7 s | 0.13 s | next.js 50 ms, application-code 71 ms            |
+| `/legal/terms` | 5.8 s | 0.70 s | next.js 27 ms, application-code 656 ms           |
+| store `/shop`  | 2.9 s | 1.23 s | next.js **1.8 ms**, application-code **1209 ms** |
+
+Warm `/shop` spends 1.8 ms in the framework and 1209 ms in application code —
+essentially all of it sequential round trips to the Cloud SQL instance in
+`asia-south1` at roughly 46 ms each. That is the remaining lever, and it is not
+a bundler setting.
+
+⚠ During that session the Cloud SQL Auth Proxy had been up 15 h and its ADC
+token had expired, so some reads were failing with `read ECONNRESET` and being
+absorbed by fail-open call sites (`getPlatformAnalyticsFeatures failed`,
+`getActiveCategories: read ECONNRESET`). The warm figures therefore include some
+failed-read time and are an upper bound, not a clean measurement.
+
+### What was set up
+
+A native Homebrew `postgresql@17` cluster, **not** a container. Docker Desktop or
+Colima would add a Linux VM of roughly 2 GB on a machine already using 10.4 GB of
+12 GB swap, which costs more than the round trips it saves.
+
+| Item      | Value                                                                  |
+| --------- | ---------------------------------------------------------------------- |
+| Server    | PostgreSQL 17.10 (Homebrew), `vector 0.8.0` available                  |
+| Port      | **5544**                                                               |
+| Database  | `storemink_local`, owner `postgres`                                    |
+| Login     | `app`, member of `app_user`, `app_service`, and the Supabase-era roles |
+| Auth      | `trust` for local and 127.0.0.1 (the cluster's existing `pg_hba.conf`) |
+| Footprint | ~16 MB idle                                                            |
+
+★ **Port 5544, not 5432.** This Mac already runs EDB PostgreSQL 15, 16 and 17
+from `/Library/PostgreSQL/` on ports 5432–5434 as the system `postgres` user.
+They are invisible to a non-root `lsof -iTCP -sTCP:LISTEN`, which reports the
+port as free. A dedicated port means the dev database can never collide with them
+or need their password. Those 28 processes total 0.03 GB RSS, so they were left
+running.
+
+★ **`LC_ALL` must be set to start the cluster.** Without a valid locale the
+postmaster exits with `FATAL: postmaster became multithreaded during startup`.
+`scripts/db-local-ctl.sh` sets it; starting `pg_ctl` by hand without it fails.
+
+★ **The roles are created before any restore.** `pg_dump` does not dump roles,
+and the dump's `GRANT` statements reference them. `app_service` needs `BYPASSRLS`
+or `withService` silently returns nothing; `postgres` is created locally so the
+dump's ownership statements resolve to a real role.
+
+### Rebuilding from staging
+
+`npm run db:local:sync` dumps staging and restores it locally.
+
+★★ **The dump uses `--role=app_service`, and that flag is load-bearing.** The
+`app` login has `rolbypassrls = false`, so a dump taken as `app` returns **zero
+rows** for every RLS-protected table — which is all the service-only ones
+(`mink_*`, `email_logs`, `data_jobs`, the billing tables) — with no error. The
+schema would look perfect and the data would be quietly missing.
+
+★ **A dump, not replayed SQL, and that is deliberate.** The
+`drizzle/migrations/manifest.json` baseline is a _verification_ baseline: it
+asserts that fifteen tables and a list of columns exist. It does not create
+anything, so `db:migrate` cannot build a database from empty. Replaying the 153
+`supabase/*.sql` files cannot either — this document's own §15b notes record
+their apply-order dependencies (`billing_03` must exist before `billing_02`'s
+function is called) and the files edited after being applied, which re-run as
+silent no-ops. A dump is provably the schema that is actually deployed.
+
+★ **The restore tolerates errors on purpose.** A Cloud SQL dump carries `GRANT`s
+to roles that exist only there (`cloudsqladmin` and friends). Those lines failing
+is expected; the script filters them out and prints anything else.
+
+The script refuses rather than guessing when ADC has expired, when the proxy is
+not answering, when `pg_dump` is older than the server, or when the local cluster
+is down. Re-run it after a migration lands on staging, so local cannot silently
+drift; `npm run db:migrate:local status` then reports against the same
+checksummed ledger (`ENV_DATABASES.local` is `null`, so there is no name guard).
+
+### Switching between local and staging
+
+`.env.local` holds the overrides and Next.js loads it above `.env`. Delete or
+rename it to go back to staging. ★ It is written by `db:local:sync` as its
+**last** step, on purpose: creating it before the restore succeeds would point
+the dev server at an empty database and break every query. ⚠ `.gitignore` contained only `.env`, which does
+not match `.env.local`; `.env*.local` was added.
+
+| Command                    | Effect                                       |
+| -------------------------- | -------------------------------------------- |
+| `npm run db:local:start`   | start the cluster (sets `LC_ALL`)            |
+| `npm run db:local:status`  | cluster state and local table count          |
+| `npm run db:local:sync`    | rebuild `storemink_local` from staging       |
+| `npm run db:local:psql`    | psql into `storemink_local`                  |
+| `npm run db:local:stop`    | stop the cluster                             |
+| `npm run db:migrate:local` | run the ledger against `--environment local` |
+
+With `.env.local` present, run `npm run dev` — **not** `dev:all`, which would
+start the Cloud SQL proxy the local database does not need.
+
+★★ `db:migrate:staging` and `db:migrate:prod` now pin `DB_HOST=127.0.0.1
+DB_PORT=6543`. They set only `DB_NAME`, so while `.env.local` was in effect they
+looked for `storemink_staging` on the **local** cluster and failed with
+`database "storemink_staging" does not exist`. That failure was safe only by
+accident: `validateEnvironment` compares the database NAME, not the host, so a
+local database named `storemink` would have let `db:migrate:prod apply` write to
+the local cluster while reporting success as production.
+
+⚠ **Identity Platform is still the staging project.** `admins.id` / `users.id`
+ARE Firebase uids, so the pairing rule in CODEBASE.md §7 still holds: a dump of
+`storemink_staging` carries staging-project uids and must be used with the
+staging Firebase project. Existing staging logins keep working locally. Do not
+restore a `storemink` (production) dump and sign in against the staging project.
+
+⚠ **The local database holds a copy of staging data.** It is test data, but it is
+on disk unencrypted in `/opt/homebrew/var/postgresql@17`. Use
+`npm run db:local:sync -- --schema-only` for a schema-only copy.
+
+These changes affect developer tooling only. No merchant or customer flow,
+Help Centre content, POS acceptance behaviour or roadmap phase changes apply.

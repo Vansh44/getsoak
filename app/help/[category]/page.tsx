@@ -1,12 +1,12 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { connection } from "next/server";
 import { notFound } from "next/navigation";
 import { ChevronRight } from "lucide-react";
 import { JsonLd } from "@/app/(storefront)/components/json-ld";
 import { breadcrumbSchema } from "@/lib/seo/schema";
 import { HELP_URL } from "@/lib/site";
 import {
-  getHelpCategories,
   getHelpCategoryBySlug,
   getHelpArticleCardsByCategory,
   getHelpNavTree,
@@ -14,19 +14,15 @@ import {
 import { CategoryIcon } from "../components/category-icon";
 import { HelpSidebar } from "../components/help-sidebar";
 
-export const revalidate = 300;
-export const dynamicParams = true;
-
-export async function generateStaticParams() {
-  const cats = await getHelpCategories();
-  return cats.map((c) => ({ category: c.slug }));
-}
+// No build-time category discovery: the deployment image has no DB credentials.
+// Runtime rendering still reuses the shared, published-only Help data cache.
 
 export async function generateMetadata({
   params,
 }: {
   params: Promise<{ category: string }>;
 }): Promise<Metadata> {
+  await connection();
   const { category } = await params;
   const cat = await getHelpCategoryBySlug(category);
   if (!cat) return { title: "Not found" };
@@ -48,6 +44,7 @@ export default async function HelpCategoryPage({
 }: {
   params: Promise<{ category: string }>;
 }) {
+  await connection();
   const { category } = await params;
   const cat = await getHelpCategoryBySlug(category);
   if (!cat) notFound();

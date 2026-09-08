@@ -1,5 +1,18 @@
 # CI/CD — Cloud Build → Cloud Run (per environment)
 
+> ⚠ **THE STAGING DEPLOYMENT WAS REMOVED ON 2026-09-08.** There is no `staging`
+> branch, no `storemink-web-staging` build trigger, no `storemink-web` Cloud Run
+> service and no `staging.storemink.com`. **dev is the only pre-production
+> environment.** The staging recipes further down are kept for the history of how
+> the environment was built and would be the starting point if it is ever
+> recreated — do not follow them expecting a live environment.
+>
+> ★ What did NOT go away: the **`storemink_staging` DATABASE** and the
+> `storemink-staging` Identity Platform project. dev uses both, so every
+> "dev and staging share this" note below still holds — with one consumer now
+> instead of two. `npm run db:migrate:staging` and `npm run db:drift:staging`
+> still target a live database despite the name; that database is dev's.
+
 Push-to-deploy for all three environments, driven by
 [`cloudbuild.yaml`](../cloudbuild.yaml):
 

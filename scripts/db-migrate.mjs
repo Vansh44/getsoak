@@ -1,9 +1,12 @@
 #!/usr/bin/env node
 
 import { performance } from "node:perf_hooks";
+import { readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
 import nextEnv from "@next/env";
 import pg from "pg";
 import {
+  classifyDrift,
   loadManifest,
   migrationPlan,
   parseCli,
@@ -213,6 +216,74 @@ async function schemaFingerprint(client) {
     select kind, name, definition from objects order by kind, name, definition
   `);
   return sha256(JSON.stringify(result.rows));
+}
+
+const FINGERPRINT_FILE = path.resolve(
+  import.meta.dirname,
+  "../drizzle/migrations/schema-fingerprint.json",
+);
+
+// A digest of WHICH migrations are recorded, not how many — a swap of one id for
+// another keeps the count and must still register as a ledger change.
+function ledgerDigest(rows) {
+  const ids = rows.map((row) => row.id).sort();
+  return { count: ids.length, digest: sha256(JSON.stringify(ids)) };
+}
+
+async function readBaselineFile() {
+  try {
+    return JSON.parse(await readFile(FINGERPRINT_FILE, "utf8"));
+  } catch (error) {
+    if (error.code === "ENOENT") return { environments: {} };
+    throw error;
+  }
+}
+
+async function runDrift(client, environment, rows, fingerprint, update) {
+  const actual = { fingerprint, ledger: ledgerDigest(rows) };
+  const file = await readBaselineFile();
+  const expected = file.environments?.[environment] ?? null;
+  const result = classifyDrift(expected, actual);
+
+  console.log(`drift=${result.verdict}`);
+  console.log(`  ${result.detail}`);
+  console.log(
+    `  schema   expected=${expected?.fingerprint?.slice(0, 16) ?? "<none>"} actual=${actual.fingerprint.slice(0, 16)}`,
+  );
+  console.log(
+    `  ledger   expected=${expected?.ledger?.count ?? "<none>"} rows actual=${actual.ledger.count} rows`,
+  );
+
+  if (update) {
+    file.environments = file.environments ?? {};
+    file.environments[environment] = actual;
+    file.$comment =
+      "Committed schema baseline per environment. Refresh with `db-migrate drift --update-baseline` " +
+      "immediately after applying migrations, and commit it in the same change. A `drift=out_of_band` " +
+      "verdict means DDL reached the database without the runner.";
+    const ordered = {
+      $comment: file.$comment,
+      environments: Object.fromEntries(
+        Object.entries(file.environments).sort(([a], [b]) =>
+          a.localeCompare(b),
+        ),
+      ),
+    };
+    await writeFile(FINGERPRINT_FILE, `${JSON.stringify(ordered, null, 2)}\n`);
+    console.log(
+      `  baseline updated for ${environment}; commit schema-fingerprint.json`,
+    );
+    return;
+  }
+
+  if (!result.ok) {
+    throw new Error(
+      result.verdict === "out_of_band"
+        ? "Schema drift: DDL was applied outside db:migrate. Reconcile it into a migration, then refresh the baseline."
+        : `Schema baseline is stale (${result.verdict}). Re-run with --update-baseline and commit the result.`,
+    );
+  }
+  console.log("No schema drift.");
 }
 
 function assertHealthyPlan(plan, allowPending = false) {
@@ -605,7 +676,15 @@ async function main() {
       plan,
       fingerprint,
     );
-    if (options.command === "verify") {
+    if (options.command === "drift") {
+      await runDrift(
+        client,
+        options.environment,
+        rows,
+        fingerprint,
+        Boolean(options["update-baseline"]),
+      );
+    } else if (options.command === "verify") {
       if (!plan.baselineApplied) throw new Error("Baseline is missing");
       assertHealthyPlan(plan);
       console.log("Migration verification passed.");
