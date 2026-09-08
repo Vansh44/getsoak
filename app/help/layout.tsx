@@ -100,6 +100,18 @@ export default function HelpLayout({
           <a href="https://storemink.com">storemink.com</a>
         </div>
       </footer>
+
+      {/* ★★ THE MINK AI DRAWER IS PORTALLED HERE, NOT RENDERED IN THE HEADER.
+          `.hc-topbar` carries `backdrop-filter: blur(18px)` for its frosted
+          glass, and a backdrop-filtered element becomes the CONTAINING BLOCK
+          for every `position: fixed` descendant — so the drawer resolved its
+          top/right/bottom against the 73px header instead of the viewport and
+          rendered as a 360x8px sliver at the header's bottom edge. It is a
+          child of `.hc` rather than `document.body` so the portalled panel
+          keeps the `--hc-*` tokens, the Inter `--font-dash` variable and the
+          `.hc a` reset it styles itself with. Empty in a column flex
+          container, so it contributes no height. */}
+      <div id="hc-overlay-root" />
     </div>
   );
 }

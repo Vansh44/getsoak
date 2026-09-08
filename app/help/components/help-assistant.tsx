@@ -22,6 +22,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
+import { createPortal } from "react-dom";
 import {
   askHelpAssistant,
   type HelpAssistantAnswer,
@@ -112,6 +113,7 @@ export function HelpAssistant() {
   const [drawerMaximum, setDrawerMaximum] = useState(DRAWER_MAX_WIDTH);
   const [isResizing, setIsResizing] = useState(false);
   const [isMaximized, setIsMaximized] = useState(false);
+  const [overlayHost, setOverlayHost] = useState<HTMLElement | null>(null);
   const nextId = useRef(2);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const launcherRef = useRef<HTMLButtonElement>(null);
@@ -131,6 +133,22 @@ export function HelpAssistant() {
     setIsMaximized(false);
     setOpen(false);
     requestAnimationFrame(() => launcherRef.current?.focus());
+  }, []);
+
+  // ★★ THE DRAWER CANNOT RENDER WHERE THE LAUNCHER LIVES. The launcher sits in
+  // `.hc-topbar`, which carries `backdrop-filter: blur(18px)` — and a
+  // backdrop-filtered element becomes the CONTAINING BLOCK for every
+  // `position: fixed` descendant, so the panel and its backdrop resolved
+  // top/right/bottom against the 73px header rather than the viewport. Measured
+  // live on help.storemink.com: the panel opened at 360x8px against the header's
+  // bottom edge. Nothing reported an error — `open` was true, the focus trap
+  // armed and the launcher said "Close" — there was simply nothing to see. It
+  // also frees the drawer from the header's own `z-index: 20` stacking context.
+  // `#hc-overlay-root` is a child of `.hc` (app/help/layout.tsx), so the panel
+  // keeps its `--hc-*` tokens and font; `document.body` is the fallback for
+  // callers that render the component without the Help layout.
+  useEffect(() => {
+    setOverlayHost(document.getElementById("hc-overlay-root") ?? document.body);
   }, []);
 
   useEffect(() => {
@@ -360,284 +378,291 @@ export function HelpAssistant() {
         <span>{open ? "Close" : "Ask Mink AI"}</span>
       </button>
 
-      {open && (
-        <>
-          <div
-            className="hc-assistant-backdrop"
-            onClick={closeAssistant}
-            aria-hidden
-          />
-          <section
-            id="hc-mink-ai-drawer"
-            ref={panelRef}
-            className={`hc-assistant-panel${isResizing ? " is-resizing" : ""}${isMaximized ? " is-maximized" : ""}`}
-            style={isMaximized ? undefined : { width: drawerWidth }}
-            role="dialog"
-            aria-modal="true"
-            aria-label="Mink AI Help Assistant"
-            aria-describedby="hc-assistant-description"
-          >
-            {!isMaximized && (
-              <div
-                className="hc-assistant-resizer"
-                role="separator"
-                aria-label="Resize Mink AI drawer"
-                aria-orientation="vertical"
-                aria-valuemin={DRAWER_MIN_WIDTH}
-                aria-valuemax={drawerMaximum}
-                aria-valuenow={drawerWidth}
-                tabIndex={0}
-                onPointerDown={startResizing}
-                onKeyDown={resizeWithKeyboard}
-              />
-            )}
-
-            <header className="hc-assistant-header">
-              <div className="hc-assistant-identity">
-                <span className="hc-assistant-avatar" aria-hidden>
-                  <Bot size={20} />
-                </span>
-                <div>
-                  <h2>Mink AI</h2>
-                  <p id="hc-assistant-description">
-                    <span aria-hidden /> Grounded in published Help guides
-                  </p>
-                </div>
-              </div>
-              <div className="hc-assistant-header-actions">
-                <button
-                  type="button"
-                  onClick={resetConversation}
-                  aria-label="Start a new conversation"
-                  title="New conversation"
-                >
-                  <RefreshCw size={17} />
-                </button>
-                <button
-                  type="button"
-                  className="hc-assistant-maximize"
-                  onClick={() => {
-                    setIsResizing(false);
-                    setIsMaximized((current) => !current);
-                  }}
-                  aria-label={
-                    isMaximized ? "Restore Mink AI drawer" : "Maximize Mink AI"
-                  }
-                  aria-pressed={isMaximized}
-                  title={isMaximized ? "Restore drawer" : "Maximize"}
-                >
-                  {isMaximized ? (
-                    <Minimize2 size={17} />
-                  ) : (
-                    <Maximize2 size={17} />
-                  )}
-                </button>
-                <button
-                  type="button"
-                  onClick={closeAssistant}
-                  aria-label="Close Mink AI"
-                >
-                  <X size={19} />
-                </button>
-              </div>
-            </header>
-
+      {open &&
+        overlayHost &&
+        createPortal(
+          <>
             <div
-              ref={messagesRef}
-              className="hc-assistant-messages"
-              aria-live="polite"
+              className="hc-assistant-backdrop"
+              onClick={closeAssistant}
+              aria-hidden
+            />
+            <section
+              id="hc-mink-ai-drawer"
+              ref={panelRef}
+              className={`hc-assistant-panel${isResizing ? " is-resizing" : ""}${isMaximized ? " is-maximized" : ""}`}
+              style={isMaximized ? undefined : { width: drawerWidth }}
+              role="dialog"
+              aria-modal="true"
+              aria-label="Mink AI Help Assistant"
+              aria-describedby="hc-assistant-description"
             >
-              {messages.map((message) => (
+              {!isMaximized && (
                 <div
-                  className={`hc-assistant-row ${message.role}`}
-                  key={message.id}
-                  data-message-id={message.id}
-                >
-                  {message.role === "assistant" && (
+                  className="hc-assistant-resizer"
+                  role="separator"
+                  aria-label="Resize Mink AI drawer"
+                  aria-orientation="vertical"
+                  aria-valuemin={DRAWER_MIN_WIDTH}
+                  aria-valuemax={drawerMaximum}
+                  aria-valuenow={drawerWidth}
+                  tabIndex={0}
+                  onPointerDown={startResizing}
+                  onKeyDown={resizeWithKeyboard}
+                />
+              )}
+
+              <header className="hc-assistant-header">
+                <div className="hc-assistant-identity">
+                  <span className="hc-assistant-avatar" aria-hidden>
+                    <Bot size={20} />
+                  </span>
+                  <div>
+                    <h2>Mink AI</h2>
+                    <p id="hc-assistant-description">
+                      <span aria-hidden /> Grounded in published Help guides
+                    </p>
+                  </div>
+                </div>
+                <div className="hc-assistant-header-actions">
+                  <button
+                    type="button"
+                    onClick={resetConversation}
+                    aria-label="Start a new conversation"
+                    title="New conversation"
+                  >
+                    <RefreshCw size={17} />
+                  </button>
+                  <button
+                    type="button"
+                    className="hc-assistant-maximize"
+                    onClick={() => {
+                      setIsResizing(false);
+                      setIsMaximized((current) => !current);
+                    }}
+                    aria-label={
+                      isMaximized
+                        ? "Restore Mink AI drawer"
+                        : "Maximize Mink AI"
+                    }
+                    aria-pressed={isMaximized}
+                    title={isMaximized ? "Restore drawer" : "Maximize"}
+                  >
+                    {isMaximized ? (
+                      <Minimize2 size={17} />
+                    ) : (
+                      <Maximize2 size={17} />
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={closeAssistant}
+                    aria-label="Close Mink AI"
+                  >
+                    <X size={19} />
+                  </button>
+                </div>
+              </header>
+
+              <div
+                ref={messagesRef}
+                className="hc-assistant-messages"
+                aria-live="polite"
+              >
+                {messages.map((message) => (
+                  <div
+                    className={`hc-assistant-row ${message.role}`}
+                    key={message.id}
+                    data-message-id={message.id}
+                  >
+                    {message.role === "assistant" && (
+                      <span className="hc-assistant-mini-avatar" aria-hidden>
+                        <Sparkles size={14} />
+                      </span>
+                    )}
+                    <div className="hc-assistant-message">
+                      <p>{message.content}</p>
+                      {message.role === "assistant" && message.answer && (
+                        <>
+                          {message.answer.steps.length > 0 && (
+                            <ol className="hc-assistant-steps">
+                              {message.answer.steps.map((step, index) => (
+                                <li key={`${index}-${step}`}>{step}</li>
+                              ))}
+                            </ol>
+                          )}
+                          {message.answer.notes.length > 0 && (
+                            <div className="hc-assistant-notes">
+                              <strong>Important</strong>
+                              <ul>
+                                {message.answer.notes.map((note) => (
+                                  <li key={note}>{note}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+                          {message.answer.sources.length > 0 && (
+                            <div className="hc-assistant-sources">
+                              <strong>Verified guides</strong>
+                              {message.answer.sources.map((source) => (
+                                <Link
+                                  href={source.url}
+                                  key={source.url}
+                                  onClick={closeAssistant}
+                                >
+                                  <span>{source.title}</span>
+                                  <ExternalLink size={14} aria-hidden />
+                                </Link>
+                              ))}
+                            </div>
+                          )}
+                          {(message.answer.clarificationPrompts ?? []).length >
+                            0 && (
+                            <div className="hc-assistant-clarifications">
+                              <strong>
+                                Include these details in your reply
+                              </strong>
+                              <ul>
+                                {(
+                                  message.answer.clarificationPrompts ?? []
+                                ).map((prompt) => (
+                                  <li key={prompt}>{prompt}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+                          {message.answer.followUps.length > 0 && (
+                            <div className="hc-assistant-followups">
+                              {message.answer.followUps.map((question) => (
+                                <button
+                                  type="button"
+                                  key={question}
+                                  onClick={() => void sendMessage(question)}
+                                  disabled={pending}
+                                >
+                                  {question}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  </div>
+                ))}
+
+                {messages.length === 1 && (
+                  <div
+                    className="hc-assistant-starters"
+                    aria-label="Example questions"
+                  >
+                    {STARTERS.map((starter) => (
+                      <button
+                        type="button"
+                        onClick={() => void sendMessage(starter)}
+                        key={starter}
+                      >
+                        {starter}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {pending && (
+                  <div className="hc-assistant-row assistant">
                     <span className="hc-assistant-mini-avatar" aria-hidden>
                       <Sparkles size={14} />
                     </span>
-                  )}
-                  <div className="hc-assistant-message">
-                    <p>{message.content}</p>
-                    {message.role === "assistant" && message.answer && (
-                      <>
-                        {message.answer.steps.length > 0 && (
-                          <ol className="hc-assistant-steps">
-                            {message.answer.steps.map((step, index) => (
-                              <li key={`${index}-${step}`}>{step}</li>
-                            ))}
-                          </ol>
-                        )}
-                        {message.answer.notes.length > 0 && (
-                          <div className="hc-assistant-notes">
-                            <strong>Important</strong>
-                            <ul>
-                              {message.answer.notes.map((note) => (
-                                <li key={note}>{note}</li>
-                              ))}
-                            </ul>
-                          </div>
-                        )}
-                        {message.answer.sources.length > 0 && (
-                          <div className="hc-assistant-sources">
-                            <strong>Verified guides</strong>
-                            {message.answer.sources.map((source) => (
-                              <Link
-                                href={source.url}
-                                key={source.url}
-                                onClick={closeAssistant}
-                              >
-                                <span>{source.title}</span>
-                                <ExternalLink size={14} aria-hidden />
-                              </Link>
-                            ))}
-                          </div>
-                        )}
-                        {(message.answer.clarificationPrompts ?? []).length >
-                          0 && (
-                          <div className="hc-assistant-clarifications">
-                            <strong>Include these details in your reply</strong>
-                            <ul>
-                              {(message.answer.clarificationPrompts ?? []).map(
-                                (prompt) => (
-                                  <li key={prompt}>{prompt}</li>
-                                ),
-                              )}
-                            </ul>
-                          </div>
-                        )}
-                        {message.answer.followUps.length > 0 && (
-                          <div className="hc-assistant-followups">
-                            {message.answer.followUps.map((question) => (
-                              <button
-                                type="button"
-                                key={question}
-                                onClick={() => void sendMessage(question)}
-                                disabled={pending}
-                              >
-                                {question}
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                      </>
-                    )}
-                  </div>
-                </div>
-              ))}
-
-              {messages.length === 1 && (
-                <div
-                  className="hc-assistant-starters"
-                  aria-label="Example questions"
-                >
-                  {STARTERS.map((starter) => (
-                    <button
-                      type="button"
-                      onClick={() => void sendMessage(starter)}
-                      key={starter}
+                    <div
+                      className="hc-assistant-thinking"
+                      role="status"
+                      aria-label="Finding the best answer"
                     >
-                      {starter}
-                    </button>
-                  ))}
-                </div>
-              )}
-
-              {pending && (
-                <div className="hc-assistant-row assistant">
-                  <span className="hc-assistant-mini-avatar" aria-hidden>
-                    <Sparkles size={14} />
-                  </span>
-                  <div
-                    className="hc-assistant-thinking"
-                    role="status"
-                    aria-label="Finding the best answer"
-                  >
-                    <span />
-                    <span />
-                    <span />
+                      <span />
+                      <span />
+                      <span />
+                    </div>
                   </div>
-                </div>
-              )}
-              {error && (
-                <div className="hc-assistant-error" role="alert">
-                  {error}
-                </div>
-              )}
-              <div ref={endRef} />
-            </div>
-
-            <form
-              className="hc-assistant-composer"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void sendMessage();
-              }}
-            >
-              <label
-                htmlFor="hc-assistant-input"
-                className="hc-assistant-sr-only"
-              >
-                Ask Mink AI a StoreMink question
-              </label>
-              <textarea
-                id="hc-assistant-input"
-                ref={inputRef}
-                value={draft}
-                onChange={(event) => {
-                  setDraft(event.target.value);
-                  if (error) setError("");
-                }}
-                onKeyDown={(event) => {
-                  if (
-                    event.key === "Enter" &&
-                    !event.shiftKey &&
-                    !event.nativeEvent.isComposing
-                  ) {
-                    event.preventDefault();
-                    void sendMessage();
-                  }
-                }}
-                placeholder="Ask how to do something…"
-                // Same keyboard contract as the dashboard composer — Return
-                // sends here too, and an un-hinted field in a <form> gets iOS's
-                // password/card/address bar instead of word suggestions.
-                enterKeyHint="send"
-                autoComplete="off"
-                autoCapitalize="sentences"
-                autoCorrect="on"
-                rows={1}
-                maxLength={HELP_ASSISTANT_MAX_MESSAGE_LENGTH}
-                disabled={pending}
-              />
-              <button
-                type="submit"
-                aria-label="Send question"
-                disabled={pending || Boolean(draftError)}
-              >
-                <Send size={18} />
-              </button>
-            </form>
-            <footer className="hc-assistant-footer">
-              <div
-                className="hc-assistant-powered"
-                aria-label="Powered by StoreMink"
-              >
-                <span>Powered by</span>
-                <Image
-                  src={STOREMINK_MARK}
-                  alt=""
-                  width={18}
-                  height={18}
-                  aria-hidden
-                />
-                <strong>StoreMink</strong>
+                )}
+                {error && (
+                  <div className="hc-assistant-error" role="alert">
+                    {error}
+                  </div>
+                )}
+                <div ref={endRef} />
               </div>
-            </footer>
-          </section>
-        </>
-      )}
+
+              <form
+                className="hc-assistant-composer"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void sendMessage();
+                }}
+              >
+                <label
+                  htmlFor="hc-assistant-input"
+                  className="hc-assistant-sr-only"
+                >
+                  Ask Mink AI a StoreMink question
+                </label>
+                <textarea
+                  id="hc-assistant-input"
+                  ref={inputRef}
+                  value={draft}
+                  onChange={(event) => {
+                    setDraft(event.target.value);
+                    if (error) setError("");
+                  }}
+                  onKeyDown={(event) => {
+                    if (
+                      event.key === "Enter" &&
+                      !event.shiftKey &&
+                      !event.nativeEvent.isComposing
+                    ) {
+                      event.preventDefault();
+                      void sendMessage();
+                    }
+                  }}
+                  placeholder="Ask how to do something…"
+                  // Same keyboard contract as the dashboard composer — Return
+                  // sends here too, and an un-hinted field in a <form> gets iOS's
+                  // password/card/address bar instead of word suggestions.
+                  enterKeyHint="send"
+                  autoComplete="off"
+                  autoCapitalize="sentences"
+                  autoCorrect="on"
+                  rows={1}
+                  maxLength={HELP_ASSISTANT_MAX_MESSAGE_LENGTH}
+                  disabled={pending}
+                />
+                <button
+                  type="submit"
+                  aria-label="Send question"
+                  disabled={pending || Boolean(draftError)}
+                >
+                  <Send size={18} />
+                </button>
+              </form>
+              <footer className="hc-assistant-footer">
+                <div
+                  className="hc-assistant-powered"
+                  aria-label="Powered by StoreMink"
+                >
+                  <span>Powered by</span>
+                  <Image
+                    src={STOREMINK_MARK}
+                    alt=""
+                    width={18}
+                    height={18}
+                    aria-hidden
+                  />
+                  <strong>StoreMink</strong>
+                </div>
+              </footer>
+            </section>
+          </>,
+          overlayHost,
+        )}
     </div>
   );
 }

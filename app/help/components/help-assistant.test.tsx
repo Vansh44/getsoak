@@ -198,4 +198,34 @@ describe("HelpAssistant", () => {
       screen.getByRole("separator", { name: "Resize Mink AI drawer" }),
     ).toBeInTheDocument();
   });
+
+  // ★★ THE DRAWER MUST LEAVE THE HEADER. `.hc-topbar` carries
+  // `backdrop-filter: blur(18px)`, which makes it the containing block for
+  // every `position: fixed` descendant — so a drawer rendered in place
+  // resolved top/right/bottom against the 73px header and opened as a 360x8px
+  // sliver at its bottom edge (measured live on help.storemink.com). Nothing
+  // threw and every assertion above still passed, which is why this pins the
+  // PARENT rather than any visible state: jsdom computes no layout, so the
+  // only observable difference is where the panel is mounted.
+  it("portals the drawer out of the backdrop-filtered header", () => {
+    const header = document.createElement("header");
+    header.className = "hc-topbar";
+    const overlayHost = document.createElement("div");
+    overlayHost.id = "hc-overlay-root";
+    document.body.append(header, overlayHost);
+
+    render(<HelpAssistant />, { container: header });
+    fireEvent.click(screen.getByRole("button", { name: "Ask Mink AI" }));
+
+    const dialog = screen.getByRole("dialog", {
+      name: "Mink AI Help Assistant",
+    });
+    expect(overlayHost).toContainElement(dialog);
+    expect(header.contains(dialog)).toBe(false);
+    expect(header.querySelector(".hc-assistant-backdrop")).toBeNull();
+    expect(overlayHost.querySelector(".hc-assistant-backdrop")).not.toBeNull();
+
+    header.remove();
+    overlayHost.remove();
+  });
 });

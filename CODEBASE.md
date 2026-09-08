@@ -4016,12 +4016,40 @@ the trusted `store_id`, and direct customer PII is minimized/masked.
       answer or URL, so multilingual interpretation cannot invent a StoreMink
       feature. The responsive **Mink AI Help Assistant** is mounted in the Help
       header beside **Create your store** through `app/help/layout.tsx` and
-      `components/help-assistant.tsx`. It opens as an accessible right-side
+      `app/help/components/help-assistant.tsx`. It opens as an accessible
+      right-side
       drawer instead of a floating popup: desktop width is pointer- and
       keyboard-resizable (360–760 px, clamped to the viewport and remembered in
       local storage), can be maximized into a full-viewport conversation and
       restored without losing the current thread, while phones use a full-screen
-      sheet by default. A submitted question scrolls to its pending state, but a
+      sheet by default. ★★ THE DRAWER IS PORTALLED INTO `#hc-overlay-root`, a
+      child of `.hc` rendered after the footer — NOT into the header where its
+      launcher sits. `.hc-topbar` carries `backdrop-filter: blur(18px)` for its
+      frosted glass, and a backdrop-filtered element becomes the CONTAINING
+      BLOCK for every `position: fixed` descendant, so the panel and its
+      backdrop resolved top/right/bottom against the 73 px header instead of
+      the viewport and opened as a 360×8 px sliver at the header's bottom edge
+      (measured live on help.storemink.com, 2026-09-08). Nothing reported a
+      fault — `open` was true, the focus trap armed, the launcher said
+      "Close" — there was simply nothing to see, which is why a browser
+      measurement rather than a code read is what found it. The portal target is
+      inside `.hc` rather than `document.body` so the panel keeps the `--hc-*`
+      tokens, the Inter `--font-dash` variable and the `.hc a` reset it styles
+      itself with; `document.body` is the fallback when the component renders
+      without the Help layout (its own unit tests). It also frees the drawer
+      from the header's `z-index: 20` stacking context. ⚠ Two consequences to
+      preserve: adding `transform`, `filter`, `perspective` or `contain` to
+      `.hc` or `#hc-overlay-root` re-creates that containing block and silently
+      collapses the drawer again; and a descendant selector rooted at
+      `.hc-assistant` (the launcher's wrapper) no longer reaches the panel —
+      `.hc-assistant button:focus-visible` had been the drawer's only focus
+      ring, so the rule names `.hc-assistant-panel` separately. The
+      panel/backdrop offset is `--hc-topbar-h` (73 px = `.hc-topbar-inner`'s
+      72 px min-height plus the 1 px border), replacing a stale 64 px that
+      covered the header's bottom edge. Pinned by `help-assistant.test.tsx`,
+      which asserts the panel's PARENT — jsdom computes no layout, so where it
+      mounts is the only observable difference. A submitted question scrolls to
+      its pending state, but a
       completed response is positioned at the beginning of the new answer rather
       than forcing the reader to its bottom. Clarification guidance is separate
       from genuine suggested follow-up questions: a needs-context response shows

@@ -30,6 +30,12 @@
      rail started 36px left of the logo above it. --hc-max stays the narrower
      prose measure for .hc-wrap sections. */
   --hc-shell: min(1320px, calc(100% - 48px));
+  /* .hc-topbar-inner's 72px min-height plus the topbar's 1px bottom border.
+     The Mink AI drawer sits directly under the sticky header and used to be
+     offset by a stale 64px, so it covered the header's bottom edge — never
+     noticed, because the drawer did not render at all until it was portalled
+     out of the backdrop-filtered header. */
+  --hc-topbar-h: 73px;
 
   background: var(--hc-bg);
   color: var(--hc-ink);
@@ -816,16 +822,31 @@
   background: #eee9ff;
   box-shadow: 0 3px 10px rgba(74, 51, 167, 0.1);
 }
+/* ★ THE PANEL IS LISTED SEPARATELY BECAUSE IT IS PORTALLED. It used to render
+   inside `.hc-assistant`, so `.hc-assistant button` covered every control in
+   the drawer; the drawer now mounts in `#hc-overlay-root` (see the note on
+   .hc-assistant-panel), which put the focus ring on the launcher only and left
+   the drawer's own buttons and source links with no visible focus at all. */
 .hc-assistant-launcher:focus-visible,
 .hc-assistant button:focus-visible,
-.hc-assistant a:focus-visible {
+.hc-assistant a:focus-visible,
+.hc-assistant-panel button:focus-visible,
+.hc-assistant-panel a:focus-visible {
   outline: 3px solid rgba(122, 92, 255, 0.35);
   outline-offset: 2px;
 }
+/* ★★ RENDERED THROUGH A PORTAL INTO #hc-overlay-root, NOT WHERE THE LAUNCHER
+   SITS. `.hc-topbar` carries `backdrop-filter: blur(18px)`, and a
+   backdrop-filtered element is the CONTAINING BLOCK for every `position: fixed`
+   descendant — so these offsets resolved against the 73px header and the drawer
+   opened as a 360x8px sliver at its bottom edge. Do NOT move the drawer back
+   into the header markup, and do not add `transform`, `filter`, `perspective`
+   or `contain` to `.hc` or `#hc-overlay-root`: any of them re-creates the same
+   containing block and collapses the drawer again, silently. */
 .hc-assistant-panel {
   position: fixed;
   z-index: 72;
-  top: 64px;
+  top: var(--hc-topbar-h, 73px);
   right: 0;
   bottom: 0;
   width: 480px;
@@ -861,7 +882,7 @@
 .hc-assistant-backdrop {
   position: fixed;
   z-index: 71;
-  top: 64px;
+  top: var(--hc-topbar-h, 73px);
   right: 0;
   bottom: 0;
   left: 0;
