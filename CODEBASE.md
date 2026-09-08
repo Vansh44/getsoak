@@ -9972,14 +9972,23 @@ npm run db:migrate:local # ledger status/apply against --environment local (ENV_
                     #   drop from ~1.2 s of application-code to ~1-3 ms per query. Rationale,
                     #   measurements and the Identity-Platform pairing warning are in
                     #   docs/local-dev-performance.md.
-                    # ★★ db:migrate:staging and db:migrate:prod PIN DB_HOST=127.0.0.1
-                    #   DB_PORT=6543 (the Cloud SQL proxy). They set DB_NAME but used to
-                    #   inherit host/port from the env files, so an .env.local pointing at a
-                    #   local cluster redirected them. It failed safely only because no local
-                    #   database carried those names — and the environment guard compares the
-                    #   database NAME, not the host, so a local database called `storemink`
-                    #   would let `db:migrate:prod apply` target LOCAL while reporting success
-                    #   as production. Pinning the host removes that ambiguity entirely.
+                    # ★★ ALL SIX db:migrate:* / db:drift:* SCRIPTS PIN DB_HOST AND DB_PORT
+                    #   (staging and prod at 127.0.0.1:6543 via the proxy, local at
+                    #   127.0.0.1:5544). None of them may inherit host/port from the env
+                    #   files, and the two failure directions are different:
+                    #   • staging/prod set DB_NAME but used to inherit host/port, so an
+                    #     .env.local pointing at a local cluster redirected them. That failed
+                    #     safely ONLY because no local database carried those names — and the
+                    #     environment guard compares the database NAME, not the host, so a
+                    #     local database called `storemink` would let `db:migrate:prod apply`
+                    #     write to LOCAL while reporting success as production.
+                    #   • the LOCAL scripts pinned nothing at all, and `ENV_DATABASES.local`
+                    #     is null, so there is NO name guard on that side either. Delete
+                    #     .env.local and `db:migrate:local apply` would have written to
+                    #     storemink_staging while calling itself local — the more likely
+                    #     accident, since deleting .env.local is the documented way to look
+                    #     at staging. Verified after pinning by moving .env.local aside: it
+                    #     still reports database=storemink_local.
 npm run db:proxy    # just the Cloud SQL Auth Proxy → staging DB on localhost:6543 (needs
                     #   `gcloud auth application-default login` once for ADC). Points at the
                     #   `storemink-prod-db` INSTANCE; local dev uses its `storemink_staging`
