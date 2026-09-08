@@ -680,7 +680,7 @@ wholesip/
 │   │                          # httpOnly Firebase session cookie), signout/route.ts (clear it)
 │   ├── auth/                  # Store-host auth: login (email+pw + Google popup),
 │   │                          # forgot/set/update-password (Firebase; callback route removed)
-│   ├── help/                  # Help centre (served at help.storemink.com)
+│   ├── help/                  # Request-rendered Help Centre; error.tsx retries failed reads
 │   ├── themes/                # ★ Public metadata-driven theme catalog served at
 │   │                          # themes.storemink.com; own canonical/OG/CSS, industry
 │   │                          # filters, truthful demo/release/plan state, and a
@@ -1772,10 +1772,11 @@ wholesip/
 │                              # computed checksum) across 27 ledger rows including
 │                              # production, for no functional gain — the ids are
 │                              # already unique. It is a naming wart, not a defect.
-│                              # ★ THE NEXT MIGRATION TAKES 0088. 0085 and 0086 are
+│                              # ★ THE NEXT MIGRATION TAKES 0089. 0085 and 0086 are
 │                              # used by the offers series, so those collide too;
 │                              # 0087 documents the StoreMink logo refresh.
-│                              # 0088 is the first free number. `db-migrations-core.test.mjs`
+│                              # 0088 documents Help first-visit/error recovery.
+│                              # 0089 is the first free number. `db-migrations-core.test.mjs`
 │                              # freezes the nine pairs, so a new entry reusing any
 │                              # existing number fails CI (it either adds a tenth
 │                              # duplicate group or makes an existing group a triple).
@@ -3972,8 +3973,29 @@ the trusted `store_id`, and direct customer PII is minimized/masked.
     eventual-consistency). Drizzle tables added to `drizzle/schema.ts`
     (`helpCategories`, `helpArticles`; the generated `search` column is
     intentionally absent — search uses a raw `sql` predicate).
-    - **Public site** (`app/help/*`, statically generated + ISR, fully
-      crawlable): `/help` (search + category grid + popular). The category +
+    - **Public site** (`app/help/*`, request-rendered with tagged data caching, fully
+      crawlable): `/help` (search + category grid + popular).
+      **First-visit reliability (2026-09-08):** the home page and category page/
+      metadata call Next 16 `connection()` before reads; category build-time
+      `generateStaticParams` is removed. Docker builds have no DB credentials,
+      so pre-rendering previously converted DB errors to empty lists and baked
+      an empty Help home into the image. The first request could serve that
+      stale ISR page while revalidating; a reload then showed the real guides.
+      Core reads in `lib/help/queries.ts` now reject errors inside
+      `unstable_cache`, with `read-v2` keys to bypass old poisoned entries, and
+      retry a classified transient connection failure once in their SELECT-only
+      anonymous scope. Successful data still caches for 300 seconds under
+      `TAGS.help`; genuine empty results/missing slugs remain valid. The shared
+      DB transaction runner and write retry semantics are unchanged. Persistent
+      failures record the DB error code in the Help read log and reach
+      `app/help/error.tsx`, whose
+      **Try again** uses Next 16.2 `unstable_retry` to fetch server content again;
+      no public loading boundary is added, preserving missing-page 404 behavior.
+      Migration `20260908_0088_help_first_visit_recovery.sql` appends recovery
+      guidance to the signup/login/store-access troubleshooting guide.
+      Query and page tests cover first-request retry, failed-cache recovery,
+      request-time gating and the retry button.
+      The category +
       article pages use a **3-pane docs layout** (`.hc-docs`): a fixed left
       **Topics tree** (`getHelpNavTree` → collapsible client `help-sidebar.tsx`,
       active category expanded/highlighted), the scrolling content, and a fixed

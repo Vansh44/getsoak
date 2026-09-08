@@ -64,9 +64,7 @@ export async function generateMetadata(): Promise<Metadata> {
     metadataBase: new URL(siteUrl),
     title: { default: brand.name, template: `%s | ${brand.name}` },
     description: brand.tagline ?? undefined,
-    icons: brand.logoUrl
-      ? { icon: brand.logoUrl }
-      : STOREMINK_ICONS,
+    icons: brand.logoUrl ? { icon: brand.logoUrl } : STOREMINK_ICONS,
     ...(googleVerification
       ? { verification: { google: googleVerification } }
       : {}),

@@ -4101,6 +4101,23 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260908_0088_help_first_visit_recovery",
+      "description": "Document public Help access and retrying temporary guide-loading failures",
+      "file": "sql/20260908_0088_help_first_visit_recovery.sql",
+      "transaction": true,
+      "requires": ["20260826_0019_getting_started_account_help"],
+      "verify": { "tables": ["help_articles"] },
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "Help Centre recovery guidance published",
+            "sql": "select count(*)::text from public.help_articles where slug = 'troubleshoot-signup-login-and-store-access' and status = 'published' and category_id is not null and body like '%<h2>If the Help Centre cannot load</h2>%' and body like '%Help Centre is temporarily unavailable%' and body like '%Try again%'",
+            "equals": "1"
+          }
+        ]
+      }
     }
   ]
 }

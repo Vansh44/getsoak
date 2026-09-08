@@ -751,6 +751,23 @@
 }
 
 /* ---- Empty state ---- */
+.hc-retry {
+  margin: 20px 0;
+  padding: 12px 24px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--hc-ink);
+  color: var(--hc-accent-ink);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.hc-retry:focus-visible {
+  outline: 3px solid var(--hc-accent);
+  outline-offset: 3px;
+}
+
 .hc-empty {
   text-align: center;
   padding: 60px 20px;
