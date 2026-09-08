@@ -1736,6 +1736,42 @@ wholesip/
 │                              # freezes the nine pairs, so a new entry reusing any
 │                              # existing number fails CI (it either adds a tenth
 │                              # duplicate group or makes an existing group a triple).
+│   ├── schema-fingerprint.json # ★★ THE DRIFT TRIPWIRE. A committed per-environment
+│   │                          # baseline of `schema_sha256` plus a digest of WHICH
+│   │                          # migration ids are recorded. `db:migrate drift`
+│   │                          # recomputes both and compares.
+│   │                          # ★ THE TWO SIGNALS TOGETHER ARE THE WHOLE POINT.
+│   │                          # schemaFingerprint() EXCLUDES schema_migrations, so
+│   │                          # recording a migration cannot move it. That yields
+│   │                          # four states, and only one is the alarm:
+│   │                          #   same/same  -> clean
+│   │                          #   same/moved -> ledger_only  (an `adopt`)
+│   │                          #   moved/moved-> migrated     (the runner ran)
+│   │                          #   moved/same -> out_of_band  ← DDL bypassed the runner
+│   │                          # That last state is exactly what produced the
+│   │                          # 78-of-96 gap: the schema advanced on staging AND
+│   │                          # production while the ledger recorded nothing, so the
+│   │                          # gate could not have caught an error in those 18.
+│   │                          # ⚠ The fingerprint is DDL-ONLY and data-independent —
+│   │                          # proven by prod (4 stores/2 orders) and staging
+│   │                          # (8 stores/53 orders) sharing one fingerprint.
+│   │                          # ★ EVERY non-clean verdict exits 1, including a
+│   │                          # legitimate migration: the baseline is a COMMITTED
+│   │                          # file, so a real migration must land with its
+│   │                          # refreshed baseline or the next run cannot tell a
+│   │                          # migration from someone's manual DDL. Refresh with
+│   │                          # `--update-baseline <environment>` (it must name the
+│   │                          # environment, the same confirmation shape `adopt`
+│   │                          # uses, because rewriting the baseline is what
+│   │                          # silences the detector) and commit it.
+│   │                          # ★ An environment absent from the file is
+│   │                          # `unbaselined` and also exits 1 — it fails closed
+│   │                          # rather than reporting a database it has never seen
+│   │                          # as healthy. Verified end-to-end against a real
+│   │                          # database: a hand-added column gave out_of_band with
+│   │                          # the ledger unchanged and exit 1; a bare ledger
+│   │                          # insert gave ledger_only. classifyDrift is pure and
+│   │                          # mutation-tested in db-migrations-core.test.mjs.
 │   └── sql/                   # New forward-only SQL. 0002 repairs the production
 │                              # credit-note formatter drift (bare lpad truncated
 │                              # legal serials beyond 9,999) and canonicalizes the
@@ -9867,6 +9903,13 @@ npm run db:local:status # cluster state + storemink_local table count
 npm run db:local:sync   # rebuild storemink_local from staging (add -- --schema-only to skip data)
 npm run db:local:psql   # psql into storemink_local
 npm run db:local:stop   # stop the cluster
+npm run db:drift:local  # ★ has DDL reached this database without the runner?
+npm run db:drift:staging #   same for staging (via the proxy; needs gcloud auth for the secret)
+npm run db:drift:prod   #   and production. Exit 0 = clean, 1 = drift or stale baseline.
+                    #   After a real migration: re-run with `-- --update-baseline <env>`
+                    #   and COMMIT drizzle/migrations/schema-fingerprint.json in the
+                    #   same change, or the detector cannot tell the next manual DDL
+                    #   from the migration you just applied.
 npm run db:migrate:local # ledger status/apply against --environment local (ENV_DATABASES.local
                     #   is null, so there is no database-name guard)
                     #   ★ With .env.local present the app uses the LOCAL database and you run

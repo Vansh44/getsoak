@@ -8,6 +8,7 @@ import {
   parseCli,
   sha256,
   validateEnvironment,
+  classifyDrift,
 } from "./db-migrations-core.mjs";
 
 const manifest = {
@@ -1115,5 +1116,70 @@ describe("database migration controls", () => {
       ...[...bySequence.keys()].map((sequence) => Number(sequence)),
     );
     expect(bySequence.has(String(highest + 1).padStart(4, "0"))).toBe(false);
+  });
+
+  // ★★ THE TWO SIGNALS MUST BE READ TOGETHER. schemaFingerprint() excludes
+  // schema_migrations, so recording a migration cannot move it. That is what
+  // separates "a migration ran" from "somebody ran DDL by hand" — the exact
+  // distinction nothing could make when staging and production drifted 18
+  // migrations ahead of their ledgers. Verified end to end against a real
+  // database: adding a column by hand gave drift=out_of_band with the ledger
+  // unchanged and exit code 1; inserting a ledger row alone gave ledger_only.
+  describe("schema drift classification", () => {
+    const base = {
+      fingerprint: "aaa",
+      ledger: { count: 96, digest: "led-aaa" },
+    };
+
+    it("passes when the schema and ledger both match the baseline", () => {
+      expect(classifyDrift(base, { ...base })).toMatchObject({
+        verdict: "clean",
+        ok: true,
+      });
+    });
+
+    it("flags DDL applied outside the runner: schema moved, ledger did not", () => {
+      const result = classifyDrift(base, { ...base, fingerprint: "bbb" });
+      expect(result.verdict).toBe("out_of_band");
+      expect(result.ok).toBe(false);
+      expect(result.detail).toContain("outside db:migrate");
+    });
+
+    it("distinguishes a migration (both moved) from out-of-band DDL", () => {
+      expect(
+        classifyDrift(base, {
+          fingerprint: "bbb",
+          ledger: { count: 97, digest: "led-bbb" },
+        }),
+      ).toMatchObject({ verdict: "migrated", ok: false });
+    });
+
+    it("distinguishes an adopt (ledger moved, schema did not)", () => {
+      expect(
+        classifyDrift(base, {
+          fingerprint: "aaa",
+          ledger: { count: 97, digest: "led-bbb" },
+        }),
+      ).toMatchObject({ verdict: "ledger_only", ok: false });
+    });
+
+    // ★ A SWAPPED ID KEEPS THE COUNT, so the digest — not the count — is what
+    // the verdict turns on. Renaming an applied migration is exactly this shape.
+    it("notices a ledger change that leaves the row count identical", () => {
+      expect(
+        classifyDrift(base, {
+          fingerprint: "aaa",
+          ledger: { count: 96, digest: "led-swapped" },
+        }),
+      ).toMatchObject({ verdict: "ledger_only", ok: false });
+    });
+
+    // ★ FAILS CLOSED: an environment with no committed baseline is not "fine".
+    it("refuses an environment that has never been baselined", () => {
+      expect(classifyDrift(null, { ...base })).toMatchObject({
+        verdict: "unbaselined",
+        ok: false,
+      });
+    });
   });
 });
