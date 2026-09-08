@@ -37,11 +37,80 @@ each job is a landmine the moment it does:
 | `help-embeddings`         | Existing published guides never receive semantic chunks after the initial migration, and a failed article-save refresh is never retried. Mink AI still falls back to lexical/category search, but paraphrase and multilingual recall silently degrade. |
 | `mink-publications`       | Approved scheduled Mink blogs remain private drafts forever. No data is lost, but the merchant's reviewed publication time is silently missed until the worker runs.                                                                                   |
 
+> ⚠ **STALE as of 2026-09-08 — see the measured note under "The jobs" below.**
+> Production DOES have the notification system: `notification_email_queue`,
+> `email_campaigns`, `email_campaign_recipients` and a schedule-aware
+> `claim_email_batch` all exist in the `storemink` database, and mail is flowing
+> through it. The paragraph below is kept for the history of the decision.
+>
 > Note: production currently runs `main`, which has **no notification system** —
 > `lib/notifications/` and the `notification_email_queue` table do not exist
 > there. `send-emails` on prod drives only the coupon-campaign worker. Once
 > `staging` merges, the same job also drains notification email. Phase 5E makes
 > its one-minute heartbeat load-bearing for scheduled campaign resolution.
+
+## Schema-drift check (NOT an /api/cron route)
+
+`storemink-schema-drift` is the odd one out: a **Cloud Scheduler job that runs a
+Cloud Build trigger**, not an HTTPS call to `/api/cron/*` with a CRON_SECRET
+bearer. Everything else in this file follows that pattern; this one cannot.
+
+| Piece     | Value                                                                                                    |
+| --------- | -------------------------------------------------------------------------------------------------------- |
+| Scheduler | `storemink-schema-drift`, `0 4 * * *` UTC, region `asia-south1`                                          |
+| Target    | `POST .../v1/projects/storemink-prod/locations/global/triggers/c10f45a2-bbc3-4e42-a069-3767e6057c48:run` |
+| Auth      | OAuth as `705863961054-compute@developer.gserviceaccount.com`                                            |
+| Trigger   | `storemink-schema-drift` (manual), `gitFileSource` → `cloudbuild-drift.yaml` on `refs/heads/main`        |
+| Build     | `cloudbuild-drift.yaml` → `db-migrate drift --environment production`                                    |
+
+★★ **Why not an `/api/cron` route.** The check needs BOTH signals — the schema
+fingerprint and a digest of which migration ids are recorded — because
+`schemaFingerprint()` excludes `schema_migrations`, and that exclusion is what
+separates "a migration ran" from "somebody ran DDL by hand". Reading the ledger
+needs the postgres SUPERUSER login: migration 0018 revoked the app login's
+grants on `schema_migrations`, and a durable verify contract asserts they stay
+revoked. Putting that credential in the internet-facing Cloud Run runtime would
+be a downgrade. Cloud Build is not internet-facing, already holds
+`roles/run.admin` (so it can already deploy code that reaches the database), and
+runs the SAME code path a human runs rather than a second implementation.
+
+⚠ **It required two IAM grants** on the Cloud Build service account, which did
+NOT already have them: `secretmanager.secretAccessor` scoped to
+`CLOUDSQL_PROD_POSTGRES_PW` alone, and project-level `cloudsql.client` (Cloud SQL
+has no instance-level binding). The scheduler SA needed nothing new —
+`roles/cloudbuild.builds.builder` already includes `cloudbuild.builds.create`.
+
+⚠ **CREATED PAUSED (2026-09-08), and it must stay paused until
+`cloudbuild-drift.yaml` reaches `main`.** It lives on `minkai` today, so a run
+fails with `NOT_FOUND - File cloudbuild-drift.yaml not found`. Enabling it before
+the merge means a failure every morning, which is how a real alarm becomes noise.
+After merging:
+
+```bash
+gcloud scheduler jobs resume storemink-schema-drift --project storemink-prod --location asia-south1
+gcloud scheduler jobs run    storemink-schema-drift --project storemink-prod --location asia-south1
+```
+
+★ **The trigger could not be created by `gcloud` or the API.** Five shapes
+(`manual` with two URL forms, a raw `sourceToBuild` body, a `github` block
+mirroring the working deploy trigger, and `webhook`) all returned a bare
+`INVALID_ARGUMENT` with no field detail — this project has a 1st-gen GitHub App
+connection and no 2nd-gen connection, and manual triggers appear to need one. It
+was created through the Cloud Console instead. Expect the same if it is ever
+recreated.
+
+**Verified as far as the merge allows (2026-09-08):** the build itself ran
+against production (`cc4d4eda`, 3m8s) and logged `database=storemink`
+`environment=production` `drift=clean`; `GET` on the Scheduler's exact trigger
+URL returns 200, so the URL and OAuth are right; and `:run` fails with exactly
+one message, the missing file. What is NOT yet verified is a green scheduled run
+end to end — do that after the merge.
+
+Until then the same check runs by hand from any checkout:
+
+```bash
+gcloud builds submit --project storemink-prod --region global --config=cloudbuild-drift.yaml --ignore-file=.gitignore .
+```
 
 ## The jobs
 
@@ -61,6 +130,63 @@ each job is a landmine the moment it does:
 | `storemink-mink-publications`       | `* * * * *`    | `https://storemink.com/api/cron/mink-publications`       |
 | `storemink-mink-workflows`          | `* * * * *`    | `https://storemink.com/api/cron/mink-workflows`          |
 
+> ⚠ **The table above is the INTENDED state. Measured live 2026-09-08 with
+> `gcloud scheduler jobs list --project storemink-prod --location asia-south1`,
+> production does not match it.** This is the exact gap the section above
+> describes, so it is recorded rather than quietly corrected:
+>
+> | Job                           | Table says   | Actually              |
+> | ----------------------------- | ------------ | --------------------- |
+> | `storemink-send-emails`       | `* * * * *`  | ✅ fixed 2026-09-08   |
+> | `storemink-search-metrics`    | `30 2 * * *` | **PAUSED**            |
+> | `storemink-analytics-rollup`  | `40 * * * *` | **PAUSED**            |
+> | `storemink-help-embeddings`   | `50 * * * *` | **absent**            |
+> | `storemink-mink-publications` | `* * * * *`  | **absent**            |
+> | `storemink-mink-workflows`    | `* * * * *`  | ✅ created 2026-09-08 |
+>
+> ⚠ **An earlier version of this note called the `send-emails` schedule a LIVE
+> cost. That was wrong, and the correction is the useful part.** Measured on
+> production 2026-09-08: the queue was completely healthy — 12 rows, every one
+> `status=sent`, `max_attempts=1`, **zero pending**, newest sent that morning —
+> and the endpoint reported `remaining: 0` across campaigns, notifications, SMS
+> and announcements. Nothing was being delayed.
+>
+> ★ The reason is the WORKER KICK. `triggerEmailWorker` is called from eight
+> production sites (`lib/notifications/record.ts`, `coupon-email-actions`,
+> `announcement-actions`, the Mink campaign route, `lib/import-export/trigger.ts`
+> among them), so a queued email is drained by the very request that queued it.
+> **The cron is a backstop, not the delivery path** — which is what the
+> `triggerEmailWorker` note in CODEBASE.md §24 already said.
+>
+> The daily schedule was therefore a LATENT gap, in two narrow cases:
+>
+> 1. **Phase 5E scheduled campaigns.** `campaign-worker.ts` claims campaigns
+>    where `status='scheduled' AND scheduled_for <= now`. A due campaign has no
+>    request to kick it, so one scheduled for 14:00 would not have sent until
+>    00:00 UTC the next day. Zero campaigns were scheduled at the time, so nobody
+>    had hit it — but the feature was effectively broken whenever used.
+> 2. **Retries.** A failed send backs off 5/15/45 minutes and needs a worker run
+>    at that moment. `max_attempts=1` across the whole table means this had never
+>    actually occurred.
+>
+> ✅ **Fixed 2026-09-08: the schedule is now `* * * * *`.** Verified by three
+> consecutive firings one minute apart (13:41:02, 13:42:06, 13:43:09), all HTTP
+> 200, the job's own status code empty, and the queue still `pending 0 /
+failed 0`. Overlapping runs are safe because the endpoint is idempotent and
+> claim-based (`FOR UPDATE SKIP LOCKED`); it returned in 0.52s, far inside the
+> 300s attempt deadline. The cost is ~1,440 mostly no-op requests a day against a
+> `min-instances=0` service.
+>
+> ★ This also makes the note further up STALE: production is NOT missing the
+> notification system. `notification_email_queue`, `email_campaigns`,
+> `email_campaign_recipients` and a schedule-aware `claim_email_batch` all exist
+> in the production database.
+>
+> The three absent jobs remain the documented-but-never-created failure this file
+> was written about, and `search-metrics`/`analytics-rollup` remain PAUSED.
+> **None of those were changed:** each needs its own decision about whether its
+> migrations and routes are actually deployed first.
+
 ⚠ **`billing` must stay HOURLY.** The cycle boundary and the 48-hour grace
 deadline are wall-clock instants, so the interval IS the resolution of the whole
 system: on a daily schedule some merchants would get nearly a day of unearned
@@ -77,8 +203,27 @@ then it would 404 or query an incomplete table.** Also,
 until migration `20260901_0052_mink_phase_5d_blog_publication` and the matching
 route are deployed. Create it with the same CRON_SECRET bearer contract only
 after both application and database verification pass.** Also,
-**`storemink-mink-workflows` was introduced in Phase 6A and must stay
-absent/paused until migration `20260902_0058_mink_phase_6a_durable_workflows`
+✅ **`storemink-mink-workflows` EXISTS as of 2026-09-08** (`* * * * *`, 300s
+deadline, retryCount 3, same CRON_SECRET bearer contract), created only after
+every precondition below was checked against production rather than assumed:
+`mink_workflow_runs`, `mink_workflow_steps` and `mink_workflow_events` all
+EXIST; the route answers **HTTP 200 on an empty queue** across three calls
+(0.25-0.45s) with `claims:0`, which is the specific thing to verify — CODEBASE.md
+§20a records a version where `parseClaimedWorkflow` threw on an empty claim, so
+the minute cron answered **500 on every idle tick** and the completion fan-out
+below it was unreachable; unauthenticated requests get 401; the queue was empty
+(0 runs) so nothing was stranded; and 2 stores have Mink enabled, so the feature
+is live and did need a worker. Verified after creation by three consecutive
+firings a minute apart (13:49:09, 13:50:05, 13:51:05), all HTTP 200, the job's
+own status code empty, no app-side errors, tables still clean.
+⚠ Each execution logs TWO Cloud Scheduler entries — one carrying
+`httpRequest.status: 200` and one with the field absent — so a filter of
+`httpRequest.status!=200` looks like failures and is not. Judge by the job's
+`status.code` (blank = success).
+
+The original caveat, kept because it still applies to any environment where this
+has not been done: it **must stay absent/paused until migration
+`20260902_0058_mink_phase_6a_durable_workflows`
 and the matching route are deployed. Phase 6B/6C additionally requires
 `20260903_0072_mink_phase_6bc_workflows` before the matching application deploy.
 Create or resume it with the shared CRON_SECRET bearer contract only after the

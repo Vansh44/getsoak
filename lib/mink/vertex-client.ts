@@ -20,6 +20,7 @@ import type {
 import type { MinkStoredMessage } from "./persistence";
 import { MinkRetryError, withMinkRetry } from "./retry";
 import { renderMinkSystemInstruction } from "./system-prompt";
+import type { MinkThinkingLevel } from "./thinking";
 
 export function createVertexMinkSession(
   config: MinkConfig,
@@ -28,6 +29,8 @@ export function createVertexMinkSession(
   options: {
     history: MinkStoredMessage[];
     abortSignal?: AbortSignal;
+    thinkingLevel?: MinkThinkingLevel;
+    memoryReference?: string;
   },
 ): MinkModelSession {
   if (!config.projectId) {
@@ -59,7 +62,12 @@ export function createVertexMinkSession(
     config: {
       systemInstruction: renderMinkSystemInstruction(actor, declarations),
       maxOutputTokens: config.maxOutputTokens,
-      thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+      thinkingConfig: {
+        thinkingLevel:
+          options.thinkingLevel === "high"
+            ? ThinkingLevel.HIGH
+            : ThinkingLevel.LOW,
+      },
       ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
       ...(functionDeclarations.length
         ? { tools: [{ functionDeclarations }] }
@@ -69,7 +77,11 @@ export function createVertexMinkSession(
 
   return {
     async sendUserMessage(message) {
-      return send(message);
+      return send(
+        options.memoryReference
+          ? [{ text: options.memoryReference }, { text: message }]
+          : message,
+      );
     },
     async sendToolResponses(responses) {
       const parts: Part[] = responses.map((result) => ({

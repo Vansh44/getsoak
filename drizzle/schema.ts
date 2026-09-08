@@ -4863,7 +4863,7 @@ export const minkDrafts = pgTable(
     }).onDelete("cascade"),
     check(
       "mink_drafts_kind_check",
-      sql`kind = ANY (ARRAY['product_description'::text, 'product_seo'::text, 'blog'::text, 'coupon_email'::text, 'customer_message'::text, 'product_create'::text, 'coupon_create'::text, 'coupon_update'::text, 'customer_group_create'::text, 'customer_group_update'::text, 'inventory_adjustment'::text, 'bulk_inventory_adjustment'::text, 'order_status_transition'::text, 'bulk_price_update'::text])`,
+      sql`kind = ANY (ARRAY['product_description'::text, 'product_seo'::text, 'blog'::text, 'coupon_email'::text, 'customer_message'::text, 'product_create'::text, 'coupon_create'::text, 'coupon_update'::text, 'customer_group_create'::text, 'customer_group_update'::text, 'inventory_adjustment'::text, 'bulk_inventory_adjustment'::text, 'order_status_transition'::text, 'bulk_price_update'::text, 'offer_create'::text, 'offer_update'::text, 'offer_activate'::text, 'storefront_custom_code'::text])`,
     ),
     check(
       "mink_drafts_status_check",
@@ -4888,6 +4888,10 @@ export const minkDrafts = pgTable(
     check(
       "mink_drafts_bulk_price_target_check",
       sql`kind <> 'bulk_price_update' OR (destination_type = 'price_bulk' AND destination_id IS NULL AND location_id IS NULL AND variant_id IS NULL AND jsonb_typeof(content_json -> 'lines_json') = 'string')`,
+    ),
+    check(
+      "mink_drafts_storefront_code_target_check",
+      sql`kind <> 'storefront_custom_code' OR (destination_type = 'storefront_section' AND destination_id IS NULL AND location_id IS NULL AND variant_id IS NULL AND jsonb_typeof(content_json -> 'page_slug') = 'string' AND jsonb_typeof(content_json -> 'section_id') = 'string' AND jsonb_typeof(content_json -> 'expected_page_version') = 'string' AND jsonb_typeof(content_json -> 'expected_section_digest') = 'string' AND jsonb_typeof(content_json -> 'patch_digest') = 'string' AND jsonb_typeof(content_json -> 'html') = 'string' AND jsonb_typeof(content_json -> 'css') = 'string' AND jsonb_typeof(content_json -> 'js') = 'string' AND jsonb_typeof(content_json -> 'height_mode') = 'string' AND jsonb_typeof(content_json -> 'fixed_height') = 'string' AND jsonb_typeof(content_json -> 'explanation') = 'string')`,
     ),
     check(
       "mink_drafts_title_check",
@@ -5027,13 +5031,89 @@ export const minkActionToolAccess = pgTable(
     }).onDelete("cascade"),
     check(
       "mink_action_tool_access_name_check",
-      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text, 'create_product'::text, 'create_coupon'::text, 'update_coupon'::text, 'create_customer_group'::text, 'update_customer_group'::text, 'adjust_inventory'::text, 'bulk_adjust_inventory'::text, 'transition_order_status'::text, 'publish_blog'::text, 'send_campaign'::text, 'bulk_update_prices'::text])`,
+      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text, 'create_product'::text, 'create_coupon'::text, 'update_coupon'::text, 'create_customer_group'::text, 'update_customer_group'::text, 'adjust_inventory'::text, 'bulk_adjust_inventory'::text, 'transition_order_status'::text, 'publish_blog'::text, 'send_campaign'::text, 'bulk_update_prices'::text, 'create_offer'::text, 'update_offer'::text, 'activate_offer'::text, 'apply_storefront_code'::text, 'publish_storefront_code'::text])`,
     ),
     check(
       "mink_action_tool_access_enablement_check",
       sql`enabled = false OR (enabled_by IS NOT NULL AND enabled_at IS NOT NULL)`,
     ),
   ],
+);
+
+// Owner-only opt-in watches. Browser access always passes the Mink service.
+export const minkWatches = pgTable(
+  "mink_watches",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id")
+      .notNull()
+      .references(() => stores.id, { onDelete: "cascade" }),
+    adminId: text("admin_id").notNull(),
+    creationKey: uuid("creation_key").notNull(),
+    kind: text().notNull(),
+    status: text().default("active").notNull(),
+    version: integer().default(1).notNull(),
+    scheduleJson: jsonb("schedule_json").notNull(),
+    inputJson: jsonb("input_json").notNull(),
+    nextRunAt: timestamp("next_run_at", {
+      withTimezone: true,
+      mode: "string",
+    }).notNull(),
+    lastRunId: uuid("last_run_id"),
+    processedRunId: uuid("processed_run_id"),
+    pendingRunId: uuid("pending_run_id"),
+    fingerprint: text(),
+    lastAlertAt: timestamp("last_alert_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    errorCode: text("error_code"),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => [
+    unique("mink_watches_id_store_key").on(t.id, t.storeId),
+    unique("mink_watches_creation_key").on(t.storeId, t.adminId, t.creationKey),
+    index("mink_watches_due_idx").on(t.status, t.nextRunAt),
+    index("mink_watches_owner_idx").on(t.storeId, t.adminId),
+    check(
+      "mink_watches_status_check",
+      sql`${t.status} in ('active','paused','deleted')`,
+    ),
+    check(
+      "mink_watches_kind_check",
+      sql`${t.kind} in ('brief','inventory','sales','returns','payments')`,
+    ),
+    check("mink_watches_version_check", sql`${t.version} > 0`),
+    check(
+      "mink_watches_schedule_json_check",
+      sql`jsonb_typeof(${t.scheduleJson}) = 'object'`,
+    ),
+    check(
+      "mink_watches_input_json_check",
+      sql`jsonb_typeof(${t.inputJson}) = 'object'`,
+    ),
+  ],
+);
+
+export const minkWatchEvents = pgTable(
+  "mink_watch_events",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    watchId: uuid("watch_id")
+      .notNull()
+      .references(() => minkWatches.id, { onDelete: "cascade" }),
+    event: text().notNull(),
+    version: integer().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => [index("mink_watch_events_watch_idx").on(t.watchId, t.createdAt)],
 );
 
 // Durable Phase 6 workflow runtime. These are service-only operational rows:
@@ -5046,6 +5126,7 @@ export const minkWorkflowRuns = pgTable(
     storeId: uuid("store_id").notNull(),
     adminId: text("admin_id").notNull(),
     sourceRunId: uuid("source_run_id"),
+    watchId: uuid("watch_id"),
     template: text().notNull(),
     status: text().default("queued").notNull(),
     idempotencyKey: text("idempotency_key").notNull(),
@@ -5082,6 +5163,12 @@ export const minkWorkflowRuns = pgTable(
   },
   (table) => [
     unique("mink_workflow_runs_id_store_key").on(table.id, table.storeId),
+    foreignKey({
+      columns: [table.watchId, table.storeId],
+      foreignColumns: [minkWatches.id, minkWatches.storeId],
+      name: "mink_workflow_runs_watch_fk",
+    }).onDelete("cascade"),
+    index("mink_workflow_runs_watch_idx").on(table.watchId, table.createdAt),
     unique("mink_workflow_runs_owner_idempotency_key").on(
       table.storeId,
       table.adminId,
@@ -5105,7 +5192,7 @@ export const minkWorkflowRuns = pgTable(
     }).onDelete("cascade"),
     check(
       "mink_workflow_runs_template_check",
-      sql`template = ANY (ARRAY['weekly_trading_report'::text, 'revenue_decline_investigation'::text, 'product_launch_preparation'::text, 'slow_inventory_promotion'::text, 'delayed_pickup_review'::text])`,
+      sql`template = ANY (ARRAY['weekly_trading_report'::text, 'revenue_decline_investigation'::text, 'product_launch_preparation'::text, 'slow_inventory_promotion'::text, 'delayed_pickup_review'::text, 'business_brief'::text, 'watch_response_review'::text])`,
     ),
     check(
       "mink_workflow_runs_status_check",
@@ -5130,6 +5217,64 @@ export const minkWorkflowRuns = pgTable(
     check(
       "mink_workflow_runs_idempotency_check",
       sql`char_length(btrim(idempotency_key)) BETWEEN 1 AND 200`,
+    ),
+  ],
+);
+
+export const minkWatchResponses = pgTable(
+  "mink_watch_responses",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    watchId: uuid("watch_id").notNull(),
+    adminId: text("admin_id").notNull(),
+    sourceRunId: uuid("source_run_id").notNull(),
+    signal: text().notNull(),
+    watchVersion: integer("watch_version").notNull(),
+    planHash: text("plan_hash").notNull(),
+    status: text().notNull(),
+    workflowId: uuid("workflow_id"),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => [
+    unique("mink_watch_responses_source_key").on(
+      t.watchId,
+      t.sourceRunId,
+      t.signal,
+    ),
+    foreignKey({
+      columns: [t.watchId, t.storeId],
+      foreignColumns: [minkWatches.id, minkWatches.storeId],
+      name: "mink_watch_responses_watch_fk",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [t.sourceRunId, t.storeId],
+      foreignColumns: [minkWorkflowRuns.id, minkWorkflowRuns.storeId],
+      name: "mink_watch_responses_source_fk",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [t.workflowId, t.storeId],
+      foreignColumns: [minkWorkflowRuns.id, minkWorkflowRuns.storeId],
+      name: "mink_watch_responses_workflow_fk",
+    }).onDelete("cascade"),
+    check(
+      "mink_watch_responses_status_check",
+      sql`${t.status} in ('approved','dismissed')`,
+    ),
+    check(
+      "mink_watch_responses_signal_check",
+      sql`${t.signal} in ('inventory','payments','sales','returns')`,
+    ),
+    check(
+      "mink_watch_responses_approval_check",
+      sql`(${t.status} = 'approved' AND ${t.workflowId} IS NOT NULL) OR (${t.status} = 'dismissed' AND ${t.workflowId} IS NULL)`,
+    ),
+    index("mink_watch_responses_owner_idx").on(
+      t.storeId,
+      t.adminId,
+      t.createdAt,
     ),
   ],
 );
@@ -5340,6 +5485,12 @@ export const minkActionApprovals = pgTable(
     index("mink_action_approvals_bulk_price_idx")
       .on(table.storeId, table.adminId, table.status, table.createdAt.desc())
       .where(sql`${table.toolName} = 'bulk_update_prices'`),
+    index("mink_action_approvals_storefront_code_idx")
+      .on(table.storeId, table.resourceId, table.status, table.createdAt.desc())
+      .where(sql`${table.toolName} = 'apply_storefront_code'`),
+    index("mink_action_approvals_storefront_publish_idx")
+      .on(table.storeId, table.resourceId, table.status, table.createdAt.desc())
+      .where(sql`${table.toolName} = 'publish_storefront_code'`),
     foreignKey({
       columns: [table.storeId],
       foreignColumns: [stores.id],
@@ -5362,11 +5513,11 @@ export const minkActionApprovals = pgTable(
     }).onDelete("cascade"),
     check(
       "mink_action_approvals_tool_check",
-      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text, 'create_product'::text, 'create_coupon'::text, 'update_coupon'::text, 'create_customer_group'::text, 'update_customer_group'::text, 'adjust_inventory'::text, 'bulk_adjust_inventory'::text, 'transition_order_status'::text, 'publish_blog'::text, 'send_campaign'::text, 'bulk_update_prices'::text])`,
+      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text, 'create_product'::text, 'create_coupon'::text, 'update_coupon'::text, 'create_customer_group'::text, 'update_customer_group'::text, 'adjust_inventory'::text, 'bulk_adjust_inventory'::text, 'transition_order_status'::text, 'publish_blog'::text, 'send_campaign'::text, 'bulk_update_prices'::text, 'create_offer'::text, 'update_offer'::text, 'activate_offer'::text, 'apply_storefront_code'::text, 'publish_storefront_code'::text])`,
     ),
     check(
       "mink_action_approvals_resource_type_check",
-      sql`resource_type = ANY (ARRAY['product'::text, 'coupon'::text, 'customer_group'::text, 'inventory'::text, 'inventory_bulk'::text, 'order'::text, 'blog'::text, 'campaign'::text, 'price_bulk'::text])`,
+      sql`resource_type = ANY (ARRAY['product'::text, 'coupon'::text, 'customer_group'::text, 'inventory'::text, 'inventory_bulk'::text, 'order'::text, 'blog'::text, 'campaign'::text, 'price_bulk'::text, 'offer'::text, 'storefront_section'::text, 'storefront_page'::text])`,
     ),
     check(
       "mink_action_approvals_operation_check",
@@ -5376,7 +5527,10 @@ export const minkActionApprovals = pgTable(
       "mink_action_approvals_status_check",
       sql`status = ANY (ARRAY['pending'::text, 'executed'::text, 'conflicted'::text, 'expired'::text, 'cancelled'::text])`,
     ),
-    check("mink_action_approvals_draft_version_check", sql`draft_version > 0`),
+    check(
+      "mink_action_approvals_draft_version_check",
+      sql`draft_version > 0 OR (tool_name IN ('apply_storefront_code', 'publish_storefront_code') AND draft_version = 0)`,
+    ),
     check(
       "mink_action_approvals_payload_check",
       sql`jsonb_typeof(before_json) = 'object' AND jsonb_typeof(after_json) = 'object'`,
@@ -5412,6 +5566,22 @@ export const minkActionApprovals = pgTable(
     check(
       "mink_action_approvals_bulk_price_target_check",
       sql`tool_name <> 'bulk_update_prices' OR (resource_type = 'price_bulk' AND resource_id IS NULL AND product_id IS NULL AND location_id IS NULL AND variant_id IS NULL AND result_id IS NULL AND operation = 'apply' AND source_approval_id IS NULL AND jsonb_typeof(after_json -> 'lines') = 'array' AND jsonb_array_length(after_json -> 'lines') BETWEEN 1 AND 20)`,
+    ),
+    check(
+      "mink_action_approvals_offer_budget_check",
+      sql`tool_name NOT IN ('create_offer', 'update_offer', 'activate_offer') OR operation = 'rollback' OR (coalesce(after_json ->> 'budget', '') ~ '^[0-9]+(\.[0-9]{1,2})?$' AND (after_json ->> 'budget')::numeric > 0)`,
+    ),
+    check(
+      "mink_action_approvals_offer_target_check",
+      sql`tool_name NOT IN ('create_offer', 'update_offer', 'activate_offer') OR (resource_type = 'offer' AND product_id IS NULL AND location_id IS NULL AND variant_id IS NULL)`,
+    ),
+    check(
+      "mink_action_approvals_storefront_code_target_check",
+      sql`tool_name <> 'apply_storefront_code' OR (resource_type = 'storefront_section' AND resource_id IS NOT NULL AND resource_version IS NOT NULL AND product_id IS NULL AND location_id IS NULL AND variant_id IS NULL AND operation = 'apply' AND source_approval_id IS NULL AND draft_version = 0 AND jsonb_typeof(before_json -> 'page_slug') = 'string' AND jsonb_typeof(before_json -> 'section_id') = 'string' AND jsonb_typeof(before_json -> 'section_digest') = 'string' AND jsonb_typeof(after_json -> 'section_digest') = 'string' AND ((status = 'executed' AND result_id = resource_id AND result_version IS NOT NULL) OR (status <> 'executed' AND result_id IS NULL AND result_version IS NULL)))`,
+    ),
+    check(
+      "mink_action_approvals_storefront_publish_target_check",
+      sql`tool_name <> 'publish_storefront_code' OR (resource_type = 'storefront_page' AND resource_id IS NOT NULL AND resource_version IS NOT NULL AND product_id IS NULL AND location_id IS NULL AND variant_id IS NULL AND source_approval_id IS NOT NULL AND draft_version = 0 AND jsonb_typeof(before_json -> 'sections') = 'array' AND jsonb_typeof(after_json -> 'sections') = 'array' AND jsonb_typeof(before_json -> 'sections_digest') = 'string' AND jsonb_typeof(after_json -> 'sections_digest') = 'string' AND jsonb_typeof(before_json -> 'target_section_digest') = 'string' AND jsonb_typeof(after_json -> 'target_section_digest') = 'string' AND (operation = 'rollback' OR jsonb_typeof(after_json -> 'browser_validation') = 'object') AND ((status = 'executed' AND result_id = resource_id AND result_version IS NOT NULL) OR (status <> 'executed' AND result_id IS NULL AND result_version IS NULL)))`,
     ),
   ],
 );
@@ -5491,6 +5661,12 @@ export const minkActionAudit = pgTable(
     index("mink_action_audit_bulk_price_idx")
       .on(table.storeId, table.createdAt.desc())
       .where(sql`${table.toolName} = 'bulk_update_prices'`),
+    index("mink_action_audit_storefront_code_idx")
+      .on(table.storeId, table.resourceId, table.createdAt.desc())
+      .where(sql`${table.toolName} = 'apply_storefront_code'`),
+    index("mink_action_audit_storefront_publish_idx")
+      .on(table.storeId, table.resourceId, table.createdAt.desc())
+      .where(sql`${table.toolName} = 'publish_storefront_code'`),
     foreignKey({
       columns: [table.approvalId, table.storeId],
       foreignColumns: [minkActionApprovals.id, minkActionApprovals.storeId],
@@ -5498,11 +5674,11 @@ export const minkActionAudit = pgTable(
     }).onDelete("restrict"),
     check(
       "mink_action_audit_tool_check",
-      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text, 'create_product'::text, 'create_coupon'::text, 'update_coupon'::text, 'create_customer_group'::text, 'update_customer_group'::text, 'adjust_inventory'::text, 'bulk_adjust_inventory'::text, 'transition_order_status'::text, 'publish_blog'::text, 'send_campaign'::text, 'bulk_update_prices'::text])`,
+      sql`tool_name = ANY (ARRAY['apply_product_description'::text, 'apply_product_seo'::text, 'create_product'::text, 'create_coupon'::text, 'update_coupon'::text, 'create_customer_group'::text, 'update_customer_group'::text, 'adjust_inventory'::text, 'bulk_adjust_inventory'::text, 'transition_order_status'::text, 'publish_blog'::text, 'send_campaign'::text, 'bulk_update_prices'::text, 'create_offer'::text, 'update_offer'::text, 'activate_offer'::text, 'apply_storefront_code'::text, 'publish_storefront_code'::text])`,
     ),
     check(
       "mink_action_audit_resource_type_check",
-      sql`resource_type = ANY (ARRAY['product'::text, 'coupon'::text, 'customer_group'::text, 'inventory'::text, 'inventory_bulk'::text, 'order'::text, 'blog'::text, 'campaign'::text, 'price_bulk'::text])`,
+      sql`resource_type = ANY (ARRAY['product'::text, 'coupon'::text, 'customer_group'::text, 'inventory'::text, 'inventory_bulk'::text, 'order'::text, 'blog'::text, 'campaign'::text, 'price_bulk'::text, 'offer'::text, 'storefront_section'::text, 'storefront_page'::text])`,
     ),
     check(
       "mink_action_audit_operation_check",
@@ -5540,6 +5716,14 @@ export const minkActionAudit = pgTable(
     check(
       "mink_action_audit_bulk_price_target_check",
       sql`tool_name <> 'bulk_update_prices' OR (resource_type = 'price_bulk' AND resource_id IS NULL AND product_id IS NULL AND location_id IS NULL AND variant_id IS NULL AND result_id IS NULL AND operation = 'apply' AND jsonb_typeof(after_json -> 'lines') = 'array' AND jsonb_array_length(after_json -> 'lines') BETWEEN 1 AND 20)`,
+    ),
+    check(
+      "mink_action_audit_storefront_code_target_check",
+      sql`tool_name <> 'apply_storefront_code' OR (resource_type = 'storefront_section' AND resource_id IS NOT NULL AND resource_version_before IS NOT NULL AND product_id IS NULL AND location_id IS NULL AND variant_id IS NULL AND operation = 'apply' AND jsonb_typeof(before_json -> 'page_slug') = 'string' AND jsonb_typeof(before_json -> 'section_id') = 'string' AND jsonb_typeof(before_json -> 'section_digest') = 'string' AND jsonb_typeof(after_json -> 'section_digest') = 'string' AND ((outcome = 'executed' AND result_id = resource_id AND resource_version_after IS NOT NULL) OR (outcome <> 'executed' AND result_id IS NULL)))`,
+    ),
+    check(
+      "mink_action_audit_storefront_publish_target_check",
+      sql`tool_name <> 'publish_storefront_code' OR (resource_type = 'storefront_page' AND resource_id IS NOT NULL AND resource_version_before IS NOT NULL AND product_id IS NULL AND location_id IS NULL AND variant_id IS NULL AND jsonb_typeof(before_json -> 'sections') = 'array' AND jsonb_typeof(after_json -> 'sections') = 'array' AND jsonb_typeof(before_json -> 'sections_digest') = 'string' AND jsonb_typeof(after_json -> 'sections_digest') = 'string' AND ((outcome = 'executed' AND result_id = resource_id AND resource_version_after IS NOT NULL) OR (outcome <> 'executed' AND result_id IS NULL)))`,
     ),
   ],
 );
@@ -6615,6 +6799,11 @@ export const activityEvents = pgTable(
       table.createdAt,
     ),
     index("activity_events_created_idx").on(table.createdAt),
+    uniqueIndex("activity_events_mink_watch_ready_key")
+      .on(table.storeId, table.type, table.subjectId)
+      .where(
+        sql`${table.type} = 'mink.watch_ready' AND ${table.subjectId} IS NOT NULL`,
+      ),
     uniqueIndex("activity_events_mink_workflow_completion_key")
       .on(table.storeId, table.type, table.subjectId)
       .where(sql`type = 'mink.workflow_completed' AND subject_id IS NOT NULL`),
@@ -7047,64 +7236,73 @@ export const planPrices = pgTable("plan_prices", {
 // Two tables because they are two facts: a return can be refunded across
 // several tenders, and a refund can happen with no return (a cancellation).
 
-export const orderReturns = pgTable("order_returns", {
-  id: uuid().defaultRandom().primaryKey().notNull(),
-  storeId: uuid("store_id").notNull(),
-  orderId: uuid("order_id").notNull(),
-  /** Where the goods came back TO — not necessarily where they were sold. */
-  locationId: uuid("location_id"),
-  shiftId: uuid("shift_id"),
-  amount: numeric({ precision: 12, scale: 2, mode: "number" }).notNull(),
-  tax: numeric({ precision: 12, scale: 2, mode: "number" }).notNull(),
-  total: numeric({ precision: 12, scale: 2, mode: "number" }).notNull(),
-  /** The customer's own words. `reasonCode` is the one that decides fees. */
-  reason: text(),
-  actor: text(),
-  createdAt: timestamp("created_at", {
-    withTimezone: true,
-    mode: "string",
-  }).defaultNow(),
-  // ── Request lifecycle (returns_02_requests.sql) ─────────────────────────
-  /** requested → approved → received → completed, or rejected/cancelled.
-   *  DEFAULTS to 'completed': every pre-existing row is a finished till
-   *  return, and pos-return-actions still doesn't set it. */
-  status: text().notNull().default("completed"),
-  /** 'pos' (rung at a counter) | 'online' (asked from the order page). */
-  channel: text().notNull().default("pos"),
-  requestedBy: text("requested_by"),
-  /** A key from lib/returns/reasons.ts — decides fees and who pays postage. */
-  reasonCode: text("reason_code"),
-  photos: jsonb().notNull().default([]),
-  /** Snapshotted at decision time, never recomputed. */
-  restockingFee: numeric("restocking_fee", {
-    precision: 12,
-    scale: 2,
-    mode: "number",
-  })
-    .notNull()
-    .default(0),
-  returnShippingFee: numeric("return_shipping_fee", {
-    precision: 12,
-    scale: 2,
-    mode: "number",
-  })
-    .notNull()
-    .default(0),
-  reviewedBy: text("reviewed_by"),
-  reviewedAt: timestamp("reviewed_at", {
-    withTimezone: true,
-    mode: "string",
-  }),
-  /** Shown to the CUSTOMER, so a rejection is never a silent no. */
-  reviewNote: text("review_note"),
-  receivedAt: timestamp("received_at", {
-    withTimezone: true,
-    mode: "string",
-  }),
-  /** The replacement order (returns_03_exchanges.sql). An exchange is a return
-   *  PLUS a new order, never a third entity. NULL until the goods arrive. */
-  exchangeOrderId: uuid("exchange_order_id"),
-});
+export const orderReturns = pgTable(
+  "order_returns",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    storeId: uuid("store_id").notNull(),
+    orderId: uuid("order_id").notNull(),
+    /** Where the goods came back TO — not necessarily where they were sold. */
+    locationId: uuid("location_id"),
+    shiftId: uuid("shift_id"),
+    amount: numeric({ precision: 12, scale: 2, mode: "number" }).notNull(),
+    tax: numeric({ precision: 12, scale: 2, mode: "number" }).notNull(),
+    total: numeric({ precision: 12, scale: 2, mode: "number" }).notNull(),
+    /** The customer's own words. `reasonCode` is the one that decides fees. */
+    reason: text(),
+    actor: text(),
+    createdAt: timestamp("created_at", {
+      withTimezone: true,
+      mode: "string",
+    }).defaultNow(),
+    // ── Request lifecycle (returns_02_requests.sql) ─────────────────────────
+    /** requested → approved → received → completed, or rejected/cancelled.
+     *  DEFAULTS to 'completed': every pre-existing row is a finished till
+     *  return, and pos-return-actions still doesn't set it. */
+    status: text().notNull().default("completed"),
+    /** 'pos' (rung at a counter) | 'online' (asked from the order page). */
+    channel: text().notNull().default("pos"),
+    requestedBy: text("requested_by"),
+    /** A key from lib/returns/reasons.ts — decides fees and who pays postage. */
+    reasonCode: text("reason_code"),
+    photos: jsonb().notNull().default([]),
+    /** Snapshotted at decision time, never recomputed. */
+    restockingFee: numeric("restocking_fee", {
+      precision: 12,
+      scale: 2,
+      mode: "number",
+    })
+      .notNull()
+      .default(0),
+    returnShippingFee: numeric("return_shipping_fee", {
+      precision: 12,
+      scale: 2,
+      mode: "number",
+    })
+      .notNull()
+      .default(0),
+    reviewedBy: text("reviewed_by"),
+    reviewedAt: timestamp("reviewed_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    /** Shown to the CUSTOMER, so a rejection is never a silent no. */
+    reviewNote: text("review_note"),
+    receivedAt: timestamp("received_at", {
+      withTimezone: true,
+      mode: "string",
+    }),
+    /** The replacement order (returns_03_exchanges.sql). An exchange is a return
+     *  PLUS a new order, never a third entity. NULL until the goods arrive. */
+    exchangeOrderId: uuid("exchange_order_id"),
+  },
+  (table) => [
+    index("mink_brief_returns_store_created_idx").on(
+      table.storeId,
+      table.createdAt,
+    ),
+  ],
+);
 
 export const orderReturnItems = pgTable("order_return_items", {
   id: uuid().defaultRandom().primaryKey().notNull(),
@@ -7695,5 +7893,71 @@ export const orderItemOffers = pgTable(
       name: "order_item_offers_order_item_id_fkey",
     }).onDelete("cascade"),
     unique("order_item_offers_item_key").on(table.orderItemId, table.offerId),
+  ],
+);
+
+// Phase 8D: service-only, owner-scoped approved reference context.
+export const minkMemories = pgTable(
+  "mink_memories",
+  {
+    id: uuid().primaryKey(),
+    storeId: uuid("store_id")
+      .notNull()
+      .references(() => stores.id, { onDelete: "cascade" }),
+    adminId: text("admin_id").notNull(),
+    title: text().notNull(),
+    content: text().notNull(),
+    kind: text().notNull(),
+    version: integer().notNull().default(1),
+    scopeHash: text("scope_hash").notNull(),
+    requestKey: uuid("request_key").notNull(),
+    requestHash: text("request_hash").notNull(),
+    expiresAt: timestamp("expires_at", {
+      withTimezone: true,
+      mode: "string",
+    }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("mink_memories_owner_idx").on(
+      table.storeId,
+      table.adminId,
+      table.updatedAt.desc(),
+    ),
+    index("mink_memories_expiry_idx").on(table.expiresAt),
+    check(
+      "mink_memories_text_check",
+      sql`char_length(${table.title}) BETWEEN 1 AND 80 AND char_length(${table.content}) BETWEEN 1 AND 600`,
+    ),
+    check(
+      "mink_memories_kind_check",
+      sql`${table.kind} IN ('preference','brand_voice','business_context')`,
+    ),
+    check("mink_memories_version_check", sql`${table.version} > 0`),
+    check(
+      "mink_memories_hash_check",
+      sql`${table.scopeHash} ~ '^[a-f0-9]{64}$' AND ${table.requestHash} ~ '^[a-f0-9]{64}$'`,
+    ),
+  ],
+);
+export const minkMemoryDeletions = pgTable(
+  "mink_memory_deletions",
+  {
+    id: uuid().notNull(),
+    storeId: uuid("store_id")
+      .notNull()
+      .references(() => stores.id, { onDelete: "cascade" }),
+    adminId: text("admin_id").notNull(),
+    deletedAt: timestamp("deleted_at", { withTimezone: true, mode: "string" })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.storeId, table.adminId, table.id] }),
   ],
 );

@@ -18,6 +18,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 /** What each `withService` callback should see. Set per test. */
 const state = vi.hoisted(() => ({
+  collectBrief: vi.fn(),
+  collectResponse: vi.fn(),
   selectRows: [] as any[][],
   executeRows: [] as any[][],
   selectCalls: 0,
@@ -76,6 +78,12 @@ const db = {
 vi.mock("@/lib/db/client", () => ({
   withService: vi.fn((fn: any) => Promise.resolve(fn(db))),
 }));
+vi.mock("./business-brief-data", () => ({
+  collectBusinessBriefSnapshot: state.collectBrief,
+}));
+vi.mock("./proactive-response-data", () => ({
+  collectProactiveResponse: state.collectResponse,
+}));
 vi.mock("@/lib/mink/config", () => ({
   getMinkConfig: vi.fn(() => ({ enabled: true, betaRequireInvite: false })),
 }));
@@ -111,6 +119,7 @@ function resetState() {
   state.executeCalls = 0;
   state.setCalls = [];
   state.throwAtSelect = null;
+  state.collectResponse.mockReset();
 }
 
 describe("the Mink workflow worker on an idle tick", () => {
@@ -218,6 +227,322 @@ const WEEKLY_INPUT = {
   requesterEmail: null,
   requestedAt: "2026-09-01T00:00:00.000Z",
 };
+
+describe("Phase 8A durable brief worker", () => {
+  const shop = "11111111-1111-4111-8111-111111111111";
+  const delhi = "22222222-2222-4222-8222-222222222222";
+  const input = {
+    ...WEEKLY_INPUT,
+    period: "daily",
+    defaultLowStockThreshold: 5,
+    locationIds: [shop, delhi],
+  };
+  const claim = {
+    id: "brief-1",
+    storeId: "store-1",
+    adminId: "admin-1",
+    template: "business_brief",
+    status: "running",
+    inputJson: input,
+    currentStep: 0,
+    totalSteps: 3,
+    attemptCount: 1,
+    maxAttempts: 6,
+    leaseOwner: "worker",
+    cancelRequestedAt: null,
+  };
+  const lease = [{ id: "brief-1", cancelRequestedAt: null }];
+  const active = [{ id: shop }, { id: delhi }];
+  const permissions = {
+    analytics: ["view"],
+    products: ["view"],
+    inventory: ["view"],
+    orders: ["view"],
+  };
+  const snapshot = {
+    period: "daily",
+    rangeLabel: "Yesterday",
+    comparisonLabel: "Previous day",
+    netSales: 800,
+    previousNetSales: 1000,
+    orders: 8,
+    previousOrders: 10,
+    returns: 0,
+    previousReturns: 0,
+    createdOrders: 10,
+    failedPaymentOrders: 0,
+    locations: [],
+    timeZone: "Asia/Kolkata",
+    currency: "INR",
+    dataAsOf: input.requestedAt,
+  };
+
+  beforeEach(() => {
+    resetState();
+    state.collectBrief.mockReset();
+    state.collectBrief.mockResolvedValue(snapshot);
+    state.executeRows = [[claim], []];
+  });
+
+  it("collects a checkpoint under revalidated requesting identity and scope", async () => {
+    state.selectRows = [
+      [],
+      [{ role: "superadmin", isSuspended: false }],
+      active,
+      lease,
+      lease,
+      [],
+    ];
+    const result = await runMinkWorkflowWorker(1);
+    expect(result.stepsCompleted).toBe(1);
+    expect(state.collectBrief).toHaveBeenCalledWith(
+      "store-1",
+      { uid: "admin-1", email: null },
+      input,
+      { locationIds: [shop, delhi], locationLabel: "All locations" },
+    );
+    expect(state.setCalls).toContainEqual(
+      expect.objectContaining({ outputJson: snapshot, status: "completed" }),
+    );
+    expect(state.setCalls).toContainEqual(
+      expect.objectContaining({
+        currentStep: 1,
+        attemptCount: 0,
+        status: "queued",
+      }),
+    );
+  });
+
+  it("runs an approved response with its exact captured location scope", async () => {
+    const responseInput = { ...input, responseId: delhi, signal: "inventory" };
+    state.executeRows = [
+      [
+        {
+          ...claim,
+          template: "watch_response_review",
+          watchId: shop,
+          inputJson: responseInput,
+          totalSteps: 2,
+        },
+      ],
+    ];
+    state.selectRows = [
+      [],
+      [{ id: shop }],
+      [{ role: "superadmin" }],
+      active,
+      lease,
+      lease,
+      [],
+    ];
+    state.collectResponse.mockResolvedValue({ signal: "inventory", rows: [] });
+    expect((await runMinkWorkflowWorker(1)).stepsCompleted).toBe(1);
+    expect(state.collectResponse).toHaveBeenCalledWith(
+      "store-1",
+      "admin-1",
+      responseInput,
+      { locationIds: [shop, delhi], locationLabel: "All locations" },
+    );
+  });
+  it.each([0, 1])(
+    "stops an unapproved, paused or version-invalid response before step %i",
+    async (currentStep) => {
+      state.executeRows = [
+        [
+          {
+            ...claim,
+            template: "watch_response_review",
+            watchId: shop,
+            inputJson: { ...input, responseId: delhi, signal: "inventory" },
+            totalSteps: 2,
+            currentStep,
+          },
+        ],
+      ];
+      state.selectRows = [[], [], lease, []];
+      expect((await runMinkWorkflowWorker(1)).workflowsCancelled).toBe(1);
+      expect(state.collectResponse).not.toHaveBeenCalled();
+    },
+  );
+  it("rejects a response workflow with no backing watch", async () => {
+    state.executeRows = [
+      [
+        {
+          ...claim,
+          template: "watch_response_review",
+          inputJson: { ...input, responseId: delhi, signal: "inventory" },
+          totalSteps: 2,
+        },
+      ],
+    ];
+    state.selectRows = [[], lease, []];
+    expect((await runMinkWorkflowWorker(1)).workflowsCancelled).toBe(1);
+    expect(state.collectResponse).not.toHaveBeenCalled();
+  });
+
+  it("resumes analysis from its persisted snapshot without recollecting", async () => {
+    state.executeRows = [[{ ...claim, currentStep: 1 }]];
+    state.selectRows = [
+      [],
+      [{ role: "superadmin" }],
+      active,
+      lease,
+      [{ output: snapshot }],
+      lease,
+      [],
+    ];
+    const result = await runMinkWorkflowWorker(1);
+    expect(result.stepsCompleted).toBe(1);
+    expect(state.collectBrief).not.toHaveBeenCalled();
+    expect(state.setCalls).toContainEqual(
+      expect.objectContaining({
+        outputJson: expect.objectContaining({
+          rulesVersion: "business-brief-v1",
+          signals: expect.any(Array),
+        }),
+      }),
+    );
+  });
+
+  it("finalises the existing analysed result without another source or model call", async () => {
+    state.executeRows = [[{ ...claim, currentStep: 2 }]];
+    const analysed = {
+      ...snapshot,
+      rulesVersion: "business-brief-v1",
+      signals: [],
+      limitations: [],
+    };
+    state.selectRows = [
+      [],
+      [{ role: "superadmin" }],
+      active,
+      lease,
+      [{ output: analysed }],
+      lease,
+      [],
+    ];
+    const result = await runMinkWorkflowWorker(1);
+    expect(result.workflowsCompleted).toBe(1);
+    expect(state.collectBrief).not.toHaveBeenCalled();
+    expect(state.setCalls).toContainEqual(
+      expect.objectContaining({ resultJson: analysed, status: "completed" }),
+    );
+  });
+
+  it.each([0, 1, 2])(
+    "cancels step %i on narrowed authority without consuming a broad checkpoint",
+    async (currentStep) => {
+      state.executeRows = [[{ ...claim, currentStep }]];
+      state.selectRows = [
+        [],
+        [{ role: "staff" }],
+        [{ permissions }],
+        active,
+        [{ locationId: shop }],
+        lease,
+        [],
+      ];
+      const result = await runMinkWorkflowWorker(1);
+      expect(result.workflowsCancelled).toBe(1);
+      expect(state.collectBrief).not.toHaveBeenCalled();
+      expect(state.setCalls).toContainEqual(
+        expect.objectContaining({
+          errorCode: "authorization_revoked",
+          status: "cancelled",
+        }),
+      );
+    },
+  );
+
+  it("cancels if a captured physical location becomes inactive", async () => {
+    state.selectRows = [
+      [],
+      [{ role: "superadmin" }],
+      [{ id: shop }],
+      lease,
+      [],
+    ];
+    expect((await runMinkWorkflowWorker(1)).workflowsCancelled).toBe(1);
+    expect(state.collectBrief).not.toHaveBeenCalled();
+  });
+
+  it("rechecks all four View permissions before execution", async () => {
+    state.selectRows = [
+      [],
+      [{ role: "staff" }],
+      [{ permissions: { ...permissions, orders: [] } }],
+      lease,
+      [],
+    ];
+    expect((await runMinkWorkflowWorker(1)).workflowsCancelled).toBe(1);
+    expect(state.collectBrief).not.toHaveBeenCalled();
+  });
+
+  it("cancels a watch run when its owner lost Dashboard View", async () => {
+    state.executeRows = [[{ ...claim, watchId: shop }]];
+    state.selectRows = [
+      [],
+      [{ id: shop }],
+      [{ role: "staff" }],
+      [{ permissions }],
+      lease,
+      [],
+    ];
+    expect((await runMinkWorkflowWorker(1)).workflowsCancelled).toBe(1);
+    expect(state.collectBrief).not.toHaveBeenCalled();
+    expect(state.setCalls).toContainEqual(
+      expect.objectContaining({ errorCode: "authorization_revoked" }),
+    );
+  });
+
+  it.each([0, 1, 2])(
+    "stops an inactive watch before step %i reads a checkpoint",
+    async (currentStep) => {
+      state.executeRows = [[{ ...claim, watchId: shop, currentStep }]];
+      state.selectRows = [[], [], lease, []];
+      expect((await runMinkWorkflowWorker(1)).workflowsCancelled).toBe(1);
+      expect(state.collectBrief).not.toHaveBeenCalled();
+      expect(state.setCalls).toContainEqual(
+        expect.objectContaining({ errorCode: "watch_inactive" }),
+      );
+    },
+  );
+
+  it("retries a failed source instead of completing a zero-valued brief", async () => {
+    state.collectBrief.mockRejectedValue(new Error("inventory unavailable"));
+    state.selectRows = [[], [{ role: "superadmin" }], active, lease, lease, []];
+    const result = await runMinkWorkflowWorker(1);
+    expect(result.retriesScheduled).toBe(1);
+    expect(result.workflowsCompleted).toBe(0);
+    expect(state.setCalls.some((payload) => payload.resultJson)).toBe(false);
+  });
+
+  it("honours cancellation before reading business data", async () => {
+    state.executeRows = [[{ ...claim, cancelRequestedAt: input.requestedAt }]];
+    state.selectRows = [[], lease, []];
+    expect((await runMinkWorkflowWorker(1)).workflowsCancelled).toBe(1);
+    expect(state.collectBrief).not.toHaveBeenCalled();
+  });
+
+  it("refuses completed brief readback after losing Orders View", async () => {
+    state.selectRows = [
+      [{ ...claim, status: "completed", resultJson: snapshot }],
+    ];
+    await expect(
+      getMinkWorkflow(
+        {
+          storeId: "store-1",
+          adminId: "admin-1",
+          isSuperadmin: false,
+          permissions: { ...permissions, orders: [] },
+          locationIds: null,
+        } as any,
+        "brief-1",
+        false,
+      ),
+    ).rejects.toMatchObject({ status: 403 });
+  });
+});
 
 describe("★★ the workflow retry budget is per step", () => {
   beforeEach(() => {
@@ -363,6 +688,28 @@ describe("★★ reading a completed workflow re-checks the captured scope", () 
       [],
     ];
   }
+
+  it.each([getMinkWorkflow, cancelMinkWorkflow, resumeMinkWorkflow])(
+    "response read/cancel/resume revalidates database authority before returning data (%#)",
+    async (operation) => {
+      seedRun({});
+      const run = state.selectRows[0][0];
+      run.template = "watch_response_review";
+      run.inputJson = {
+        ...WEEKLY_INPUT,
+        period: "daily",
+        defaultLowStockThreshold: 5,
+        responseId: "11111111-1111-4111-8111-111111111111",
+        signal: "inventory",
+      };
+      // The trusted actor had access, but the live admin row was removed.
+      state.selectRows[1] = [];
+      await expect(operation(actor(null, true), "wf-1")).rejects.toThrow(
+        /response scope is no longer accessible/i,
+      );
+      expect(state.setCalls).toHaveLength(0);
+    },
+  );
 
   it("★★ refuses a store-wide result to an actor now bound to one location", async () => {
     // The exact scenario: queued while unrestricted, read after narrowing.

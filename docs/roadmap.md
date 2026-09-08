@@ -56,6 +56,8 @@ is large enough to need its own decisions doc BEFORE any of it is built.
 | —      | Mink location-aware SKU catalogue health + structured answer UI   | M    | ✅ done |
 | —      | Mink ambiguous-stock clarification + per-location comparison      | M    | ✅ done |
 | —      | Mink durable workflows 6A–6E, including delayed pickup review     | L    | ✅ done |
+| —      | Mink read-only Website Builder context + sandbox contract (7A)    | M    | ✅ done |
+| —      | Mink private storefront code proposal + isolated preview (7B)     | M    | ✅ done |
 | —      | Locations fulfilment navigation and aligned routing workspace     | S    | ✅ done |
 | **P1** | **Release verification and high-risk action hardening**           | XL   | ◐ part  |
 | **0**  | **Platform → merchant billing rebuild**                           | XL   | ◐ part  |
@@ -1960,6 +1962,54 @@ provider-sized batches, and retrieval limits each article to its best three
 semantic sections before cross-article fusion. The next retrieval step is an
 operator-owned golden query set with measured recall/precision before changing
 the default similarity threshold or introducing any approximate vector index.
+
+Mink storefront coding Phase 7D is now implemented behind a second independent,
+default-off operator gate. After the signed-in proposal owner completes the
+Phase 7C draft save, the card runs static checks plus opaque-origin, no-network
+browser checks at exact 1,280 px desktop and 390 px mobile widths. A new
+five-minute approval binds that evidence, the completed save, complete private
+draft/current-live snapshots and the exact page version. One optimistic,
+idempotent transaction copies only the checked snapshot to
+`published_sections`, updates publication state/time and records an append-only
+outcome; no model tool can click or execute it. A separate five-minute rollback
+approval restores the exact previous published snapshot only while the live
+page is unchanged and never rewinds the private Builder draft. Phase 7 exit
+validation is next; media generation and placement require their own future
+provenance, moderation, storage and approval boundary.
+
+The Builder chat visibility gap is fixed: on desktop the shared Mink panel
+floats above the fixed editor rather than opening behind it; phone full-screen
+chat and maximization are unchanged. No editor remount or new model authority
+is introduced. Migration `20260905_0080_mink_builder_chat_help` documents this
+flow. Echos acceptance prompts now use ordinary merchant wording and short
+follow-ups, with technical attack probes in a separate appendix.
+
+Mink Phase 8A adds requested daily/weekly business briefs on the existing
+restart-safe workflow queue. Daily covers yesterday; weekly covers the last
+7 completed local days, compared with preceding local calendar days. The four
+checks cover sales, current stock separately by location, return-record
+activity (original order location) and current failed-payment status for
+orders created in the historical window. Insufficient baselines are labelled,
+not guessed. Analytics/Products/Inventory/Orders View and captured scope are
+revalidated; scope narrowing cancels a checkpointed brief. No model calls run
+in the worker. Migration `20260905_0081_mink_phase_8a_business_briefs` adds the
+template and Help guide. Echos tests are ECH-P8A-01–24. Phase 8B adds explicitly
+enabled owner-private daily/weekly watches, quiet hours, episode/location-count
+deduplication, pause/resume/delete and captured-scope checks. The existing
+workflow heartbeat queues bounded checks without extra model calls. Migration
+0082 and ECH-P8B-01–30 cover deployment acceptance. Phase 8C now adds evidenced,
+ranked response plans with explicit human approval/dismissal, 24-hour expiry,
+idempotent bounded read-only investigations and fresh evidence checks. Inventory
+details remain per-location (20 rows/3 locations); returns/payments cap at 20
+records without contacts. No business mutation is authorized by this approval.
+Migration 0083 is owner-reported applied; ECH-P8C cases still require deployment
+acceptance. Phase 8D now adds explicitly approved owner/store memories with
+expiry, editing/deletion, exact-authority context checks and no model mutation
+tool. Reviewed local .txt/.md text may be added to the composer; import never
+sends, saves memory or grants action authority. Migration 0084 and ECH-P8D
+prompts cover this rollout. Optional screenshot/PDF/voice channels are a separate
+unbuilt 8E milestone, not capabilities of the text importer. Conversion monitoring
+requires a separately validated source and is not claimed by Phase 8A.
 
 ### Returns, exchanges, BORIS, credit notes
 

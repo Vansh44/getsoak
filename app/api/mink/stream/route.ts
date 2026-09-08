@@ -17,6 +17,9 @@ import { rateLimit } from "@/lib/rate-limit";
 import { rejectForeignMinkOrigin } from "@/lib/mink/request-origin";
 import { normalizeMinkPageContext } from "@/lib/mink/page-context";
 import type { MinkRunProgress } from "@/lib/mink/types";
+import { selectMinkThinkingLevel } from "@/lib/mink/thinking";
+import { loadMinkMemoryReference } from "@/lib/mink/memories";
+import { readMinkBoundedJson } from "@/lib/mink/bounded-json";
 
 export const runtime = "nodejs";
 
@@ -75,11 +78,15 @@ export async function POST(request: Request) {
     }
 
     const declarations = minkReadToolRegistry.declarationsFor(actor);
+    // Fresh owner-only context before any credit/run reservation. No cache and no silent fallback on a failed read.
+    const memoryReference = await loadMinkMemoryReference(actor);
+    const thinkingLevel = selectMinkThinkingLevel(message, declarations);
     const started = await startMinkRun({
       actor,
       conversationId,
       message,
       model: config.model,
+      thinkingLevel,
     });
     const runActor = { ...actor, runId: started.runId };
     const abortController = new AbortController();
@@ -96,6 +103,8 @@ export async function POST(request: Request) {
       session = createVertexMinkSession(config, runActor, declarations, {
         history: started.history,
         abortSignal: abortController.signal,
+        thinkingLevel,
+        memoryReference,
       });
     } catch (error) {
       await failMinkRun({
@@ -194,6 +203,7 @@ export async function POST(request: Request) {
           });
           send("usage", {
             model: result.model,
+            thinkingLevel,
             steps: result.steps,
             toolCalls: result.toolCalls,
             retryCount: result.retryCount,
@@ -330,7 +340,7 @@ async function readRequest(request: Request): Promise<{
   conversationId?: string;
   pageContext: ReturnType<typeof normalizeMinkPageContext>;
 }> {
-  const body = (await request.json()) as unknown;
+  const body = await readMinkBoundedJson(request, MAX_BODY_BYTES);
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     throw new SyntaxError("Request body must be a JSON object.");
   }

@@ -1,6 +1,6 @@
 # Mink AI Dashboard Agent — Architecture and Delivery Plan
 
-> **Status:** Phases 0–4, Phases 5A–5F and Phases 6A–6E are implemented in code. Phase 2
+> **Status:** Phases 0–4, Phases 5A–5F, Phases 6A–6E, Phases 7A–7D and Phase 8A are implemented in code. Phase 2
 > remains the invited read-only merchant beta. Phase 3 adds a separate,
 > fail-closed operator opt-in
 > for private versioned drafts and atomic weighted credits through migration
@@ -47,13 +47,25 @@
 > Migration `20260903_0074_mink_phase_6e_delayed_pickups` adds a bounded,
 > PII-minimized delayed-pickup review with private preparation-delay copy and
 > duplicate-safe handoff to StoreMink's existing one-time reminder sweep.
+> Migration `20260904_0076_mink_phase_7a_builder_context_help` documents the
+> Phase 7A permission-gated, current-store Website Builder context readers and
+> validation-only custom-code sandbox contract.
+> Migration `20260904_0077_mink_phase_7b_storefront_code_preview` adds the
+> constrained private-proposal draft kind and publishes the Phase 7B
+> permission, validation, isolation, credit and no-write contract.
+> Migration `20260904_0078_mink_phase_7c_builder_draft_save` adds the
+> default-off action vocabulary, exact-target approval/audit constraints,
+> partial indexes and guarded private Builder draft-save guidance.
+> Migration `20260904_0079_mink_phase_7d_storefront_publication` adds the
+> independent publication gate, full-page snapshot constraints and checked
+> publication/exact-rollback Help contract.
 > No transfer,
 > cancellation, refund, payment/shipment/pickup/POS lifecycle mutation, product/page/
-> storefront or bulk publication, arbitrary-recipient or direct customer
+> bulk or unrestricted storefront publication, arbitrary-recipient or direct customer
 > contact, membership, unbounded catalogue repricing or arbitrary-code authority is
 > present.
 >
-> **Plan date:** 2026-09-03
+> **Plan date:** 2026-09-04
 >
 > **Platform constraint:** Mink AI must run on Google Cloud Vertex AI / Gemini
 > Enterprise Agent Platform. OpenAI models are out of scope.
@@ -111,7 +123,7 @@ guarded-action slice now include:
 - a page-gated operator inspector at `/dashboard/mink` for redacted status,
   latency, retries, tool names, tokens and cost—never conversation content or
   provider reasoning;
-- a 64-case live evaluation corpus and `npm run mink:eval` gate for tool choice,
+- a 73-case live evaluation corpus and `npm run mink:eval` gate for tool choice,
   security refusals, malformed calls, latency and manual grounding review;
 - a phase-wise manual acceptance catalogue in
   `docs/mink-ai-test-prompts.md` covering read prompts, runtime UX, permissions,
@@ -1244,6 +1256,20 @@ Exit criteria:
 Merchant coding scope is the Website Builder and sandboxed custom-code
 sections—not StoreMink platform development.
 
+**Implementation split:** Phases 7A, 7B, 7C and 7D are built. Phase 7A adds read-only
+builder context and the strict patch/sandbox contract. Phase 7B adds one
+immutable private generated-code proposal against an existing custom-code
+section plus a network-isolated preview, without builder save or publication
+authority. Phase 7C adds a separately operator-gated, five-minute human
+approval that saves the exact reviewed replacement to one existing private
+Builder draft section with idempotency, transaction-level conflict protection
+and append-only audit outcomes. It cannot publish. Phase 7D adds a second
+default-off, human-only publication boundary: static accessibility/responsive
+validation, isolated current-browser checks at exact desktop/mobile widths, a
+new five-minute approval tied to the completed draft save and complete
+draft/live snapshots, atomic publication and a separately approved exact
+rollback.
+
 Deliver:
 
 - builder-context read tools for page, theme, sections and brand tokens;
@@ -1256,6 +1282,99 @@ Deliver:
 - Gemini 3.7 Flash `HIGH` for hard code tasks;
 - bounded code execution only for validation, never with production secrets or
   database/network credentials.
+
+Phase 7A delivered:
+
+- four model-visible tools available only with Website Builder View:
+  `list_storefront_pages`, `get_storefront_page_context`,
+  `get_storefront_section_context` and `get_storefront_design_context`;
+- service-role reads with a second builder-permission check and an explicit
+  trusted `store_id` predicate on every query; tenant/admin IDs never enter a
+  model-controlled schema;
+- exact `home`/page-slug and section-ID resolution, microsecond-preserving page
+  versions, canonical SHA-256 section digests and fail-closed validation of
+  stored draft/published section arrays;
+- bounded page/section summaries and safe brand, pinned-theme design-token and
+  sanitized draft/published header/footer context. Private brand contact,
+  social, raw settings and cross-store values are omitted;
+- custom-code metadata by default and at most one explicitly requested
+  HTML/CSS/JS field in resumable 8,000-character chunks; returned merchant
+  content is labelled untrusted and is never executed;
+- a strict schema-versioned future patch contract bound to one exact page
+  version and section digest, with per-field/combined size limits and rejection
+  of network, cookie/storage, parent-window, dynamic-evaluation, worker,
+  active-embed and unsafe CSS capabilities;
+- a validation-only sandbox declaration for the future proposal boundary and
+  explicit false authority for save, publish, repository, shell and deployment
+  operations;
+- structured storefront record cards, versioned prompt/tool telemetry, focused
+  unit/security tests, live eval routes and literal Echos acceptance prompts.
+
+Phase 7A intentionally performs no model-generated code execution and exposes
+no proposal, preview, draft-save, publish or rollback endpoint. The validator is
+an internal contract for the later proposal path; merely returning it to the
+model does not grant authority.
+
+Phase 7B delivered:
+
+- `propose_storefront_custom_code`, exposed only with Mink drafting and Website
+  Builder Manage, for one existing custom-code section in the authenticated
+  current store;
+- an exact page-version plus canonical section-digest recheck before weighted
+  credit charging, with no model-controlled tenant or actor selector and no
+  fuzzy page/section fallback;
+- immutable private proposal persistence at 5 AI credits. The streamed and
+  restored artifact contains only metadata and digests; code is loaded later
+  through an owner-scoped, rate-limited, no-store endpoint;
+- byte-preserving HTML/CSS/JavaScript storage, 64-KiB per-field and 96-KiB
+  combined bounds, unknown-field rejection, and deterministic rejection of
+  network, external-resource, storage, cookie, parent/opener, messaging,
+  navigation, evaluation, worker, form, frame and unsafe-CSS capabilities;
+- a desktop/mobile preview in an opaque-origin iframe with only
+  `sandbox="allow-scripts"`, no popup authority, no referrer and a
+  deny-by-default CSP. Existing merchant code is shown only as escaped diff
+  text and is never executed in the proposed preview;
+- target-state revalidation when the card loads, so later builder edits mark
+  the proposal stale without discarding its private review snapshot;
+- no generic draft editing/rollback, Builder save, new-section creation,
+  header/footer mutation, publication, repository, shell, commit or deployment
+  path; and
+- request-aware Gemini HIGH thinking for explicit storefront code generation
+  only when the trusted permission-filtered proposal declaration exists. Other
+  reads and analysis remain LOW for latency and cost control.
+
+Phase 7C intentionally stops at the private Website Builder draft. Its fresh
+human-only action endpoint accepts only the immutable proposal version and an
+idempotency or approval ID; page, section and code values are loaded from the
+server-side proposal and exact current target. Publication is available only
+through the independent Phase 7D boundary below.
+
+Phase 7D delivered:
+
+- no new Gemini tool: the proposal card exposes the publication workflow only
+  after an exact Phase 7C save has completed for the signed-in proposal owner;
+- a separate `publish_storefront_code` operator gate, Website Builder Manage
+  check and custom-code entitlement recheck at review and execution;
+- deterministic publication checks for accessible names, image alternatives,
+  labels, unique IDs, heading order, keyboard focus, reduced motion and unsafe
+  mobile minimum widths;
+- opaque-origin, no-network browser validation at exactly 1,280 px desktop and
+  390 px mobile, reporting bounded runtime, CSP, horizontal-overflow and DOM
+  accessibility results without persisting the raw user agent;
+- a five-minute publication approval whose integrity hash binds the exact
+  proposal, completed Phase 7C save, tenant/admin, page version, complete
+  current live and Builder-draft section snapshots, code digest and browser
+  evidence;
+- one atomic, optimistic-lock publication that copies the checked full Builder
+  snapshot to `published_sections`, updates publication state/timestamp, keeps
+  `sections` unchanged, revalidates storefront caches and schedules the
+  existing indexing notification;
+- an independent five-minute rollback approval that restores only the exact
+  previous published snapshot, leaves the current private Builder draft
+  untouched and refuses rollback after any intervening live-page change; and
+- idempotent replay plus append-only executed, conflicted and expired audit
+  outcomes. Publication/rollback perform no model call and consume no extra AI
+  credits beyond the original five-credit code proposal.
 
 The merchant agent must not edit StoreMink's Next.js repository. If an internal
 StoreMink engineering agent is later built, it must be a separate operator-only
@@ -1271,6 +1390,88 @@ Exit criteria:
 - and code tasks stay within their quoted credit cap.
 
 ### Phase 8 — Proactive operations and optional specialists
+
+**Implementation split (2026-09-05):**
+
+- **8A — Requested business briefs: implemented.** Daily (yesterday) and weekly
+  (last 7 completed local days), compared with preceding complete calendar
+  periods. The existing durable worker produces four deterministic evidence
+  checks: recognized net-sales decline ≥20% with ≥5 previous recognized orders
+  and positive previous net sales; per-location tracked SKU shortages; return
+  records increasing ≥50% from ≥5 previous records; and ≥3 created orders with
+  current failed-payment status representing ≥20% of created orders. Sparse
+  evidence is labelled insufficient, and no threshold triggered is not an
+  all-clear. Returns are not a return rate; payment status is not gateway
+  attempt history. Inventory is current and location-separated. No conversion
+  signal is claimed. Source errors fail/retry the brief, with no extra model
+  calls. Requires four View permissions (Analytics, Products, Inventory,
+  Orders); uses captured scope, maximum 50 active locations, per-step checks,
+  cancellation on narrowing, private notification, readback isolation and
+  existing retry/cancel controls. Migration 0081 and ECH-P8A-01–24 cover this
+  release. Merchant end-to-end and live model routing checks remain deployment
+  acceptance gates, not implied by unit tests. Local verification: 5,959 tests
+  passed (10 skipped), 88 focused checks passed, TypeScript/lint and production
+  build passed. Migration 0081 was exercised in isolated PostgreSQL, including
+  manifest checks, safe repeat execution and rollback on missing Help guidance.
+- **8B — Opt-in recurring watch rules: implemented, deployment acceptance pending.**
+  Human-confirmed daily/weekly brief or inventory/sales/returns/payments watch,
+  captured timezone/location scope, overnight quiet hours, deduplicated private
+  in-app notifications and versioned pause/resume/delete. Five per admin,
+  twenty per tenant, one in-flight check each; bounded existing-heartbeat
+  scheduling, retries, retention and no extra model calls. Source failure or
+  permission narrowing pauses rather than fabricating healthy results. Gemini
+  only reads watch status and links to human controls. Migration 0082 and
+  ECH-P8B-01–30 cover rollout; real worker timing and merchant acceptance must
+  still be exercised on Echos after deployment.
+  Local verification after the latest branch merges: 6,095 regression tests
+  passed (15 skipped); lint and the production build, including TypeScript,
+  passed. All five opt-in PostgreSQL concurrency checks also passed during
+  implementation. Migration 0082 passed isolated repeat,
+  rollback, tenant-FK, restricted-role, deduplication and manifest checks.
+- **8C — Approved proactive response investigations: implemented locally; deployment acceptance pending.**
+  Owner-only plans from evidenced watch alerts, fixed disclosed triage order,
+  unknown monetary impact, 24-hour expiry and exact evidence/version/scope hashes.
+  Human-only approval/dismissal queues one durable two-step read-only review;
+  duplicate approval returns the same workflow. Fresh evidence can invalidate a
+  remedy. Inventory details cap at 20 rows/3 affected locations; returns/payment
+  samples cap at 20 without contacts; sales compare recognized sales/orders.
+  Existing permissions, per-step authority, retries, cancellation, retention and
+  single-in-flight watch limits apply. No autonomous business mutation is added;
+  any subsequent correction, promotion or contact needs its existing separately
+  approved flow. Migration 0083, Help guidance and ECH-P8C tests cover rollout.
+  Local verification (2026-09-07): 6,271 regression tests passed (21 skipped),
+  plus all six opt-in isolated PostgreSQL checks for migration verification,
+  repeatability, rollback, concurrent approvals, pause races and tenant/role
+  isolation. TypeScript, lint, changed-file formatting and the production build
+  passed. The sandboxed build stalled; the unsandboxed local retry passed.
+  Migration 0083 was reported applied by the owner on 2026-09-07. Live deployment
+  and Echos acceptance are not independently verified.
+- **8D — Approved memory and reviewed text input: implemented locally; deployment acceptance pending.**
+  Private owner/store memories, explicit human consent, 10-entry cap, 80/600
+  character limits, 30/90/365-day expiry, optimistic edits, idempotent saves and
+  physical text deletion with content-free retry tombstones. Fresh chat turns
+  use only unexpired memories matching current role/permission/location scope;
+  memories are untrusted reference parts, not system prompts, live facts or
+  action authority. Management stays available for deletion when generation
+  is disabled. Existing worker purges expired text in bounded batches.
+  Optional .txt/.md input supports local UTF-8 validation, explicit text review
+  and addition to the composer, never automatic sending or saving as memory.
+  File cap 8 KiB / 3,000 characters; combined message remains 4,000 characters.
+  Migration 0084 and ECH-P8D test prompts accompany this implementation.
+  Local verification (2026-09-07): 6,318 regression tests passed, plus all
+  twelve isolated PostgreSQL checks (including migration repeat/rollback,
+  role isolation, concurrent cap/edits, deletion retries and expiry/delete races).
+  TypeScript, lint and the production build passed. Migration 0084 has not been
+  applied to a live database by this implementation, and live Vertex/Echos
+  behavior still requires the documented acceptance prompts.
+- **8E — Optional multimodal inputs: not implemented.** Screenshot/image,
+  PDF/document extraction and voice input require separate MIME/size/decoder,
+  privacy, provider-capability and cost validation. The 8D text importer does
+  not implement these channels. Specialist multi-agent planning also remains
+  evaluation-driven, not automatically enabled.
+
+Phase 8A does not start schedules or perform actions in response to a signal.
+The remaining original Phase 8 objectives below belong to later subphases.
 
 **Duration:** 4–6 weeks for the first release, then ongoing
 
@@ -1491,33 +1692,42 @@ would move risk into production rather than remove work.
 
 ## 21. Immediate next sprint
 
-The next sprint should validate and safely roll out Phase 6E before Phase 7A:
+Phase 8B is implemented locally. Apply `20260905_0082_mink_phase_8b_watches`
+after 0081 and deploy the matching revision. Run ECH-P8A-01–24 and
+ECH-P8B-01–30 on Echos using the existing workflow heartbeat. Verify consent,
+owner-only alerts, quiet hours, duplicate delivery, source errors and scope
+revocation. No new environment variables or recurring jobs are required.
+Phase 8C is committed and migration 0083 is reported applied. Deploy the
+dashboard/worker and run ECH-P8C acceptance tests on Echos. Approval
+authorizes only one read-only response investigation, never an automatic remedy.
+Phase 8D adds approved memories and reviewed text input locally. Apply migration
+`20260907_0084_mink_phase_8d_memories`, deploy, and run ECH-P8D acceptance before
+enabling wider usage. Optional multimodal channels (8E) remain unbuilt.
+Do not infer live model routing accuracy or production latency from unit tests.
 
-1. Apply `20260903_0074_mink_phase_6e_delayed_pickups` after 0073 and verify the
-   workflow-template constraint plus Help Centre section before deploying the
-   matching application revision.
-2. Create controlled Echos pickup fixtures at Shop and Delhi covering Awaiting
-   before/after the promised-ready time, Ready inside the 48-hour window,
-   reminder pending/already recorded, collected, expired, cancelled and fully
-   refunded states. Run the exact P6E prompt pack and verify every included and
-   excluded row at the card's data-as-of time.
-3. Confirm the complete-match cohort counts, severity ordering, 25-row bound,
-   truncation label, exact Shop/Delhi alias resolution and safe Order links.
-4. Confirm preparation copy keeps the revised-ready time as a staff-confirmed
-   placeholder. Ready pickups must use the existing automatic reminder state;
-   pending or recorded reminders must withhold duplicate collection copy.
-5. Verify the result never reads or persists customer name, email, phone,
-   address, notes or collection code and cannot send/queue/save a message,
-   claim/reset a reminder, change status/deadline, release a hold or move stock.
-6. Remove drafting or Orders Manage during a run; suspend/revoke the requester,
-   remove a location assignment and deactivate a captured location. The next
-   step must cancel or narrow, and later status reads must fail closed.
-7. Force worker overlap, lease expiry, cancellation and Cloud Run restart. One
-   originating request must retain one run, three steps, one result and one
-   notification, with zero background Gemini usage and no duplicate reminder.
-8. After these gates pass, begin Phase 7A with builder-context read tools and a
-   sandbox contract only; do not grant code save or publication authority in
-   the same step.
+The Phase 7D deployment acceptance checklist remains applicable:
+
+Validate the completed Phase 7D storefront-coding boundary:
+
+1. Apply migrations `20260904_0077_mink_phase_7b_storefront_code_preview`,
+   `20260904_0078_mink_phase_7c_builder_draft_save` and
+   `20260904_0079_mink_phase_7d_storefront_publication` in order. Enable the
+   draft-save and checked-publication gates independently for Echos.
+2. Run ECH-P7C-01 through ECH-P7C-13, then ECH-P7D-01 through ECH-P7D-14.
+   Confirm Phase 7C changes only `sections`; Phase 7D publication changes only
+   `published_sections`, status and `published_at`; exact rollback restores the
+   prior published checkpoint without changing `sections`.
+3. Exercise unsupported/outdated browsers, accessibility/runtime/CSP/layout
+   failures, evidence and approval expiry, stale save/live page, replay,
+   operator-gate, permission, entitlement, hostile payload and cross-tenant
+   cases. Every terminal execution/conflict/expiry must have one audit outcome.
+4. Measure proposal HIGH-thinking cost separately from human actions: the
+   proposal charges five credits; draft save, checks, publication and rollback
+   use no model call and no second credit charge.
+5. Use the Phase 7 exit metrics to decide whether to graduate the storefront
+   coding beta before broadening into recurring proactive operations. Keep media/image
+   generation outside this publication authority until its own asset provenance,
+   moderation, storage, placement and approval boundary is implemented.
 
 The intended outcome is not “Gemini 3.7 answered impressively.” It is:
 

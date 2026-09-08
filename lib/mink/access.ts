@@ -2,7 +2,7 @@ import "server-only";
 
 import { eq } from "drizzle-orm";
 import { minkStoreAccess } from "@/drizzle/schema";
-import { withService } from "@/lib/db/client";
+import { withService, type Db } from "@/lib/db/client";
 import { MinkRequestError } from "./errors";
 
 export interface MinkStoreAccessState {
@@ -13,9 +13,10 @@ export interface MinkStoreAccessState {
 /** Fail-closed beta eligibility read. The environment flag remains the global kill switch. */
 export async function getMinkStoreAccess(
   storeId: string,
+  existingDb?: Db,
 ): Promise<MinkStoreAccessState> {
   try {
-    const rows = await withService((db) =>
+    const read = (db: Db) =>
       db
         .select({
           enabled: minkStoreAccess.enabled,
@@ -23,14 +24,16 @@ export async function getMinkStoreAccess(
         })
         .from(minkStoreAccess)
         .where(eq(minkStoreAccess.storeId, storeId))
-        .limit(1),
-    );
+        .limit(1);
+    const rows = await (existingDb ? read(existingDb) : withService(read));
     return {
       enabled: rows[0]?.enabled === true,
       draftingEnabled:
         rows[0]?.enabled === true && rows[0]?.draftingEnabled === true,
     };
-  } catch {
+  } catch (error) {
+    // A failed query aborts the shared transaction; let its owner roll back.
+    if (existingDb) throw error;
     return { enabled: false, draftingEnabled: false };
   }
 }

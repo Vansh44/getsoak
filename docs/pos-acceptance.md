@@ -3973,6 +3973,88 @@ delivery cost in ways one approval screen cannot show honestly.
 
 ---
 
+## 11m. Mink Phase 8A business brief inventory and order evidence
+
+**PS-MINK-8A.1 — Local shortages remain visible.** In Echos, set a tracked
+SKU to zero or negative at Shop and positive at Delhi, then ask for a business
+brief. Expect separate Shop/Delhi low/out counts matching each Inventory view;
+untracked SKUs do not become out-of-stock alerts. Counts are SKU-location
+counts, never claimed to be unique products.
+
+**PS-MINK-8A.2 — Scope and historical time stay explicit.** A daily brief uses
+yesterday in the store timezone, a weekly brief the last 7 completed local
+days. Both compare preceding calendar days. A Shop-only request/admin does
+not include Delhi or unassigned orders. Inventory is explicitly current when
+collected, not yesterday's inventory. Original order location scopes return
+records even when goods were received at another location (BORIS).
+
+**PS-MINK-8A.3 — Sparse data and failures are not healthy zeroes.** With fewer
+than 5 preceding recognized orders or return records, the respective trend is
+insufficient. Failed-payment counts refer to current order status among orders
+created in the window, not gateway attempts. An isolated test-source outage
+retries/fails the run; no completed all-clear is rendered. No stock, return,
+payment, refund or POS lifecycle state changes during the brief.
+
+**PS-MINK-8A.4 — Durable authority.** Remove Orders View or narrow a captured
+two-location scope between worker steps. Expect cancellation; a broader
+checkpoint must not be finalised. A user whose scope has narrowed also cannot
+reopen the old broad result. Completion is private to the requesting admin.
+Cancel, refresh, worker restart and retries do not create duplicate runs or
+notifications. Use ECH-P8A-01–24 in the living prompt suite for merchant checks.
+
+## 11n. Mink Phase 8B recurring watch acceptance
+
+Use Echos, with Shop and Delhi. No real customer or inventory writes are needed
+to test watch controls. Deliberately changing fixture stock is a separate
+tester-authorized operation, never an automatic watch action.
+
+| Story                                | Expected acceptance                                                                                                                    |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| Ask “Keep an eye on stock at Delhi.” | Human setup link only; no watch until scope/schedule/quiet hours and consent are reviewed.                                             |
+| Enable all-location inventory watch  | Separate tracked-SKU low/out counts at Shop and Delhi. Cross-location stock cannot hide shortages.                                     |
+| Repeat same shortage                 | No repeated notification for unchanged per-location counts. Changes at one location can trigger one new alert.                         |
+| Unknown data                         | No healthy zeroes or invented recovery; source failure retries then pauses.                                                            |
+| Quiet hours                          | Collection continues; private alerts defer/coalesce, and detected recovery clears undelivered attention.                               |
+| Pause/delete during processing       | Cancels pending work and suppresses undelivered watch notifications; cannot retract an already delivered notice.                       |
+| Narrow admin to Shop                 | Old all-location evidence is unreadable; worker/alert delivery revalidates and pauses the old watch. No Delhi leakage.                 |
+| Revoke one required View permission  | Cannot create/resume or read broad results. Dashboard access still allows pause/delete.                                                |
+| Alert isolation                      | Only the creator receives a generic in-app notification; other admins and other tenants cannot read the watch.                         |
+| Check limits and duplicate clicks    | At most five per owner/twenty per store including paused, one check in flight, idempotent creation and no duplicate alert after retry. |
+
+Migration 0082 and the existing authenticated workflow heartbeat are required.
+These are deployment acceptance stories; unit tests do not establish live
+scheduler timing or model routing accuracy.
+
+## 11o. Mink Phase 8C approved response acceptance
+
+| ID       | User story / acceptance                                                                                                                       |
+| -------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| PS-M8C.1 | Echos response plans appear only for evidenced attention at the owner's captured Shop/Delhi scope, with unknown monetary impact.              |
+| PS-M8C.2 | Only the exact reviewed checkbox/button approves one read-only investigation. Chat, watch consent or a different plan hash cannot approve it. |
+| PS-M8C.3 | Stock details remain local (20 rows/3 affected locations max) and label truncation. Delhi stock cannot conceal a Shop shortage.               |
+| PS-M8C.4 | Returns use original-order location; failed payments use order location/window. At most 20 records, no contacts, refunds or retries.          |
+| PS-M8C.5 | Recovery/insufficient evidence produces no invented remedy. Source failure retries rather than becoming healthy zeroes.                       |
+| PS-M8C.6 | Duplicate approvals yield one workflow. Expiry, newer evidence, changed version, dismissal conflicts and concurrent work fail safely.         |
+| PS-M8C.7 | Scope loss, suspension, archived locations or watch pause/delete stop pending reads; saved results still require current authority.           |
+| PS-M8C.8 | Every subsequent stock correction or business change retains its separate exact-target proposal and approval.                                 |
+| PS-M8C.9 | Approval, workflow, steps and audit commit or roll back together; tenant FKs and source/watch retention protect response decisions.           |
+
+## 11p. Mink Phase 8D memory and input acceptance
+
+| ID       | User story / acceptance                                                                                                                              |
+| -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| PS-M8D.1 | Echos preferences are private to one owner/store and explicitly reviewed before save or edit; no chat instruction saves memory.                      |
+| PS-M8D.2 | A remembered Delhi stock claim never replaces a live inventory read or authorizes a Shop transfer.                                                   |
+| PS-M8D.3 | Current explicit language/detail requests override saved preferences without changing those memories.                                                |
+| PS-M8D.4 | Role/permission/location binding changes withhold memories until fresh human approval. Other admins and tenants cannot read, edit or delete them.    |
+| PS-M8D.5 | Concurrent saves enforce the ten-memory cap and exact versions. Repeated saves do not duplicate; deleted text cannot return through delayed retries. |
+| PS-M8D.6 | Expiry excludes context even without cron; deletion removes text but does not pretend to recall an active run or delete conversation history.        |
+| PS-M8D.7 | Reviewed local text import is bounded and unsent until Send; source instructions cannot approve stock, payment, publication or messaging changes.    |
+| PS-M8D.8 | Oversized/invalid files and HTTP bodies fail explicitly. No screenshot, PDF, spreadsheet or voice parsing is claimed.                                |
+
+These require Echos acceptance after migration 0084 and deployment; deterministic
+tests do not establish live-model instruction-following quality.
+
 ## 12. Known gaps
 
 Real and deliberate, so nobody files them as bugs:

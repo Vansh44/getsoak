@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+vi.mock("@/lib/mink/memories", () => ({
+  loadMinkMemoryReference: vi.fn(async () => ""),
+}));
 
 const holder = vi.hoisted(() => ({
   enabled: true,
@@ -11,6 +14,8 @@ const holder = vi.hoisted(() => ({
   startTool: vi.fn(),
   completeTool: vi.fn(),
   runTimeoutMs: 120_000,
+  declarations: [] as Array<{ name: string }>,
+  createSession: vi.fn(() => ({})),
 }));
 
 vi.mock("@/lib/mink/config", () => ({
@@ -43,11 +48,11 @@ vi.mock("@/lib/mink/persistence", () => ({
 }));
 vi.mock("@/lib/mink/tools/read-tools", () => ({
   minkReadToolRegistry: {
-    declarationsFor: vi.fn(() => []),
+    declarationsFor: vi.fn(() => holder.declarations),
   },
 }));
 vi.mock("@/lib/mink/vertex-client", () => ({
-  createVertexMinkSession: vi.fn(() => ({})),
+  createVertexMinkSession: holder.createSession,
 }));
 vi.mock("@/lib/rate-limit", () => ({
   rateLimit: vi.fn(async () => ({ allowed: holder.rateAllowed })),
@@ -59,12 +64,14 @@ vi.mock("@/lib/observability/logger", () => ({
 }));
 
 import { POST } from "./route";
+import { loadMinkMemoryReference } from "@/lib/mink/memories";
 
 beforeEach(() => {
   vi.clearAllMocks();
   holder.enabled = true;
   holder.rateAllowed = true;
   holder.runTimeoutMs = 120_000;
+  holder.declarations = [];
   holder.actor.mockResolvedValue({
     storeId: "store-1",
     adminId: "admin-1",
@@ -180,12 +187,78 @@ describe("POST /api/mink/stream", () => {
     expect(body).toContain("event: done");
   });
 
+  it("uses high thinking only for an authorised storefront code request", async () => {
+    holder.declarations = [{ name: "propose_storefront_custom_code" }];
+    const response = await POST(
+      request({
+        message: "Redesign my homepage hero and generate custom code",
+      }),
+    );
+    await response.text();
+
+    expect(holder.startRun).toHaveBeenCalledWith(
+      expect.objectContaining({ thinkingLevel: "high" }),
+    );
+    expect(holder.createSession).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      holder.declarations,
+      expect.objectContaining({ thinkingLevel: "high" }),
+    );
+
+    holder.declarations = [];
+    const readResponse = await POST(
+      request({
+        message: "Redesign my homepage hero and generate custom code",
+      }),
+    );
+    await readResponse.text();
+    expect(holder.startRun).toHaveBeenLastCalledWith(
+      expect.objectContaining({ thinkingLevel: "low" }),
+    );
+  });
+
   it("rejects invalid messages before opening a model session", async () => {
     const response = await POST(request({ message: "   " }));
 
     expect(response.status).toBe(400);
     expect(holder.run).not.toHaveBeenCalled();
     expect(holder.startRun).not.toHaveBeenCalled();
+  });
+
+  it("loads fresh approved context but never persists it as the user's message", async () => {
+    vi.mocked(loadMinkMemoryReference).mockResolvedValueOnce(
+      "Private approved preference",
+    );
+    const response = await POST(request({ message: "Hello" }));
+    await response.text();
+    expect(holder.createSession).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({
+        memoryReference: "Private approved preference",
+      }),
+    );
+    expect(holder.startRun).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Hello" }),
+    );
+  });
+  it("fails closed on a memory read error before reserving credits or calling Vertex", async () => {
+    vi.mocked(loadMinkMemoryReference).mockRejectedValueOnce(
+      new Error("Memory DB unavailable"),
+    );
+    const response = await POST(request({ message: "Hello" }));
+    expect(response.status).toBe(503);
+    expect(holder.startRun).not.toHaveBeenCalled();
+    expect(holder.createSession).not.toHaveBeenCalled();
+  });
+  it("bounds the actual body even without a length header", async () => {
+    const response = await POST(
+      request({ message: "Hello", padding: "x".repeat(20000) }),
+    );
+    expect(response.status).toBe(413);
+    expect(holder.actor).not.toHaveBeenCalled();
   });
 
   it("rate limits per actor before calling Vertex", async () => {

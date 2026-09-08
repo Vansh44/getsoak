@@ -31,16 +31,197 @@ tokens were renamed to `--sm-*` and `WHOLESIP_STORE_ID` to `FALLBACK_STORE_ID`.
 
 ## 2. Tech stack
 
-| Layer     | Tech                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Framework | Next.js 16 (App Router, `--turbopack` dev) — **breaking-changes version; read `node_modules/next/dist/docs/` before writing code** (see AGENTS.md)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| UI        | React 19, Tailwind CSS v4, shadcn/ui (`components/ui/`), Base UI, lucide-react, sonner (toasts), recharts (charts), TipTap (rich-text editor), CodeMirror 6 (`@uiw/react-codemirror` — website-builder code editor, lazy-loaded)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| Backend   | Supabase (Postgres + Auth + Storage + RLS), server actions in `app/actions/`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| Email     | Resend + nodemailer (`lib/email/`), authenticated `/api/cron/send-emails` queue heartbeat (Cloud Scheduler every minute after Phase 5E rollout; `vercel.json` is non-production documentation)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| AI        | Gemini (`lib/ai/gemini.ts`); per-store brand voice (`lib/ai/brand-voice.ts` + `store_brand_profiles`) with plan-capped usage metering (`lib/ai/quota.ts`); task prompts in `brand/tasks/`. The dashboard Mink drawer has a default-on, invitation-gated Vertex/Gemini 3.7 beta in `lib/mink/` + `app/api/mink/`: its marked runtime system prompt is `docs/mink-ai-system-prompt.md`, validated and rendered by `lib/mink/system-prompt.ts`. Phase 2 streams permission/location-aware store, catalogue, sales, order, inventory and Help reads; vague multi-location catalogue-stock questions now produce permission-safe multiple-choice clarification instead of silently using a combined total, while explicit comparison returns shelf-level counts. Phase 3 adds separately opted-in private proposals. Phase 4A adds independently gated product description/SEO actions; 4B adds unpublished, untracked draft-product creation; 4C adds disabled/hidden coupon create/update; and 4D adds customer-group metadata create/update. Phase 5A adds an independently gated, human-approved adjustment for one exact tracked SKU at one exact active accessible location; Phase 5B adds a separate 5-credit, maximum-20-line bulk inventory proposal and atomic approval; Phase 5C adds a separate one-credit, one-order, one-forward-step online-delivery status proposal/approval for pending → processing → shipped → delivered; Phase 5D adds a separate immediate/scheduled publication approval for one exact saved blog proposal plus a bounded conflict-safe worker; Phase 5E adds independently gated coupon-email audience selection, exact non-PII preview, final confirmation and immediate/scheduled queueing; Phase 5F adds an independently gated 1–20 exact-SKU bulk price proposal, one-unit basket impact review and atomic conflict-safe execution. Phase 6A adds a durable leased workflow runtime and an idempotent, read-only weekly trading report with persisted steps/events, safe cancellation, token-free waiting and background completion notification. Phase 6B adds a bounded, read-only 7/30/90-day revenue-decline investigation across exact channels, locations and leading products; Phase 6C adds a private exact-SKU product-launch readiness package covering catalogue, media, SEO, valid pricing, scoped inventory and shipping without live changes; Phase 6D adds a bounded location-aware slow-inventory workflow and a private, margin-guarded promotion recommendation that cannot create or activate an offer; Phase 6E adds a bounded PII-minimized delayed-pickup review, staff-confirmed preparation-delay copy and duplicate-safe handoff to the existing one-time reminder sweep. Every action uses a saved proposal, exact short-lived human approval, tenant/permission/tool/version rechecks, idempotent transactional execution and append-only outcomes; Phase 4 supports checkpointed safe rollback, while inventory, order-status, blog-publication, campaign and price corrections use fresh/manual domain workflows. Gemini receives checkpoint/proposal tools but no live execute tool; its durable workflow tools queue deterministic internal read work only. Transfers, cancellation/refunds/payment/shipment changes, pickup/POS lifecycle mutations, product/page/storefront/bulk publication, arbitrary customer contact/group membership, unbounded catalogue repricing and arbitrary coding remain unavailable. Operators control every gate and inspect redacted metrics at `/dashboard/mink`; the 64-case live harness is `npm run mink:eval`, and the phase-wise manual catalogue is `docs/mink-ai-test-prompts.md`. An explicit global disable or missing invite retains the canned coming-soon response. Architecture and phased rollout are tracked in `docs/mink-ai-dashboard-plan.md`. |
-| Testing   | Vitest + Testing Library + jsdom, coverage via v8 (`coverage/` is generated output — never edit)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| Browsers  | **`browserslist` in package.json is the stated floor: Chrome/Edge 111, Firefox 128, Safari/iOS 16.4.** Not a preference — Tailwind v4 depends on `@property` and `color-mix()` and does not work below it, so this records a constraint a dependency already imposed rather than inventing one. Two authored CSS features sit BELOW that floor and so are always available: `:has()` (Chrome 105+/Safari 15.4+/Firefox 121+) and container queries (Chrome 105+/Safari 16+/Firefox 110+), both used by the dashboard table compaction, which is nonetheless wrapped in `@supports selector(:has(+ *)) and (container-type: inline-size)` so the dependency is stated where it is used and stays graceful if the floor is ever lowered. **⚠ There is NO cross-browser test infrastructure** — vitest runs in jsdom, which renders nothing. Chrome is the only browser this has been exercised in                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| Deploy    | **Google Cloud Run** via branch-specific Cloud Build triggers (`dev` → `storemink-web-dev`, `staging` → `storemink-web`, `main` → `storemink-web-prod`; Dockerfile + `cloudbuild.yaml`). The Cloud Build deploy owns the complete runtime environment; Mink's model/limit settings and separate invited-beta requirement are declared as substitutions. The global runtime defaults enabled, while the per-store invitation requirement defaults on and remains the fail-closed merchant boundary. CI on GitHub Actions (`.github/workflows/ci.yml`: lint → typecheck → test → test:shuffle → prettier → build); `npm run typecheck` runs `next typegen` before `tsc --noEmit` because the Next-managed `next-env.d.ts` is deliberately gitignored and a clean checkout otherwise has no static-image or route declarations. Database DDL is a separate, checksummed release gate (`npm run db:migrate`; see `drizzle/manual/README.md`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Layer     | Tech                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Framework | Next.js 16 (App Router; dev uses Webpack on ≤12 GB RAM, Turbopack above) — **breaking-changes version; read `node_modules/next/dist/docs/` before writing code** (see AGENTS.md)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| UI        | React 19, Tailwind CSS v4, shadcn/ui (`components/ui/`), Base UI, lucide-react, sonner (toasts), recharts (charts), TipTap (rich-text editor), CodeMirror 6 (`@uiw/react-codemirror` — website-builder code editor, lazy-loaded)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Backend   | Supabase (Postgres + Auth + Storage + RLS), server actions in `app/actions/`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| Email     | Resend + nodemailer (`lib/email/`), authenticated `/api/cron/send-emails` queue heartbeat (Cloud Scheduler every minute after Phase 5E rollout; `vercel.json` is non-production documentation)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| AI        | Gemini (`lib/ai/gemini.ts`); per-store brand voice (`lib/ai/brand-voice.ts` + `store_brand_profiles`) with plan-capped usage metering (`lib/ai/quota.ts`); task prompts in `brand/tasks/`. The dashboard Mink drawer has a default-on, invitation-gated Vertex/Gemini 3.7 beta in `lib/mink/` + `app/api/mink/`: its marked runtime system prompt is `docs/mink-ai-system-prompt.md`, validated and rendered by `lib/mink/system-prompt.ts`. Phase 2 streams permission/location-aware store, catalogue, sales, order, inventory and Help reads; vague multi-location catalogue-stock questions now produce permission-safe multiple-choice clarification instead of silently using a combined total, while explicit comparison returns shelf-level counts. Phase 3 adds separately opted-in private proposals. Phase 4A adds independently gated product description/SEO actions; 4B adds unpublished, untracked draft-product creation; 4C adds disabled/hidden coupon create/update; and 4D adds customer-group metadata create/update. Phase 5A adds an independently gated, human-approved adjustment for one exact tracked SKU at one exact active accessible location; Phase 5B adds a separate 5-credit, maximum-20-line bulk inventory proposal and atomic approval; Phase 5C adds a separate one-credit, one-order, one-forward-step online-delivery status proposal/approval for pending → processing → shipped → delivered; Phase 5D adds a separate immediate/scheduled publication approval for one exact saved blog proposal plus a bounded conflict-safe worker; Phase 5E adds independently gated coupon-email audience selection, exact non-PII preview, final confirmation and immediate/scheduled queueing; Phase 5F adds an independently gated 1–20 exact-SKU bulk price proposal, one-unit basket impact review and atomic conflict-safe execution. Phase 6A adds a durable leased workflow runtime and an idempotent, read-only weekly trading report with persisted steps/events, safe cancellation, token-free waiting and background completion notification. Phase 6B adds a bounded, read-only 7/30/90-day revenue-decline investigation across exact channels, locations and leading products; Phase 6C adds a private exact-SKU product-launch readiness package covering catalogue, media, SEO, valid pricing, scoped inventory and shipping without live changes; Phase 6D adds a bounded location-aware slow-inventory workflow and a private, margin-guarded promotion recommendation that cannot create or activate an offer; Phase 6E adds a bounded PII-minimized delayed-pickup review, staff-confirmed preparation-delay copy and duplicate-safe handoff to the existing one-time reminder sweep. Phase 7A adds permission-gated current-store Website Builder page/section/design readers and strict code validation; Phase 7B adds one immutable 5-credit exact-section proposal with an isolated desktop/mobile preview; Phase 7C adds a separate default-off, human-only five-minute exact-diff approval that transactionally saves only that reviewed replacement to the private Builder draft with idempotency, conflict checks and audit. Every live action uses exact short-lived human approval, tenant/permission/tool/version rechecks, idempotent transactional execution and append-only outcomes; Phase 4 supports checkpointed safe rollback, while inventory, order-status, blog-publication, campaign, price and Builder corrections use fresh/manual domain workflows. Gemini receives checkpoint/proposal tools but no live execute tool; its durable workflow tools queue deterministic internal read work only. Transfers, cancellation/refunds/payment/shipment changes, pickup/POS lifecycle mutations, product/bulk publication, arbitrary customer contact/group membership, unbounded catalogue repricing and arbitrary repository coding remain unavailable; Phase 7D adds separately gated human publication checks, approval and exact rollback after a completed Phase 7C save. Mink cannot add sections, edit header/footer, access shell/repository or deploy. Operators control every gate and inspect redacted metrics at `/dashboard/mink`; the live harness is `npm run mink:eval`, and the phase-wise manual catalogue is `docs/mink-ai-test-prompts.md`. An explicit global disable or missing invite retains the canned coming-soon response. Architecture and phased rollout are tracked in `docs/mink-ai-dashboard-plan.md`. |
+| Testing   | Vitest + Testing Library + jsdom, coverage via v8 (`coverage/` is generated output — never edit)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Browsers  | **`browserslist` in package.json is the stated floor: Chrome/Edge 111, Firefox 128, Safari/iOS 16.4.** Not a preference — Tailwind v4 depends on `@property` and `color-mix()` and does not work below it, so this records a constraint a dependency already imposed rather than inventing one. Two authored CSS features sit BELOW that floor and so are always available: `:has()` (Chrome 105+/Safari 15.4+/Firefox 121+) and container queries (Chrome 105+/Safari 16+/Firefox 110+), both used by the dashboard table compaction, which is nonetheless wrapped in `@supports selector(:has(+ *)) and (container-type: inline-size)` so the dependency is stated where it is used and stays graceful if the floor is ever lowered. **⚠ There is NO cross-browser test infrastructure** — vitest runs in jsdom, which renders nothing. Chrome is the only browser this has been exercised in                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| Deploy    | **Google Cloud Run** via branch-specific Cloud Build triggers (`dev` → `storemink-web-dev`, `main` → `storemink-web-prod`; Dockerfile + `cloudbuild.yaml`). ⚠ The STAGING DEPLOYMENT was removed 2026-09-08 — no `staging` branch, no `storemink-web` service, no `staging.storemink.com`; **dev is the only pre-production environment**. The `storemink_staging` DATABASE remains and is dev's, so `db:migrate:staging` and `db:drift:staging` still target a live database despite the name. The Cloud Build deploy owns the complete runtime environment; Mink's model/limit settings and separate invited-beta requirement are declared as substitutions. The global runtime defaults enabled, while the per-store invitation requirement defaults on and remains the fail-closed merchant boundary. CI on GitHub Actions (`.github/workflows/ci.yml`: lint → typecheck → test → test:shuffle → prettier → build); `npm run typecheck` runs `next typegen` before `tsc --noEmit` because the Next-managed `next-env.d.ts` is deliberately gitignored and a clean checkout otherwise has no static-image or route declarations. Database DDL is a separate, checksummed release gate (`npm run db:migrate`; see `drizzle/manual/README.md`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+
+> **Mink Phase 7D map update (2026-09-05):** With drafting plus Builder
+> Manage, Mink may create one 5-credit immutable private generated-code
+> proposal for an existing custom-code section and show an owner-only,
+> network-isolated desktop/mobile preview. A separate default-off operator gate
+> lets that proposal owner request a fresh five-minute exact-diff approval and
+> save only the reviewed section to `store_pages.sections`. A second default-off
+> gate exposes human-run static and isolated 1,280/390 px browser checks, a new
+> five-minute full-page publication approval and a separately approved exact
+> rollback. Transactions recheck tenant/admin/permission/entitlement/tool/
+> proposal/page/version/snapshot hashes, are idempotent and write append-only
+> outcomes. Gemini still has no new-section, header/footer, save, publish,
+> rollback, repository, shell or deployment authority. Human review, checks and
+> execution use no model call and no second credit charge.
+
+> **Builder chat visibility (2026-09-05):** `app/dashboard/dashboard.css`
+> floats the shared `.dash-chat` panel above the fixed `.sm-builder` canvas
+> on screens at least 640 px wide. Ordinary dashboard panels keep their
+> existing layout; phones still use the full-screen chat. Builder remains
+> mounted while chat opens, closes, resizes or maximizes, preserving editor
+> state without granting new context or mutation authority. Migration
+> `drizzle/migrations/sql/20260905_0080_mink_builder_chat_help.sql` documents
+> the flow and saved-data limitation. `docs/mink-ai-test-prompts.md` uses
+> ordinary Echos merchant requests, separate tester expectations, clarification
+> conversations and a distinct technical security appendix.
+
+### Mink Phase 8D — Approved memories and reviewed text input (2026-09-07)
+
+`/dashboard/mink-memories` and `/api/mink/memories` provide private per-store,
+per-admin reference context. `lib/mink/memory-policy.ts` validates explicit
+consent, exact fields, categories, 80/600-character bounds and 30/90/365-day
+retention. `memories.ts` serializes changes with an owner-specific transaction
+advisory lock, enforces 10 memories, exact-version edits and idempotent save
+keys. No model memory mutation tool exists. Same-origin POSTs, actual streamed
+body limits, rate limits and trusted host/session ownership guard management.
+Inspection/deletion remain available with Dashboard View when generation is
+disabled; saves require current Mink access. Content-free deletion markers
+prevent delayed requests resurrecting deleted or physically expired text.
+
+Every new chat turn loads only active owner memories before run/credit
+reservation. An exact role/permissions/location-binding hash withholds context
+after authority changes until explicit reapproval. The Vertex session receives
+JSON reference data as a separate user-message part, never system policy; it is
+not copied into persisted user messages or background workflows. Current user
+requests take precedence over preferences and live facts still require tools.
+Deletion/expiry affect future turns, not in-flight provider context or existing
+conversation mentions. Saves have no separate AI-credit charge; context adds
+normal input tokens. No new environment variables, model or scheduled job.
+
+`mink-document-input.tsx` reads one .txt/.md file locally (UTF-8, 8 KiB,
+3,000 characters), requires review/consent, then adds labelled reference text
+to the editable composer within its existing 4,000-character total. Nothing
+uploads before Send; text follows existing conversation persistence/deletion.
+`document-input.ts` rejects binary controls, invalid encoding and oversized
+input without truncation. No PDF, screenshot, audio/voice, spreadsheet, URL
+fetch, media upload or document-library ingestion is implemented by this phase.
+Pending local document previews reset on conversation changes. Previously inert
+attach/microphone icons are replaced by the functional text-document control.
+
+Migration `20260907_0084_mink_phase_8d_memories.sql` adds service-only
+`mink_memories`/`mink_memory_deletions`, store FKs, bounds/indexes and published
+Help guidance. The existing workflow heartbeat independently purges up to 500
+expired texts per pass; expiry is enforced on reads even without cron. The
+optional `memories.postgres.test.ts` fixture uses a fresh `mink_8d_verify`
+database on `MINK_MEMORY_TEST_SOCKET`, port 55484, never application credentials.
+Prompt versions advance to `read-beta-v11`/`draft-action-beta-v22`; registry
+versions stay unchanged. `bounded-json.ts` also closes the chat body's missing/
+forged Content-Length loophole. ECH-P8D prompts cover review, privacy and stress.
+
+### Mink Phase 8C — Approved watch response investigations (2026-09-06)
+
+`lib/mink/proactive-response-types.ts` ranks evidenced attention signals in a
+fixed, disclosed order (inventory, payments, sales, returns), not a monetary
+impact forecast. `proactive-responses.ts` resolves owner-only source snapshots,
+hash-binds plans to evidence/scope/watch version/limits and enforces 24-hour
+expiry, explicit consent, idempotent approval/dismissal and one in-flight run
+per watch. The watch row lock is shared with scheduler/pause/delete; approval,
+two workflow steps and audit are one transaction. No model approval tool exists.
+`get_mink_watch_responses` only reads plans and links to human controls.
+
+`/api/mink/watch-responses` uses trusted host/session identity, same-origin
+POSTs, bounded bodies, rate limits and no-store results. The on-demand
+`mink-watches/response-panel.tsx` shows evidence, limits, consent, dismissal and
+the five latest retained investigations; `mink-proactive-response.tsx` renders
+escaped bounded details and allowlisted dashboard links. All four brief View
+permissions plus Dashboard View are required. Results and worker steps recheck
+scope (including Cancel/Resume result readbacks); the new `watch_response_review` template also requires its exact approved
+response and active watch version at each step. Pausing/deleting a watch cancels
+all its queued/running workflows; resume never reauthorizes an old response.
+
+`proactive-response-data.ts` rechecks the brief before proposing next steps.
+Inventory samples at most 20 rows across 3 affected locations (location-level,
+never all-location stock); return/payment details are capped at 20 and omit
+customer contacts. Sales reviews compare sales/orders and refer deeper diagnosis
+to the existing revenue workflow. Recovered/insufficient signals produce no
+remedy. These are read-only investigations, NOT stock transfers, refunds,
+payment retries or automatic remediation; later business actions retain their
+separate preview/approval gates. No new model calls, credit charge, environment
+variable or cron job. Response progress is available through the existing
+polling workflow card, not a new completion alert. Migration
+`20260906_0083_mink_phase_8c_responses.sql` adds service-only response decisions,
+tenant-bound source/watch/workflow FKs, deduplication and the Help guide. The
+existing 30-day source snapshot/watch cleanup cascades to response decisions.
+Prompt/registry versions are `read-beta-v10`, `draft-action-beta-v21` and
+`draft-beta-v16`. ECH-P8C prompts cover Echos rollout acceptance.
+`proactive-responses.postgres.test.ts` is opt-in via `MINK_RESPONSE_TEST_SOCKET`
+and requires an empty `mink_8c_verify` database on a task-owned temporary Unix
+socket at port 55483; it never reads application database credentials. It proves
+repeat/rollback migration checks, duplicate/concurrent approval behavior, pause
+races and tenant/role isolation. Ordinary tests skip this disposable fixture.
+
+### Mink Phase 8B — Opt-in recurring watches (2026-09-05)
+
+`lib/mink/watch-policy.ts` validates daily/weekly schedules, captured-IANA-zone
+quiet hours and deterministic attention fingerprints. `lib/mink/watches.ts`
+owns explicit-consent creation (idempotent UUID, serialized caps of 5 per admin
+and 20 per tenant including paused watches), versioned pause/resume/delete,
+owner-scoped readback and the bounded scheduler/outbox. New service-only
+`mink_watches` and `mink_watch_events` tables retain captured brief authority and
+lifecycle audit. A composite watch/store FK binds scheduled workflow runs.
+The existing `/api/cron/mink-workflows` heartbeat queues up to five due watches,
+executes the existing snapshot/analyse/finalise worker and reconciles up to ten
+outcomes independently. One in-flight check per watch; no missed-slot catch-up.
+Every step, result read and alert delivery revalidates authority. Scope loss or
+exhausted source retries pause the watch; no failed read becomes a healthy zero.
+Locked watch passes reuse their transaction for eligibility, scope and in-app
+notification fan-out, avoiding nested connection acquisition. `recordEvent`
+accepts a shared service transaction only for `mink.watch_ready`; failures in
+this mode propagate and roll back both delivery and outbox acknowledgement.
+
+`/dashboard/mink-watches` and `/api/mink/watches` expose the human-reviewed
+controls. The chat-header Watches link and read-only `get_mink_watches` tool
+provide discovery; Gemini cannot activate, change or delete a watch. POSTs
+require same-origin validation, trusted host/session identity, bounded JSON,
+strict fields and rate limits. Stop controls remain available with Dashboard
+View while Mink is disabled. Setup changes require deletion and fresh consent.
+No new environment variable, scheduler job, model call, credit charge or
+business-write authority is introduced. Existing worker deployment is required.
+
+`mink.watch_ready` is deduplicated by workflow subject and restricted to the
+owner, in-app only. Its activity payload contains no business metrics. Quiet
+hours defer/coalesce the outbox; recovery clears pending attention. Inventory
+fingerprints compare per-location low/out counts (not individual SKU changes).
+Other alerts deduplicate an attention episode; insufficient data does not reset
+it. Briefs notify per reporting period. Pause/delete cancel pending work and
+suppress undelivered alerts. Bounded cleanup prunes terminal scheduled snapshots
+after 30 days except current/pending pointers, and purges deleted watches with
+their snapshots/audit after 30 days. Manual workflows are never pruned here.
+Migration `20260905_0082_mink_phase_8b_watches` installs the contract and Help
+guide. ECH-P8B prompts cover natural Echos requests and manual stress checks.
+
+### Mink Phase 8A — Requested business briefs (2026-09-05)
+
+`lib/mink/business-brief-types.ts` defines complete-local-day daily/weekly
+ranges and four deterministic evidence rules. `business-brief-data.ts` reads
+dashboard-recognized sales, current per-location tracked SKU health, scoped
+return-record counts and current failed-payment status of orders created in
+the historical window. Returns are scoped by original order location, not
+receiving location. No PII, conversion-rate inference or gateway-attempt metric
+is collected. Stock elsewhere cannot hide a shortage at Shop or Delhi.
+
+`start_business_brief` in the permission-filtered read registry queues the
+`business_brief` template through `workflows.ts`: snapshot → analyse → finalise.
+It requires Analytics, Products, Inventory and Orders View, not drafting.
+Captured active location IDs (maximum 50), timezone and threshold survive worker
+restarts; each step rechecks authority and cancels on narrowing rather than
+reusing broader checkpoint data. New locations cannot enter an existing run.
+Source failure retries/fails instead of becoming healthy zeroes. Four bounded
+signals distinguish attention, no threshold triggered and insufficient data;
+the worker makes no Gemini calls and uses the existing lease, cancellation,
+retry, owner-scoped API and private notification paths.
+
+`app/dashboard/mink-business-brief.tsx` renders the result inside the existing
+workflow card, including period comparison, separate location table and
+measurement limitations. Migration
+`drizzle/migrations/sql/20260905_0081_mink_phase_8a_business_briefs.sql` extends
+the existing template constraint, adds a store/time index for historical
+return-record aggregation and publishes Help guidance; no new route,
+table or scheduled job is introduced. Phase 8B advances runtime prompt versions
+to read-beta-v9 and draft-action-beta-v20; registries read-beta-v9 and draft-beta-v15. Phase 8B
+recurring watches and automatic actions are not part of requested briefs.
 
 ## 3. Multi-tenancy architecture (the core concept)
 
@@ -140,12 +321,31 @@ wholesip/
 ├── proxy.ts                   # Edge middleware: host routing + auth gates (see §3)
 ├── next.config.ts             # output:"standalone" (Cloud Run), image formats, runtime
 │                              # Markdown prompt tracing, optimizePackageImports
+│                              # Phase-aware function export; next-redirects.test.ts
+│                              # resolves it for dev, production build and server tests.
 ├── Dockerfile / .dockerignore / cloudbuild.yaml  # ★ Cloud Run container (GCP Phase 4 —
 │                              # see docs/gcp-migration-phase4-cloud-run.md). Multi-stage
 │                              # standalone build; NEXT_PUBLIC_* are build args, secrets
 │                              # runtime-only. Cloud Build owns the complete Cloud Run env,
 │                              # including default-on Mink + fail-closed invitation substitutions.
 │                              # Build linux/amd64 (Cloud Build or --platform).
+├── cloudbuild-drift.yaml      # ★ Scheduled production schema-drift check, run by the
+│                              # `storemink-schema-drift` Cloud Build trigger (manual)
+│                              # via Cloud Scheduler `0 4 * * *` UTC. Runs
+│                              # `db-migrate drift --environment production` behind a
+│                              # version-pinned cloud-sql-proxy. ★★ A BUILD, NOT an
+│                              # /api/cron route like the other jobs: the check needs the
+│                              # ledger digest as well as the fingerprint, and reading
+│                              # schema_migrations needs the postgres SUPERUSER login that
+│                              # migration 0018 denied the app — a credential that must not
+│                              # live in the internet-facing Cloud Run runtime. Required two
+│                              # IAM grants the build SA did NOT have: secretAccessor scoped
+│                              # to CLOUDSQL_PROD_POSTGRES_PW, and cloudsql.client.
+│                              # ⚠ CREATED PAUSED until this file reaches `main`; the
+│                              # trigger reads it from refs/heads/main and otherwise fails
+│                              # "File cloudbuild-drift.yaml not found". Full contract,
+│                              # verification evidence and the resume commands are in
+│                              # docs/cron-jobs.md.
 ├── vercel.json                # INERT schedule record (prod = Cloud Scheduler):
 │                              # send-emails, plan-expiry, expire-pending-payments,
 │                              # seo-refresh, search-metrics, domain-reconcile, prune-logs,
@@ -278,6 +478,10 @@ wholesip/
 │   │   │                      # plus private proposal cards; mink-proposal-card.tsx edits,
 │   │   │                      # versions/restores proposals and provides Phase 4's exact,
 │   │   │                      # explicitly approved product/coupon/group action/rollback UX.
+│   │   │                      # mink-storefront-code-proposal-card.tsx owner-loads Phase 7B
+│   │   │                      # code, target state and escaped source into an isolated preview;
+│   │   │                      # mink-storefront-publication-controls.tsx owns Phase 7D's
+│   │   │                      # browser-check, publish and exact-rollback human workflow.
 │   │   ├── mink-feedback.tsx  # Per-answer thumbs + bounded, privacy-redacted issue report.
 │   │   ├── mink-mark.tsx      # Shared solid-purple robot mark matching Help Centre Mink.
 │   │   ├── page.tsx           # Overview: metrics, revenue chart, activity, inventory…
@@ -616,8 +820,14 @@ wholesip/
 │       │   │                  # publish now or persist one bounded schedule after human approval.
 │       │   ├── campaign-action/ # ★ Phase 5E same-origin audience options/preview/execute;
 │       │   │                  # exact coupon-email snapshot + final queue/schedule confirmation.
-│       │   └── bulk-price-action/ # ★ Phase 5F same-origin preview/execute for one saved
+│       │   ├── bulk-price-action/ # ★ Phase 5F same-origin preview/execute for one saved
 │       │                      # max-20 exact-SKU tuple; impact review + atomic all-or-nothing write.
+│       │   ├── storefront-code-preview/ # ★ Phase 7B owner-only no-store code/diff DTO;
+│       │                      # revalidates integrity and current/stale exact target state.
+│       │   ├── storefront-code-action/ # ★ Phase 7C same-origin human preview/execute;
+│       │                      # exact five-minute Builder-draft save approval.
+│       │   └── storefront-publication/ # ★ Phase 7D same-origin review/execute;
+│       │                      # checked full-page publication + separately approved rollback.
 │       ├── pos/live/          # ★ Authenticated no-store GET transport for every
 │       │                      # background POS read (badge, queue, stock, paged
 │       │                      # catalogue). Server Actions are client-serialized,
@@ -1097,11 +1307,23 @@ wholesip/
 │   │                          # exact/combined stock lists or a maximum-20-location comparison
 │   │                          # using Inventory's simple-product/variant, missing-shelf-zero and
 │   │                          # effective-threshold contract.
+│   │                          # storefront-context-read.ts adds Phase 7A's explicitly tenant-
+│   │                          # scoped page/section/design reads; storefront-code-contract.ts,
+│   │                          # storefront-code-proposals.ts and tools/storefront-code-tools.ts
+│   │                          # add Phase 7B exact-target validation, immutable private storage
+│   │                          # and network-isolated preview metadata; storefront-code-actions.ts
+│   │                          # adds Phase 7C's default-off exact-diff approval, transactional
+│   │                          # draft-only section save, idempotency and audit;
+│   │                          # storefront-publication-types/validation/actions.ts add Phase 7D
+│   │                          # checked publication, full-snapshot locking and exact rollback.
+│   │                          # thinking.ts selects HIGH
+│   │                          # only for authorised explicit storefront code generation.
 │   │                          # timestamps.ts canonicalizes coupon business dates without
 │   │                          # weakening full-precision resource-version checkpoints.
-│   │                          # No model tool can publish, schedule, send or execute a live mutation.
+│   │                          # No model tool can publish, schedule, send or execute a live mutation;
+│   │                          # Phase 7D publication remains an authenticated human-only action.
 │   │                          # `evals/mink/read-alpha.json` + `npm run mink:eval` are the
-│   │                          # 64-case live tool/safety/latency gate.
+│   │                          # 73-case live tool/safety/latency gate.
 │   ├── help/                   # ★ Public Help reads/types plus Mink AI retrieval (§21):
 │   │                          # assistant-input.ts rejects low-signal turns; chunks.ts
 │   │                          # creates heading-aware plain-text sections; embeddings.ts
@@ -1471,6 +1693,136 @@ wholesip/
 │                              # SHA-256 checksums and object-level postconditions.
 │                              # `schema_migrations` itself is bootstrapped by the
 │                              # admin-only runner; it is not an application table.
+│                              # ★★ TWO CONTRACT-AUTHORING RULES, both learned from
+│                              # entries that jammed the adopt queue (2026-09-07):
+│                              # (1) A FUNCTION NAME NEEDS ITS ARGUMENT TYPES.
+│                              # verifyContract uses `to_regprocedure`, which
+│                              # REQUIRES them — `to_regprocedure('public.foo')` is
+│                              # always NULL, so such a check can never pass whatever
+│                              # the schema holds. Every other entry gets this right
+│                              # (`sm_pad(integer,integer)`); 0078 shipped a bare
+│                              # `billing_claim_downgrade` and blocked all 18 pending
+│                              # migrations, since `adopt` only records the FIRST
+│                              # pending one. Write `foo(uuid,timestamp with time zone)`.
+│                              # (2) DURABLE `verify` MUST NOT ASSERT TRANSITIONAL
+│                              # COPY OR PRECONDITIONS. It is re-checked for every
+│                              # APPLIED migration on every status/verify run, so a
+│                              # phrase a LATER phase legitimately removes ("Phase 7A
+│                              # is read-only", "remains preview-only", "cannot yet
+│                              # create a code proposal") turns into a permanent
+│                              # failure in every environment. Worse, 7C/7D put a
+│                              # READINESS check there — text their own SQL deletes —
+│                              # which can never hold post-apply; the runner has no
+│                              # "before" hook, so a precondition has no home. Put
+│                              # exact wording in `applyVerify` (immediate) or
+│                              # `adoptVerify` (evolved schema) and keep `verify` to
+│                              # what stays true: tables, columns, constraints,
+│                              # indexes, privileges. `0018_help_embedding_hardening`
+│                              # is the model; the Help-baseline note below states the
+│                              # same rule for content migrations.
+│                              # ⚠ Editing a PENDING entry is safe (nothing recorded
+│                              # it, so no checksum drift); editing an APPLIED one
+│                              # rewrites its computed checksum and the runner refuses.
+│                              # The computed sum is sha256(canonicalJson(entry minus
+│                              # `file`) + NUL + sql), so a `verify` edit changes it —
+│                              # which is exactly why only pending entries may move.
+│                              # ⚠ NINE COLLIDING SEQUENCE NUMBERS (0076-0084): the
+│                              # main -> minkai merge concatenated two independently
+│                              # numbered series (billing/offers 20260906-07, mink
+│                              # 7A-8D 20260904-07), so the manifest's order is not
+│                              # date order (entry 86 is 20260907, entry 87 is
+│                              # 20260904). IDs stay unique via the date prefix so the
+│                              # ledger accepts them, and `out_of_order` does not flag
+│                              # it — that check only looks for applied-after-pending.
+│                              # ⚠ DO NOT RENUMBER THEM. All nine are APPLIED on
+│                              # local, staging AND production. Renaming an applied
+│                              # id orphans its ledger row — migrationPlan puts the
+│                              # old id in `unknown` and the new one in `pending`,
+│                              # and assertHealthyPlan THROWS "Ledger contains
+│                              # unknown migrations", which stops apply, adopt and
+│                              # verify until the ledger is hand-repaired. Measured
+│                              # against a real database: renaming one entry gave
+│                              # unknown=1 plus a phantom pending. All nine means
+│                              # rewriting `id` AND `checksum` (the id feeds the
+│                              # computed checksum) across 27 ledger rows including
+│                              # production, for no functional gain — the ids are
+│                              # already unique. It is a naming wart, not a defect.
+│                              # ★ THE NEXT MIGRATION TAKES 0087. 0085 and 0086 are
+│                              # used by the offers series, so those collide too;
+│                              # 0087 is the first free number. `db-migrations-core.test.mjs`
+│                              # freezes the nine pairs, so a new entry reusing any
+│                              # existing number fails CI (it either adds a tenth
+│                              # duplicate group or makes an existing group a triple).
+│   ├── schema-fingerprint.json # ★★ THE DRIFT TRIPWIRE. A committed per-environment
+│   │                          # baseline of `schema_sha256` plus a digest of WHICH
+│   │                          # migration ids are recorded. `db:migrate drift`
+│   │                          # recomputes both and compares.
+│   │                          # ★ THE TWO SIGNALS TOGETHER ARE THE WHOLE POINT.
+│   │                          # schemaFingerprint() EXCLUDES schema_migrations, so
+│   │                          # recording a migration cannot move it. That yields
+│   │                          # four states, and only one is the alarm:
+│   │                          #   same/same  -> clean
+│   │                          #   same/moved -> ledger_only  (an `adopt`)
+│   │                          #   moved/moved-> migrated     (the runner ran)
+│   │                          #   moved/same -> out_of_band  ← DDL bypassed the runner
+│   │                          # That last state is exactly what produced the
+│   │                          # 78-of-96 gap: the schema advanced on staging AND
+│   │                          # production while the ledger recorded nothing, so the
+│   │                          # gate could not have caught an error in those 18.
+│   │                          # ⚠ The fingerprint is DDL-ONLY and data-independent —
+│   │                          # proven by prod (4 stores/2 orders) and staging
+│   │                          # (8 stores/53 orders) sharing one fingerprint.
+│   │                          # ★ EVERY non-clean verdict exits 1, including a
+│   │                          # legitimate migration: the baseline is a COMMITTED
+│   │                          # file, so a real migration must land with its
+│   │                          # refreshed baseline or the next run cannot tell a
+│   │                          # migration from someone's manual DDL. Refresh with
+│   │                          # `--update-baseline <environment>` (it must name the
+│   │                          # environment, the same confirmation shape `adopt`
+│   │                          # uses, because rewriting the baseline is what
+│   │                          # silences the detector) and commit it.
+│   │                          # ★ An environment absent from the file is
+│   │                          # `unbaselined` and also exits 1 — it fails closed
+│   │                          # rather than reporting a database it has never seen
+│   │                          # as healthy. Verified end-to-end against a real
+│   │                          # database: a hand-added column gave out_of_band with
+│   │                          # the ledger unchanged and exit 1; a bare ledger
+│   │                          # insert gave ledger_only. classifyDrift is pure and
+│   │                          # mutation-tested in db-migrations-core.test.mjs.
+│   │                          # ★★ WHERE THE CHECK RUNS, AND WHY NOT GITHUB CI.
+│   │                          # The FILE is validated in CI today — shape, all
+│   │                          # ENV_DATABASES environments present, 64-hex hashes,
+│   │                          # and a count never exceeding the manifest — through
+│   │                          # the existing `npm run test` step, needing no
+│   │                          # database and no credentials. That catches a
+│   │                          # malformed or half-armed baseline being committed.
+│   │                          # The DATABASE check is NOT in GitHub CI, for two
+│   │                          # reasons. (1) It needs the postgres SUPERUSER
+│   │                          # password — migration 0018 revoked the app login's
+│   │                          # grants on schema_migrations, so `app` gets
+│   │                          # "permission denied" — and CI holds no GCP
+│   │                          # credentials at all today, while running on
+│   │                          # `pull_request`. Wiring the most privileged
+│   │                          # credential in the system into PR workflow runs is a
+│   │                          # large surface increase. (2) It is the wrong shape
+│   │                          # for CI: a pull request cannot cause production
+│   │                          # drift, drift happens at arbitrary times rather than
+│   │                          # at PR time, and a per-PR check would block
+│   │                          # unrelated work whenever somebody ran manual DDL.
+│   │                          # It belongs on a SCHEDULE inside GCP — Cloud Build
+│   │                          # already holds Secret Manager and Cloud SQL access
+│   │                          # for the deploy triggers, so a Cloud Scheduler entry
+│   │                          # invoking it needs no GitHub secret whatsoever.
+│   │                          # ★ BUILT: cloudbuild-drift.yaml + the
+│   │                          # `storemink-schema-drift` trigger and Cloud Scheduler
+│   │                          # job (`0 4 * * *` UTC), CREATED PAUSED until that
+│   │                          # file reaches `main`. The build ran green against
+│   │                          # production before any schedule was attached. Until
+│   │                          # it is resumed, `npm run db:drift:prod` by hand is the
+│   │                          # check. See docs/cron-jobs.md for the contract, the
+│   │                          # evidence and the resume commands — and its standing
+│   │                          # lesson that a job documented but never created is a
+│   │                          # job that does not run.
 │   └── sql/                   # New forward-only SQL. 0002 repairs the production
 │                              # credit-note formatter drift (bare lpad truncated
 │                              # legal serials beyond 9,999) and canonicalizes the
@@ -1559,26 +1911,7 @@ wholesip/
 │   │                          # is Rust, so its module graph and source maps are native
 │   │                          # allocations outside it. Measured on M2/8 GB: 90 MB at
 │   │                          # boot → 1.77 GB after eight routes, cap never binding.
-│   │                          # Restarting the server is what reclaims memory, not the cap.
-│   │                          # ★★ It also DISABLES Turbopack's dev filesystem cache on
-│   │                          # ≤12 GB machines (the heap cap's boundary — one notion of
-│   │                          # "small machine", not two that can drift), passing the
-│   │                          # decision to next.config.ts as NEXT_DEV_FS_CACHE and
-│   │                          # reclaiming any .next/dev/cache left behind.
-│   │                          # `turbopackFileSystemCacheForDev` became a DEFAULT in Next
-│   │                          # 16.1, and its periodic write + compaction of a multi-GB
-│   │                          # database contends with macOS paging for one SSD. Measured
-│   │                          # 2026-09-06 on M2/8 GB with a 2.88 GB cache: a 2.5-MINUTE
-│   │                          # cache write, during which `POST /api/auth/session` logged
-│   │                          # `102s (next.js: 101s, application-code: 1564ms)`.
-│   │                          # ⚠ READ THAT SPLIT: 101 s of framework, 1.5 s of app code —
-│   │                          # so it is NOT the ~46 ms Mumbai round trip, which is the
-│   │                          # tempting and wrong lead. Off: GET / 20.4s→5.7s, /signup
-│   │                          # 10.0s→0.85s, .next/dev 3.15 GB→0.27 GB, no stall lines.
-│   │                          # Edit-refresh is untouched (Turbopack still caches in
-│   │                          # memory); only cold compiles after a RESTART cost more.
-│   │                          # `--fs-cache`/`--no-fs-cache` (or DEV_FS_CACHE=1/0) override;
-│   │                          # `npx next dev` sets nothing and keeps Next's own default
+│   │                          # Restarting the server is what reclaims memory, not the cap
 │   ├── db-migrate.mjs         # ★ status/baseline/apply/verify + recovery-only audit/adopt
 │   │                          # runner: physical DB guard, advisory lock, one transaction
 │   │                          # per migration, checksum drift/unknown-row refusal, and
@@ -1593,6 +1926,24 @@ wholesip/
 │   │                          # never falls back to the app login, whose ledger grants are
 │   │                          # removed by migration 0018.
 │   ├── db-migrations-core.mjs # pure manifest/checksum/planning primitives (tested)
+│   ├── db-local-ctl.sh        # ★ LOCAL dev Postgres cluster (Homebrew postgresql@17)
+│   │                          # on port 5544 — NOT 5432, which this Mac's EDB
+│   │                          # PostgreSQL 15/16/17 installs hold as the system
+│   │                          # `postgres` user (invisible to a non-root lsof, so
+│   │                          # the port looks free). Sets LC_ALL, without which
+│   │                          # the postmaster dies "became multithreaded during
+│   │                          # startup". start/stop/status/psql.
+│   ├── db-local-sync.sh       # ★ rebuild storemink_local from staging by dump +
+│                              # restore. ★★ pg_dump runs --role=app_service: the
+│                              # `app` login has rolbypassrls=false, so a dump as
+│                              # `app` returns ZERO rows for every RLS-protected
+│                              # (service-only) table with no error. A dump rather
+│                              # than replayed SQL because manifest.json's baseline
+│                              # is a VERIFICATION baseline (asserts tables exist)
+│                              # and creates nothing, and the 153 supabase/*.sql
+│                              # files carry apply-order traps + post-apply edits
+│                              # that re-run as silent no-ops. Refuses on expired
+│                              # ADC, a dead proxy, or pg_dump older than the server.
 │   └── help-content-migrations.test.mjs # static contract for the 0019–0024 public Help
 │                              # baseline: exact file/order/article counts, unique slugs,
 │                              # complete metadata/substantial bodies, valid internal links,
@@ -3039,8 +3390,41 @@ all stores but the existing store row still controls the independent drafting
 opt-in; disabling the invitation boundary never discards a store's operator-set
 drafting entitlement.
 Its read tools cover store profile, catalogue summary, product search,
-recognized net sales, low stock, masked orders/current order, current product
-and published Help Centre retrieval. Sales and orders reuse the dashboard's
+recognized net sales, low stock, masked orders/current order, current product,
+published Help Centre retrieval and Phase 7A Website Builder context. Builder
+reads require Builder View, recheck that permission inside the reader and put
+the trusted store ID in every service query. They list a bounded page index,
+resolve only exact page slugs/section IDs, preserve microsecond page versions,
+return section digests, expose safe brand/theme/chrome design context and keep
+custom-code bodies absent unless one HTML/CSS/JS field is explicitly requested
+in an 8,000-character chunk. All merchant builder content is marked untrusted.
+`lib/mink/storefront-code-contract.ts` validates Phase 7B exact-target patches,
+field/combined sizes and prohibited APIs without server execution. With
+drafting plus Builder Manage, Mink can store one 5-credit immutable private
+proposal for an existing custom-code section. The owner-only no-store card
+rechecks the target and renders only proposed code in an opaque-origin
+`allow-scripts` iframe with a deny-by-default CSP; current code is escaped diff
+text. Phase 7C adds a separate default-off operator gate and a human-only
+five-minute approval. `lib/mink/storefront-code-actions.ts` reloads the owned
+immutable proposal and exact current page/section inside one transaction,
+rechecks Builder Manage, custom-code entitlement, tool gate, version, digest
+and canonical request hash, then replaces only that section inside the private
+`store_pages.sections` value. Replays are idempotent and execution, conflict or
+expiry produces one audit outcome. That draft-save write never touches
+`published_sections`, status or `published_at`. Phase 7D adds an independent
+default-off gate and no Gemini execution tool. The human card runs static plus
+opaque-origin, no-network 1,280/390 px browser checks before creating a new
+five-minute approval bound to the Phase 7C save, complete draft/live snapshots
+and exact page version. Atomic execution copies the checked snapshot to
+`published_sections`, updates publication state/time and refreshes storefront
+caches/indexing. An unreadable or mismatched execution response reconciles the
+stored result and retains the same approval ID for safe retry. Publication
+timestamp comparisons accept equivalent PostgreSQL/ISO text while preserving
+the exact microseconds in the stored rollback snapshot. Exact rollback
+is another short-lived human approval, restores
+the previous published snapshot only while live state is unchanged and never
+rewinds the private Builder draft. Section creation, header/footer changes,
+repository, shell and deployment remain unavailable. Sales and orders reuse the dashboard's
 date/timezone/refund/channel contract. Catalogue health now separates
 product-level publication counts from sellable-SKU inventory counts, evaluates
 simple products and variants with the Inventory workspace's effective-threshold
@@ -3444,8 +3828,12 @@ the trusted `store_id`, and direct customer PII is minimized/masked.
      Migration
      `20260902_0058_mink_phase_6a_durable_workflows` owns the tables, tenant
      composite keys, lease/completion invariants, service grants and Help
-     contract. Cloud Scheduler must add `storemink-mink-workflows` only after
-     that migration and matching application deploy.
+     contract. ✅ Cloud Scheduler `storemink-mink-workflows` EXISTS on production as
+     of 2026-09-08 (`* * * * *`), created only after the tables, the route's
+     HTTP 200 on an empty queue, and the 401 gate were each verified against
+     production; see docs/cron-jobs.md for the evidence. It must still be added
+     only after that migration and matching application deploy in any other
+     environment.
 
      Phase 6B reuses that runtime for
      `revenue_decline_investigation`. The model-visible queue tool requires an
@@ -3532,11 +3920,11 @@ the trusted `store_id`, and direct customer PII is minimized/masked.
      retries, tool names, tokens and known shadow cost but never selects or
      renders prompts, answers, tool arguments/results, provider state or
      reasoning. `evals/mink/read-alpha.json` and `npm run mink:eval` provide the
-     64-case live tool-choice/security/latency gate. The complementary
+     73-case live tool-choice/security/latency gate. The complementary
      `docs/mink-ai-test-prompts.md` catalogue covers phase-wise manual prompts
      plus UX, permission, tenancy, credit, approval, conflict, idempotency and
      rollback acceptance scenarios. The original migration
-     publishes the guide; migrations 0036–0058 and 0072–0074 keep
+     publishes the guide; migrations 0036–0058 and 0072–0079 keep
      `use-mink-ai-in-your-dashboard` aligned with these capabilities and limits.
 
 21. **Help Centre (`help.storemink.com`) — platform-global, operator-managed
@@ -9522,32 +9910,41 @@ way — an entry there is a deliberate act, not a way to silence the guard.
 
 ## 6. Commands
 
-> **Dev feels slow?** Read `docs/local-dev-performance.md` before tuning
-> anything. It is measured, and the answer is almost never the bundler:
-> compiles run 13 ms–1.5 s, while **every DB query costs ~46 ms** because
-> `db:proxy` points at a Cloud SQL instance in Mumbai — so a page render spends
-> 300–500 ms on network before React starts. Independent dashboard-shell reads
-> run concurrently, but the durable fix for the remaining network floor is a
-> local Postgres (not built; the doc says what it would take). On an 8 GB machine
-> the second cost is memory, so the default dev runner now caps Next at 2 GB,
-> rotates `.next/dev` only after its generated cache exceeds 3 GB, and always
-> reclaims `.next/cache` (dead in dev) once it passes 256 MB. **The cap bounds
-> V8's old space only** — Turbopack's native memory sits outside it, so total RSS
-> still climbs through a session; restart the server rather than trusting the cap.
-> The runner also warns when swap is already ≥60% full at startup, because on an
-> 8 GB machine that, not compilation, is what the slowdown actually is.
-> **The third cost is DISK, and it is the one that produces the alarming
-> outliers.** Turbopack's dev filesystem cache is on by default from Next 16.1;
-> its periodic write and compaction of a multi-GB `.next/dev/cache` competes with
-> the swap file for the same SSD, and was measured blocking a request for
-> **101 seconds of framework time against 1.5 s of application code**. The runner
-> therefore turns it off on ≤12 GB machines (`--fs-cache` forces it back on).
-> ★ When a request looks slow, read its `next.js:` vs `application-code:` split
-> before suspecting the database — that one number separates §4 from §2.
+> **Dev feels slow?** See `docs/local-dev-performance.md`. September's saved
+> trace contains 60 s login compilation and 43 s builder compilation: August's
+> fast timings must not be treated as a permanent diagnosis. The 8 GB Mac also
+> showed 6.4 GB swap used and 3.3 GB compressed RAM. Check current memory pressure
+> and separate compile time from render/database time. The runner limits V8's
+> old space, not total process memory. Warm caches are preserved by default;
+> `DEV_CACHE_MAX_MB` opts into size-based dev-cache rotation, and `dev:reset` is
+> for cache recovery, not routine speed tuning. `dev:all:webpack` provides an
+> explicit Webpack command with the same proxy and V8 heap policy. On ≤12 GB
+> RAM the runner now selects Webpack automatically; `dev:all:turbo` opts back in
+> to Turbopack. Development-only Webpack configuration limits parallel module
+> processing to 8 per compiler on ≤12 GB RAM (32 above; override through
+> `DEV_WEBPACK_PARALLELISM`) and disables output path comments. On ≤12 GB,
+> on-demand entries retain two recent pages with a 25 s inactivity threshold.
+> Next's source maps, loaders, chunking and caches are preserved. Production
+> config has no custom Webpack callback. See the performance doc for sources
+> and measured results; this is a memory/throughput tradeoff, not a RAM ceiling.
+> This is internal development tooling; customer flows and Help Centre content
+> are unchanged.
+> ★ When Turbopack IS the bundler on a small machine, its dev filesystem cache
+> (a default since Next 16.1) is switched off: its periodic write and compaction
+> of a multi-GB `.next/dev/cache` competes with the swap file for one SSD, and was
+> measured blocking a request for **101 seconds of framework time against 1.5 s of
+> application code**. `--fs-cache` forces it back on. ★★ When a request looks slow,
+> read its `next.js:` versus `application-code:` split before suspecting the
+> database — that one number separates a bundler-cache stall from the ~46 ms
+> Mumbai round trip.
 
 ```bash
-npm run dev         # resource-aware next dev --turbopack: 2 GB heap on ≤12 GB RAM,
+npm run dev         # Webpack on ≤12 GB RAM, Turbopack above; 2 GB heap on ≤12 GB,
                     #   3 GB on ≤20 GB, uncapped above; test stores via {slug}.localhost:3000
+npm run dev:webpack # explicit Webpack; same V8 heap policy
+npm run dev:all:webpack # explicit Webpack + Cloud SQL proxy
+npm run dev:turbo   # explicit Turbopack (also works on low-memory machines)
+npm run dev:all:turbo # explicit Turbopack + Cloud SQL proxy
 npm run dev:lean    # force the 2 GB heap regardless of detected machine memory
 npm run dev:full    # explicitly disable the heap cap (for high-memory machines/debugging)
 npm run dev:reset   # delete generated .next/dev only; next launch recompiles cold once
@@ -9556,6 +9953,42 @@ npm run dev -- --no-fs-cache  # force it OFF (DEV_FS_CACHE=0); default is OFF on
 npm run dev:all     # ↑ dev + the Cloud SQL Auth Proxy together (concurrently) — one command
 npm run dev:all:lean # ↑ force the 2 GB heap + proxy (normally identical on this 8 GB Mac)
 npm run dev:all:full # ↑ uncapped dev + proxy
+npm run db:local:start  # ★ start the LOCAL dev Postgres (Homebrew @17, port 5544)
+npm run db:local:status # cluster state + storemink_local table count
+npm run db:local:sync   # rebuild storemink_local from staging (add -- --schema-only to skip data)
+npm run db:local:psql   # psql into storemink_local
+npm run db:local:stop   # stop the cluster
+npm run db:drift:local  # ★ has DDL reached this database without the runner?
+npm run db:drift:staging #   same for staging (via the proxy; needs gcloud auth for the secret)
+npm run db:drift:prod   #   and production. Exit 0 = clean, 1 = drift or stale baseline.
+                    #   After a real migration: re-run with `-- --update-baseline <env>`
+                    #   and COMMIT drizzle/migrations/schema-fingerprint.json in the
+                    #   same change, or the detector cannot tell the next manual DDL
+                    #   from the migration you just applied.
+npm run db:migrate:local # ledger status/apply against --environment local (ENV_DATABASES.local
+                    #   is null, so there is no database-name guard)
+                    #   ★ With .env.local present the app uses the LOCAL database and you run
+                    #   `npm run dev`, NOT `dev:all` — there is no proxy to start. Warm renders
+                    #   drop from ~1.2 s of application-code to ~1-3 ms per query. Rationale,
+                    #   measurements and the Identity-Platform pairing warning are in
+                    #   docs/local-dev-performance.md.
+                    # ★★ ALL SIX db:migrate:* / db:drift:* SCRIPTS PIN DB_HOST AND DB_PORT
+                    #   (staging and prod at 127.0.0.1:6543 via the proxy, local at
+                    #   127.0.0.1:5544). None of them may inherit host/port from the env
+                    #   files, and the two failure directions are different:
+                    #   • staging/prod set DB_NAME but used to inherit host/port, so an
+                    #     .env.local pointing at a local cluster redirected them. That failed
+                    #     safely ONLY because no local database carried those names — and the
+                    #     environment guard compares the database NAME, not the host, so a
+                    #     local database called `storemink` would let `db:migrate:prod apply`
+                    #     write to LOCAL while reporting success as production.
+                    #   • the LOCAL scripts pinned nothing at all, and `ENV_DATABASES.local`
+                    #     is null, so there is NO name guard on that side either. Delete
+                    #     .env.local and `db:migrate:local apply` would have written to
+                    #     storemink_staging while calling itself local — the more likely
+                    #     accident, since deleting .env.local is the documented way to look
+                    #     at staging. Verified after pinning by moving .env.local aside: it
+                    #     still reports database=storemink_local.
 npm run db:proxy    # just the Cloud SQL Auth Proxy → staging DB on localhost:6543 (needs
                     #   `gcloud auth application-default login` once for ADC). Points at the
                     #   `storemink-prod-db` INSTANCE; local dev uses its `storemink_staging`
