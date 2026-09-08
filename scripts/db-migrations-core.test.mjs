@@ -24,8 +24,9 @@ describe("database migration controls", () => {
   it("loads the repository manifest and checksums the enrolled SQL", async () => {
     const loaded = await loadManifest();
     expect(loaded.baseline.id).toBe("baseline:cloudsql-2026-08-14");
-    // 75 shared + five billing + six offers + nine Mink + two Help fixes.
-    expect(loaded.migrations).toHaveLength(97);
+    // 75 shared + five billing + six offers + nine Mink + two Help fixes
+    // + one POS register-reload guide.
+    expect(loaded.migrations).toHaveLength(98);
     // ★ PENDING BLOCKS GO LAST, applied ones first, or the planner reports the
     // database out_of_order — an APPLIED migration sitting after an unapplied
     // one is exactly what `sawGap` catches. The offers block precedes the Mink
@@ -37,19 +38,24 @@ describe("database migration controls", () => {
     // already applied somewhere reads as DRIFT and the runner refuses. Both
     // chains hang off entries in the shared base rather than off each other,
     // so concatenating them needed no edit at all.
-    expect(loaded.migrations.at(-3)).toMatchObject({
+    expect(loaded.migrations.at(-4)).toMatchObject({
       id: "20260907_0084_mink_phase_8d_memories",
       requires: ["20260906_0083_mink_phase_8c_responses"],
       transaction: true,
     });
-    expect(loaded.migrations.at(-2)).toMatchObject({
+    expect(loaded.migrations.at(-3)).toMatchObject({
       id: "20260908_0087_storemink_logo_help",
       requires: ["20260826_0020_storefront_domains_help"],
       transaction: true,
     });
-    expect(loaded.migrations.at(-1)).toMatchObject({
+    expect(loaded.migrations.at(-2)).toMatchObject({
       id: "20260908_0088_help_first_visit_recovery",
       requires: ["20260826_0019_getting_started_account_help"],
+      transaction: true,
+    });
+    expect(loaded.migrations.at(-1)).toMatchObject({
+      id: "20260909_0089_pos_cart_refresh_help",
+      requires: ["20260825_0015_pos_help_documents"],
       transaction: true,
     });
     expect(loaded.migrations[0]).toMatchObject({

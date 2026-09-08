@@ -2971,6 +2971,81 @@ Tap Hold with nothing scanned.
 
 ---
 
+## 11c-2. The basket survives a refresh (§22)
+
+The in-progress cart is kept in the tab's `sessionStorage` as CHOICES only
+(`lib/pos/cart-storage.ts`). This is a crash mat for the sale in front of you,
+NOT a second Hold: Hold is the durable, cross-till version and is what survives
+a lock or a move to another counter.
+
+**PS-CR.1 — Reload mid-sale**
+Scan two items, then reload `/pos/sell` (F5).
+**Expect:** the same items, quantities, order discount and GSTIN come back. The
+cart briefly reads **Restoring the sale in progress…** rather than "Scan or tap
+a product to start a sale", so it never looks as if the basket was lost.
+
+**PS-CR.2 ★ — It re-prices, like a resumed hold**
+Build a cart, change that product's price in the dashboard, reload.
+**Expect:** today's price. Only choices are stored, and `placePosSale` re-reads
+again at completion.
+
+**PS-CR.3 — A deleted product is reported, not swallowed**
+Build a cart, delete one of its products, reload.
+**Expect:** the rest comes back AND a message naming how many couldn't be
+restored. If NOTHING can be restored the till says the sale started empty
+rather than silently opening blank.
+
+**PS-CR.4 — Completing or holding leaves nothing behind**
+Complete a sale (or Hold it), then reload.
+**Expect:** an empty cart. Also empty after removing the last line by hand.
+
+**PS-CR.5 ★★ — A lock clears it; Hold is how you keep a sale**
+Build a cart, let the till idle-lock (or tap **Lock**), sign back in.
+**Expect:** an empty cart. Reaching the login screen means no operator session
+is active, so the basket must not be waiting for whoever signs in next — it is
+not their sale, and ringing it up would attribute it to them. Contrast
+**PS-PK.10**: a HELD cart does survive this.
+
+**PS-CR.6 ★ — Nothing carries between registers**
+Build a cart on till A. Re-pair that browser to another location (or open the
+same store on a device paired elsewhere).
+**Expect:** an empty cart. Stock is per location and a browser can be shared
+between stores.
+
+**PS-CR.7 ★★ — An exchange basket never returns as an ordinary sale**
+Start an exchange (`/pos/sell?exchange=…`), scan a replacement, then open
+`/pos/sell` WITHOUT the parameter.
+**Expect:** an empty cart. A replacement is priced against one specific
+completed return with the original customer locked; tendering it as an
+unrelated sale would settle the wrong thing. Reloading WITH the parameter still
+restores it.
+
+**PS-CR.8 — The cashier in front of the customer wins**
+On a cold catalogue (first visit on this device, or clear site data), reload
+with a basket stored and start scanning before the grid warms up.
+**Expect:** what you are scanning now stays; the stored basket is abandoned, not
+swapped in underneath you.
+
+**PS-CR.9 — Yesterday's basket is not resurrected**
+Leave a kiosk tab open overnight with a basket in it and reload after 12 hours.
+**Expect:** an empty cart. A tab on a kiosk lives for weeks, so "dies with the
+tab" is not on its own a freshness guarantee.
+
+**PS-CR.10 — Blocked storage still sells**
+Open the register in a browser with site data blocked (Safari private mode, a
+locked-down kiosk profile).
+**Expect:** the register opens and completes sales exactly as before; only the
+refresh safety net is absent. Every storage call degrades to a no-op.
+
+**PS-CR.11 — Two register tabs keep their own baskets**
+Open `/pos/sell` in two tabs on one till, build a different basket in each, and
+reload both.
+**Expect:** each tab restores its OWN basket. `sessionStorage` is per tab
+deliberately: a shared store could hand a cashier the other tab's basket, and a
+wrong basket at a counter looks exactly like a correct one.
+
+---
+
 ## 11d. Gateway payments at the till _(roadmap Step 12)_
 
 Set up: a store with its own Razorpay connected and enabled (Channels), on a

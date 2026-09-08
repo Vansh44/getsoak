@@ -70,30 +70,21 @@ import { CameraScanner } from "./camera-scanner";
 import { posTotals } from "@/lib/pos/totals";
 import { applyOffers } from "@/lib/offers/apply";
 import type { PosExchangeContext } from "@/app/actions/pos-return-actions";
+import { cartLineFrom, type CartLine } from "@/lib/pos/cart-line";
+import {
+  clearPosCart,
+  parseStoredPosCart,
+  readPosCartRaw,
+  restoreCartLines,
+  serializePosCart,
+  writePosCart,
+  type StoredPosCart,
+} from "@/lib/pos/cart-storage";
 
-export interface CartLine {
-  key: string;
-  productId: string;
-  variantId: string | null;
-  name: string;
-  variantName: string | null;
-  image: string | null;
-  unitPrice: number;
-  quantity: number;
-  /** Markdown on this line only, in rupees — for one damaged/expiring unit.
-   *  Re-derived and capped server-side; this is a display value. */
-  lineDiscount: number;
-  /** Live stock at this location; null = untracked. */
-  stock: number | null;
-  trackInventory: boolean;
-  allowBackorder: boolean;
-  /** Resolved to a rate via config.taxRates so the screen can quote the
-   *  tax-inclusive total (see lib/pos/totals.ts). */
-  taxClassId: string | null;
-  /** The product's category, for offer scoping. Carried on the cart line so
-   *  the quote and the charge see the same scope (docs/offers-plan.md). */
-  categoryId: string | null;
-}
+// Re-exported from its own module now: `cartLineFrom` is the single builder, so
+// the resume and restore paths cannot omit a field the way an `as CartLine`
+// cast let them (see lib/pos/cart-line.ts).
+export type { CartLine };
 
 const lineKey = (p: string, v: string | null) => `${p}:${v ?? ""}`;
 
@@ -177,6 +168,121 @@ export function SellClient({
   useEffect(() => {
     void refreshParked();
   }, [refreshParked]);
+
+  // --- surviving a refresh (lib/pos/cart-storage.ts) ---------------------
+  // The basket lives in this tab's sessionStorage as CHOICES, so a reload —
+  // an F5, a stray kiosk gesture, the browser reclaiming a backgrounded tab —
+  // no longer makes the cashier re-scan everything with the customer waiting.
+  // Hold (park) remains the deliberate, durable, cross-till version.
+  const [pendingRestore, setPendingRestore] = useState<StoredPosCart | null>(
+    null,
+  );
+  // A ref, not state: it gates the WRITE below, and flipping it must not
+  // itself trigger a save. `true` means "the restore question is answered" —
+  // by restoring, by finding nothing, or by the cashier starting a new basket
+  // first — and only then may this screen write over what is stored.
+  const restoreSettled = useRef(false);
+  const cartCount = cart.length;
+
+  // Read once, before anything can be added. Declared ABOVE the writer so it
+  // runs first in the mount commit: the writer would otherwise see an empty
+  // cart and clear the very basket this is about to restore.
+  useEffect(() => {
+    if (restoreSettled.current) return;
+    const stored = parseStoredPosCart(
+      readPosCartRaw(config.storeId, config.locationId),
+      {
+        now: Date.now(),
+        // The PROP, not `exchangeActive`: at mount they are the same value,
+        // and the server is the authority on which return a refreshed
+        // exchange is settling. A stored basket from a different context (or
+        // from none) is discarded rather than tendered as an unrelated sale.
+        exchangeReturnId: exchange?.returnId ?? null,
+      },
+    );
+    if (!stored) {
+      restoreSettled.current = true;
+      return;
+    }
+    setPendingRestore(stored);
+  }, [config.storeId, config.locationId, exchange?.returnId]);
+
+  // Restore only once the catalogue can price it. `ready` means an index
+  // exists — from the IndexedDB cache or a completed sync — so a miss at that
+  // point is a genuine "not in the catalogue" rather than a cold cache, which
+  // would drop lines that do exist and say so untruthfully.
+  useEffect(() => {
+    if (!pendingRestore || restoreSettled.current || !catalog.ready) return;
+
+    // The cashier started ringing up before the catalogue warmed. Their live
+    // basket wins outright: replacing it with an older stored one is the
+    // wrong-basket-at-the-counter failure this feature must never cause.
+    if (cartCount > 0) {
+      restoreSettled.current = true;
+      setPendingRestore(null);
+      return;
+    }
+
+    const { lines, dropped } = restoreCartLines(pendingRestore, catalog.byId);
+    restoreSettled.current = true;
+    setPendingRestore(null);
+    if (lines.length === 0) {
+      clearPosCart(config.storeId, config.locationId);
+      // "held" is Hold's word, and the two must stay distinguishable.
+      setError(
+        "The products from the sale in progress are no longer in the catalogue, so the register opened empty.",
+      );
+      return;
+    }
+    setCart(lines);
+    setDiscount(pendingRestore.discount);
+    setGstin(pendingRestore.gstin);
+    // Said out loud, for the parked-resume reason: a basket that comes back
+    // smaller without a word is how a customer is charged for less than they
+    // picked up.
+    if (dropped > 0) {
+      setError(
+        `${dropped} item${dropped === 1 ? " is" : "s are"} no longer in the catalogue and couldn't be restored.`,
+      );
+    }
+  }, [
+    pendingRestore,
+    cartCount,
+    catalog.ready,
+    catalog.byId,
+    config.storeId,
+    config.locationId,
+  ]);
+
+  // One writer for every path that changes the basket — adding, removing,
+  // re-quantifying, discounting, holding, completing, voiding. Clearing the
+  // cart writes nothing and REMOVES the key, so a finished or held sale leaves
+  // nothing behind to restore; there is no per-call-site "remember to save".
+  useEffect(() => {
+    if (!restoreSettled.current) return;
+    if (cart.length === 0) {
+      clearPosCart(config.storeId, config.locationId);
+      return;
+    }
+    writePosCart(
+      config.storeId,
+      config.locationId,
+      serializePosCart({
+        lines: cart,
+        discount,
+        gstin,
+        exchangeReturnId: exchangeActive?.returnId ?? null,
+        now: Date.now(),
+      }),
+    );
+  }, [
+    cart,
+    discount,
+    gstin,
+    exchangeActive,
+    config.storeId,
+    config.locationId,
+  ]);
   // Manager-arranged till grid. Empty = not configured = show everything.
   const [layout, setLayout] = useState<LayoutEntry[]>([]);
   const [canEditLayout, setCanEditLayout] = useState(false);
@@ -276,25 +382,7 @@ export function SellClient({
           l.key === key ? { ...l, quantity: l.quantity + 1 } : l,
         );
       }
-      return [
-        ...c,
-        {
-          key,
-          productId: it.productId,
-          variantId: it.variantId,
-          name: it.name,
-          variantName: it.variantName,
-          image: it.image,
-          unitPrice: it.price,
-          taxClassId: it.taxClassId ?? null,
-          categoryId: it.categoryId ?? null,
-          quantity: 1,
-          lineDiscount: 0,
-          stock: it.stock,
-          trackInventory: it.trackInventory,
-          allowBackorder: it.allowBackorder,
-        },
-      ];
+      return [...c, cartLineFrom(it, { quantity: 1 })];
     });
   }, []);
 
@@ -991,14 +1079,25 @@ export function SellClient({
           <div className="pos-scroll-area min-h-0 flex-1 overflow-y-auto overscroll-contain p-3">
             {cart.length === 0 ? (
               <div className="py-16 text-center text-sm text-[var(--pos-ink-3)]">
-                <p>Scan or tap a product to start a sale.</p>
-                <button
-                  type="button"
-                  onClick={() => setMobilePane("products")}
-                  className="mt-4 rounded-xl bg-[var(--pos-surface-2)] px-4 py-2.5 font-medium text-[var(--pos-ink)] lg:hidden"
-                >
-                  Browse products
-                </button>
+                {/* ★ SAY THE BASKET IS COMING BACK. After a reload the cart
+                    paints empty for as long as the catalogue takes to warm,
+                    and "Scan a product to start a sale" on a till that is
+                    about to refill itself reads as the items being lost —
+                    which is the very thing being fixed. */}
+                <p>
+                  {pendingRestore
+                    ? "Restoring the sale in progress…"
+                    : "Scan or tap a product to start a sale."}
+                </p>
+                {!pendingRestore && (
+                  <button
+                    type="button"
+                    onClick={() => setMobilePane("products")}
+                    className="mt-4 rounded-xl bg-[var(--pos-surface-2)] px-4 py-2.5 font-medium text-[var(--pos-ink)] lg:hidden"
+                  >
+                    Browse products
+                  </button>
+                )}
               </div>
             ) : (
               cart.map((l) => (
@@ -1296,21 +1395,16 @@ export function SellClient({
             const restored = sale.lines.flatMap((l) => {
               const item = catalog.byId(l.productId, l.variantId);
               if (!item) return [];
+              // ★ THE SAME BUILDER THE GRID USES. This used to hand-build a
+              // partial line and finish it with `as CartLine`, which dropped
+              // taxClassId and categoryId — so a resumed basket quoted a
+              // TAX-FREE total while placePosSale charged tax, and every
+              // category-scoped offer silently stopped applying to it.
               return [
-                {
-                  key: itemKey({
-                    productId: l.productId,
-                    variantId: l.variantId,
-                  } as CartLine),
-                  productId: l.productId,
-                  variantId: l.variantId,
-                  name: item.name,
-                  variantName: item.variantName ?? null,
-                  image: item.image,
-                  unitPrice: item.price,
+                cartLineFrom(item, {
                   quantity: l.quantity,
                   lineDiscount: l.lineDiscount ?? 0,
-                } as CartLine,
+                }),
               ];
             });
             const dropped = sale.lines.length - restored.length;

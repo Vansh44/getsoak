@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { signInWithEmailAndPassword } from "firebase/auth";
@@ -15,6 +15,7 @@ import {
   posLoginWithPin,
   requestPosCredentialReset,
 } from "@/app/actions/pos-auth-actions";
+import { clearAllPosCarts } from "@/lib/pos/cart-storage";
 
 export function PosLoginClient({
   locationName,
@@ -37,6 +38,22 @@ export function PosLoginClient({
   const [pairing, setPairing] = useState(false);
   const [pairCode, setPairCode] = useState("");
   const pendingPinRef = useRef<string | null>(null);
+
+  // ★★ THE ONE PLACE EVERY SIGNED-OUT PATH LANDS, which is why the in-progress
+  // basket is dropped here rather than at the two `posLock()` call sites: the
+  // idle lock, the rail's Lock button, an expired operator cookie and a cashier
+  // deactivated mid-shift all arrive on this screen, and a third lock path
+  // would forget to call it (CODEBASE.md §22 — the idle lock itself was missing
+  // from five of seven POS screens for exactly that reason).
+  //
+  // Reaching this screen means no operator session is active, so a saved basket
+  // must not be waiting for whoever signs in next: it is not their sale, and
+  // ringing it up would attribute it to them. A cashier who locks the till
+  // mid-sale therefore comes back to an empty cart — Hold is the deliberate way
+  // to keep one, and it survives the lock precisely because it is a server row.
+  useEffect(() => {
+    clearAllPosCarts();
+  }, []);
 
   const requestReset = () => {
     setError(null);
