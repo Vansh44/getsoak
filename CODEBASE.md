@@ -1772,6 +1772,34 @@ wholesip/
 │   │                          # the ledger unchanged and exit 1; a bare ledger
 │   │                          # insert gave ledger_only. classifyDrift is pure and
 │   │                          # mutation-tested in db-migrations-core.test.mjs.
+│   │                          # ★★ WHERE THE CHECK RUNS, AND WHY NOT GITHUB CI.
+│   │                          # The FILE is validated in CI today — shape, all
+│   │                          # ENV_DATABASES environments present, 64-hex hashes,
+│   │                          # and a count never exceeding the manifest — through
+│   │                          # the existing `npm run test` step, needing no
+│   │                          # database and no credentials. That catches a
+│   │                          # malformed or half-armed baseline being committed.
+│   │                          # The DATABASE check is NOT in GitHub CI, for two
+│   │                          # reasons. (1) It needs the postgres SUPERUSER
+│   │                          # password — migration 0018 revoked the app login's
+│   │                          # grants on schema_migrations, so `app` gets
+│   │                          # "permission denied" — and CI holds no GCP
+│   │                          # credentials at all today, while running on
+│   │                          # `pull_request`. Wiring the most privileged
+│   │                          # credential in the system into PR workflow runs is a
+│   │                          # large surface increase. (2) It is the wrong shape
+│   │                          # for CI: a pull request cannot cause production
+│   │                          # drift, drift happens at arbitrary times rather than
+│   │                          # at PR time, and a per-PR check would block
+│   │                          # unrelated work whenever somebody ran manual DDL.
+│   │                          # It belongs on a SCHEDULE inside GCP — Cloud Build
+│   │                          # already holds Secret Manager and Cloud SQL access
+│   │                          # for the deploy triggers, so a Cloud Scheduler entry
+│   │                          # invoking it needs no GitHub secret whatsoever.
+│   │                          # ⚠ NOT BUILT YET; run `npm run db:drift:prod` by
+│   │                          # hand until it is, and see docs/cron-jobs.md's
+│   │                          # standing lesson that a job documented but never
+│   │                          # created is a job that does not run.
 │   └── sql/                   # New forward-only SQL. 0002 repairs the production
 │                              # credit-note formatter drift (bare lpad truncated
 │                              # legal serials beyond 9,999) and canonicalizes the

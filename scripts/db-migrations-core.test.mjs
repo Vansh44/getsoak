@@ -9,6 +9,7 @@ import {
   sha256,
   validateEnvironment,
   classifyDrift,
+  ENV_DATABASES,
 } from "./db-migrations-core.mjs";
 
 const manifest = {
@@ -1180,6 +1181,69 @@ describe("database migration controls", () => {
         verdict: "unbaselined",
         ok: false,
       });
+    });
+  });
+
+  // ★ THE COMMITTED BASELINE IS ONLY USEFUL IF IT IS WELL FORMED AND COMPLETE.
+  // These run in CI through the existing `npm run test` step and need NO
+  // database and NO credentials — they check the file, not the server. The
+  // server-side check (`db:drift:prod`) needs the postgres SUPERUSER password,
+  // because migration 0018 revoked the app login's grants on schema_migrations,
+  // so it deliberately does not run here: a pull request cannot cause
+  // production drift, and putting that credential within reach of PR workflow
+  // runs buys nothing. See CODEBASE.md for where that check belongs.
+  describe("committed schema baseline", () => {
+    const load = async () =>
+      JSON.parse(
+        await readFile(
+          path.resolve(
+            import.meta.dirname,
+            "../drizzle/migrations/schema-fingerprint.json",
+          ),
+          "utf8",
+        ),
+      );
+
+    it("covers every environment the runner recognises", async () => {
+      const file = await load();
+      expect(Object.keys(file.environments).sort()).toEqual(
+        Object.keys(ENV_DATABASES).sort(),
+      );
+    });
+
+    it("stores a full-length hash for both signals", async () => {
+      const file = await load();
+      for (const [environment, entry] of Object.entries(file.environments)) {
+        expect(entry.fingerprint, environment).toMatch(/^[0-9a-f]{64}$/);
+        expect(entry.ledger.digest, environment).toMatch(/^[0-9a-f]{64}$/);
+      }
+    });
+
+    // ★ A baseline claiming MORE recorded migrations than the manifest defines
+    // means the two have diverged — the file was refreshed against a database
+    // carrying migrations this checkout does not know about. The reverse is
+    // legitimate and NOT asserted: a manifest entry not yet deployed leaves the
+    // recorded count lower until it is applied.
+    it("never claims more applied migrations than the manifest defines", async () => {
+      const file = await load();
+      const ceiling = (await loadManifest()).migrations.length + 1; // + baseline row
+      for (const [environment, entry] of Object.entries(file.environments)) {
+        expect(Number.isInteger(entry.ledger.count), environment).toBe(true);
+        expect(entry.ledger.count, environment).toBeGreaterThan(0);
+        expect(entry.ledger.count, environment).toBeLessThanOrEqual(ceiling);
+      }
+    });
+
+    // ⚠ Deliberately NOT asserted: that the three fingerprints are equal. They
+    // match today only because all three databases are level. Staging being a
+    // migration ahead of production is a normal, correct state, and a test that
+    // forbade it would fail every time a migration was deployed in stages.
+    it("permits environments to sit at different fingerprints", async () => {
+      const file = await load();
+      const distinct = new Set(
+        Object.values(file.environments).map((entry) => entry.fingerprint),
+      );
+      expect(distinct.size).toBeGreaterThanOrEqual(1);
     });
   });
 });
