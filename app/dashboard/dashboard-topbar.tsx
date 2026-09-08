@@ -1,6 +1,6 @@
 "use client";
 
-import Image from "next/image";
+import { BrandMark } from "@/app/platform/brand-mark";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -288,14 +288,8 @@ export function DashboardTopbar({
           href="/dashboard"
           className="flex items-center gap-2 no-underline hover:opacity-80 transition-opacity shrink-0 pr-1"
         >
-          <div className="flex h-7 w-7 items-center justify-center overflow-hidden rounded-md bg-white/10">
-            <Image
-              src="/brand/storemink-mark.png"
-              alt="StoreMink logo"
-              width={20}
-              height={20}
-              className="h-5 w-5 object-contain"
-            />
+          <div className="flex h-8 w-8 items-center justify-center rounded-md bg-white">
+            <BrandMark size={28} title="StoreMink logo" priority />
           </div>
           <span className="hidden xs:inline-block sm:inline-block text-[17px] font-semibold tracking-tight text-white">
             StoreMink

@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import { STOREMINK_MARK } from "@/lib/brand-assets";
 import Link from "next/link";
 import {
   Bot,
@@ -625,7 +626,7 @@ export function HelpAssistant() {
               >
                 <span>Powered by</span>
                 <Image
-                  src="/brand/storemink-mark.webp"
+                  src={STOREMINK_MARK}
                   alt=""
                   width={18}
                   height={18}

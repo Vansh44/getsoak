@@ -4082,6 +4082,25 @@
           }
         ]
       }
+    },
+    {
+      "id": "20260908_0087_storemink_logo_help",
+      "description": "Explain refreshed StoreMink branding, merchant-logo separation and cached icons",
+      "file": "sql/20260908_0087_storemink_logo_help.sql",
+      "transaction": true,
+      "requires": ["20260826_0020_storefront_domains_help"],
+      "verify": {
+        "tables": ["help_articles"]
+      },
+      "applyVerify": {
+        "queries": [
+          {
+            "name": "Refreshed StoreMink branding guidance published",
+            "sql": "select count(*)::text from public.help_articles where slug = 'change-your-storefront-branding-and-layout' and status = 'published' and category_id is not null and body like '%<h2>Recognise StoreMink branding</h2>%' and body like '%does not replace the logo you uploaded%'",
+            "equals": "1"
+          }
+        ]
+      }
     }
   ]
 }

@@ -14,6 +14,7 @@ import NextTopLoader from "nextjs-toploader";
 import { PLATFORM_URL } from "@/lib/site";
 import { BRAND_DESCRIPTION } from "@/lib/seo/brand-identity";
 import { SEARCH_INDEXABLE } from "@/lib/store/host";
+import { STOREMINK_ICONS } from "@/lib/brand-assets";
 
 // Default WholeSip / platform fonts.
 const outfit = Outfit({ subsets: ["latin"], variable: "--font-outfit" });
@@ -93,6 +94,7 @@ const instrumentSerif = Instrument_Serif({
 export const metadata = {
   metadataBase: new URL(PLATFORM_URL),
   applicationName: "StoreMink",
+  icons: STOREMINK_ICONS,
   title: { default: "StoreMink", template: "%s" },
   description: BRAND_DESCRIPTION,
   // Belt-and-braces with the X-Robots-Tag header in next.config.ts: on any
