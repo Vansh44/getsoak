@@ -2,7 +2,12 @@
 #
 # Triggered by GitHub pushes; one trigger per branch → environment:
 #   dev     branch → service storemink-web-dev   (staging Firebase / DB / bucket)
-#   staging branch → service storemink-web       (staging Firebase / DB / bucket)
+#
+# ⚠ THE STAGING DEPLOYMENT WAS REMOVED 2026-09-08. There is no `staging` branch,
+# no `storemink-web` service and no staging.storemink.com — dev is the only
+# pre-production environment. The `storemink_staging` DATABASE and Identity
+# Platform project REMAIN and are dev's; the comments below about sharing them
+# still apply, they simply have one consumer now instead of two.
 #   main    branch → service storemink-web-prod  (prod    Firebase / DB / bucket)
 #
 # Each trigger supplies the per-env substitution VALUES — see docs/gcp-ci-cd.md
