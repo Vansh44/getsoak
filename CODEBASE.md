@@ -1772,11 +1772,12 @@ wholesip/
 │                              # computed checksum) across 27 ledger rows including
 │                              # production, for no functional gain — the ids are
 │                              # already unique. It is a naming wart, not a defect.
-│                              # ★ THE NEXT MIGRATION TAKES 0089. 0085 and 0086 are
+│                              # ★ THE NEXT MIGRATION TAKES 0090. 0085 and 0086 are
 │                              # used by the offers series, so those collide too;
-│                              # 0087 documents the StoreMink logo refresh.
-│                              # 0088 documents Help first-visit/error recovery.
-│                              # 0089 is the first free number. `db-migrations-core.test.mjs`
+│                              # 0087 documents the StoreMink logo refresh,
+│                              # 0088 Help first-visit/error recovery, and 0089 the
+│                              # POS register keeping its basket across a reload.
+│                              # 0090 is the first free number. `db-migrations-core.test.mjs`
 │                              # freezes the nine pairs, so a new entry reusing any
 │                              # existing number fails CI (it either adds a tenth
 │                              # duplicate group or makes an existing group a triple).
@@ -5009,6 +5010,85 @@ the trusted `store_id`, and direct customer PII is minimized/masked.
           until it is useless for finding the one cart that matters, which is
           the only thing the list is for. An unnamed hold is labelled by what it
           contains and who held it, never "Untitled".
+      - **★★ THE IN-PROGRESS BASKET SURVIVES A REFRESH**
+        (`lib/pos/cart-storage.ts` + `lib/pos/cart-line.ts`, pure and tested;
+        wired in `sell-client.tsx`). `cart` was plain component state written
+        nowhere, so an F5 mid-sale — a stray gesture on a kiosk, the browser
+        reclaiming a backgrounded tab, a hot reload in dev — emptied the till
+        and the cashier re-scanned the basket with the customer standing there.
+        - **★★ NOT A SECOND HOLD.** Park is the DELIBERATE, DURABLE hold: a
+          server row, so it survives the idle lock and a colleague can resume it
+          from another till. This is a crash mat for the sale in front of you —
+          same tab, same operator session, no round trip. The two are documented
+          as different things on purpose, because collapsing them is how one of
+          them stops doing its job.
+        - **★★ `sessionStorage`, NOT `localStorage`, and the reason is the
+          counter.** localStorage is shared across tabs, so two register tabs on
+          one till would write one key and a refresh could hand a cashier the
+          OTHER tab's basket — a money error that looks exactly like a correct
+          basket. Per-tab also means nothing to resurrect on a shared kiosk.
+          ⚠ Do not "upgrade" it; the per-tab property IS the safety.
+        - **★ CHOICES, NEVER PRICES** — park's rule for park's reason. The
+          catalogue re-prices every line on the way back in and `placePosSale`
+          re-reads again at completion, so nothing stored is ever the basis for a
+          charge. A line the catalogue cannot price is DROPPED and counted, never
+          carried at a stored price, because a line the screen can quote and the
+          server will not charge is the `posTotals` failure again.
+        - **★ NO CUSTOMER AND NO RECEIPT ADDRESS.** Both are resolved at Charge
+          in one server read, so re-entering the mobile is one tap — not worth
+          leaving a shopper's name, phone, email and credit balance in browser
+          storage for the convenience. Products were what was lost.
+        - **★★ THE WRITER IS GATED ON THE RESTORE HAVING SETTLED.** One effect
+          saves on every basket change, and on mount the cart is empty — so
+          without the gate that writer CLEARS the stored basket before the
+          restore runs. It survives one refresh either way (the payload is
+          already in memory), which is what makes it subtle: the loss only shows
+          on a SECOND reload while the catalogue is still cold, and then the
+          basket is gone for good. Pinned by its own test.
+        - **★ RESTORED ONLY ONCE THE CATALOGUE IS `ready`** (an index from the
+          IndexedDB cache or a completed sync), or a cold cache would drop lines
+          that do exist and say so untruthfully. While it waits, the cart reads
+          "Restoring the sale in progress…" rather than "Scan or tap a product
+          to start a sale" — on the one screen whose complaint was that the items
+          had vanished, the empty state must not repeat the claim.
+        - **★★ THE CASHIER IN FRONT OF THE CUSTOMER WINS.** If they start
+          ringing up before the catalogue warms, the stored basket is ABANDONED
+          rather than swapped in underneath them.
+        - **★★ AN EXCHANGE BASKET NEVER RETURNS AS AN ORDINARY SALE.** A counter
+          replacement is priced against one specific completed return with the
+          original customer locked (§28), and the context comes back from
+          `?exchange=…` on refresh — so the stored payload records the return id
+          and the basket is discarded unless it matches.
+        - **★★ A LOCK CLEARS IT, FROM ONE PLACE: THE LOGIN SCREEN.** Every
+          signed-out path lands there — idle lock, the rail's Lock button, an
+          expired operator cookie, a cashier deactivated mid-shift — so hooking
+          the two `posLock()` call sites instead would be the per-page opt-in
+          that left the idle lock off five of seven POS screens. No operator
+          session means the basket must not wait for whoever signs in next: it is
+          not their sale, and ringing it up would attribute it to them. The cost
+          is that a cashier who locks mid-sale returns to an empty cart, which is
+          precisely what Hold is for. `clearAllPosCarts` removes only this
+          feature's prefix — the till shares its origin with the catalogue and
+          drawer-width keys.
+        - **★ SCOPED PER REGISTER** (store + location, the catalogue cache's own
+          key), **capped at 12 hours** because a kiosk tab lives for weeks so
+          "dies with the tab" is not by itself freshness, and **every storage
+          call degrades to a no-op** (blocked site data, a locked-down kiosk
+          profile, a full quota) — losing the safety net is a worse refresh,
+          losing the till is a closed shop.
+        - **★★ AND IT FOUND A LIVE BUG IN THE PARKED-SALE RESUME.** That path
+          hand-built its lines and finished them with `as CartLine`, silencing
+          the compiler about the five fields it omitted — so a RESUMED basket
+          quoted `taxClassId: undefined` to `lib/pos/totals.ts`, found no rate,
+          and showed a TAX-FREE total while `placePosSale` charged tax; the
+          missing `categoryId` silently un-scoped every category offer on it
+          besides. `cartLineFrom` is now the ONE builder used by add, resume and
+          restore, with no cast — the `OrderInsert` remedy in the same shape, so
+          a field added to a line has one place to be filled and forgetting it
+          is a BUILD error rather than a silent zero.
+        - Acceptance stories: `docs/pos-acceptance.md` §11c-2. Help guidance is
+          appended to the published `process-an-in-store-sale` guide by
+          `drizzle/migrations/sql/20260909_0089_pos_cart_refresh_help.sql`.
       - **Sold-out last, and the manager-arranged grid.** Sold-out SKUs sink
         to the end of the register grid — `isOutOfStock` in
         `lib/pos/catalog-index.ts` is the ONE definition (the grid's disabled
