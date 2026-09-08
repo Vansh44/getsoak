@@ -37,6 +37,12 @@ each job is a landmine the moment it does:
 | `help-embeddings`         | Existing published guides never receive semantic chunks after the initial migration, and a failed article-save refresh is never retried. Mink AI still falls back to lexical/category search, but paraphrase and multilingual recall silently degrade. |
 | `mink-publications`       | Approved scheduled Mink blogs remain private drafts forever. No data is lost, but the merchant's reviewed publication time is silently missed until the worker runs.                                                                                   |
 
+> ⚠ **STALE as of 2026-09-08 — see the measured note under "The jobs" below.**
+> Production DOES have the notification system: `notification_email_queue`,
+> `email_campaigns`, `email_campaign_recipients` and a schedule-aware
+> `claim_email_batch` all exist in the `storemink` database, and mail is flowing
+> through it. The paragraph below is kept for the history of the decision.
+>
 > Note: production currently runs `main`, which has **no notification system** —
 > `lib/notifications/` and the `notification_email_queue` table do not exist
 > there. `send-emails` on prod drives only the coupon-campaign worker. Once
@@ -129,21 +135,56 @@ gcloud builds submit --project storemink-prod --region global --config=cloudbuil
 > production does not match it.** This is the exact gap the section above
 > describes, so it is recorded rather than quietly corrected:
 >
-> | Job                           | Table says   | Actually        |
-> | ----------------------------- | ------------ | --------------- |
-> | `storemink-send-emails`       | `* * * * *`  | **`0 0 * * *`** |
-> | `storemink-search-metrics`    | `30 2 * * *` | **PAUSED**      |
-> | `storemink-analytics-rollup`  | `40 * * * *` | **PAUSED**      |
-> | `storemink-help-embeddings`   | `50 * * * *` | **absent**      |
-> | `storemink-mink-publications` | `* * * * *`  | **absent**      |
-> | `storemink-mink-workflows`    | `* * * * *`  | **absent**      |
+> | Job                           | Table says   | Actually            |
+> | ----------------------------- | ------------ | ------------------- |
+> | `storemink-send-emails`       | `* * * * *`  | ✅ fixed 2026-09-08 |
+> | `storemink-search-metrics`    | `30 2 * * *` | **PAUSED**          |
+> | `storemink-analytics-rollup`  | `40 * * * *` | **PAUSED**          |
+> | `storemink-help-embeddings`   | `50 * * * *` | **absent**          |
+> | `storemink-mink-publications` | `* * * * *`  | **absent**          |
+> | `storemink-mink-workflows`    | `* * * * *`  | **absent**          |
 >
-> The `send-emails` one has a live cost: Phase 5E made its one-minute heartbeat
-> load-bearing for resolving scheduled campaigns and draining notification
-> email, so on a daily schedule a merchant's reviewed send time can be missed by
-> up to 24 hours. The three absent jobs are the documented-but-never-created
-> failure this file was written about. None of this was changed while adding
-> `storemink-schema-drift`; each needs its own decision about whether its
+> ⚠ **An earlier version of this note called the `send-emails` schedule a LIVE
+> cost. That was wrong, and the correction is the useful part.** Measured on
+> production 2026-09-08: the queue was completely healthy — 12 rows, every one
+> `status=sent`, `max_attempts=1`, **zero pending**, newest sent that morning —
+> and the endpoint reported `remaining: 0` across campaigns, notifications, SMS
+> and announcements. Nothing was being delayed.
+>
+> ★ The reason is the WORKER KICK. `triggerEmailWorker` is called from eight
+> production sites (`lib/notifications/record.ts`, `coupon-email-actions`,
+> `announcement-actions`, the Mink campaign route, `lib/import-export/trigger.ts`
+> among them), so a queued email is drained by the very request that queued it.
+> **The cron is a backstop, not the delivery path** — which is what the
+> `triggerEmailWorker` note in CODEBASE.md §24 already said.
+>
+> The daily schedule was therefore a LATENT gap, in two narrow cases:
+>
+> 1. **Phase 5E scheduled campaigns.** `campaign-worker.ts` claims campaigns
+>    where `status='scheduled' AND scheduled_for <= now`. A due campaign has no
+>    request to kick it, so one scheduled for 14:00 would not have sent until
+>    00:00 UTC the next day. Zero campaigns were scheduled at the time, so nobody
+>    had hit it — but the feature was effectively broken whenever used.
+> 2. **Retries.** A failed send backs off 5/15/45 minutes and needs a worker run
+>    at that moment. `max_attempts=1` across the whole table means this had never
+>    actually occurred.
+>
+> ✅ **Fixed 2026-09-08: the schedule is now `* * * * *`.** Verified by three
+> consecutive firings one minute apart (13:41:02, 13:42:06, 13:43:09), all HTTP
+> 200, the job's own status code empty, and the queue still `pending 0 /
+failed 0`. Overlapping runs are safe because the endpoint is idempotent and
+> claim-based (`FOR UPDATE SKIP LOCKED`); it returned in 0.52s, far inside the
+> 300s attempt deadline. The cost is ~1,440 mostly no-op requests a day against a
+> `min-instances=0` service.
+>
+> ★ This also makes the note further up STALE: production is NOT missing the
+> notification system. `notification_email_queue`, `email_campaigns`,
+> `email_campaign_recipients` and a schedule-aware `claim_email_batch` all exist
+> in the production database.
+>
+> The three absent jobs remain the documented-but-never-created failure this file
+> was written about, and `search-metrics`/`analytics-rollup` remain PAUSED.
+> **None of those were changed:** each needs its own decision about whether its
 > migrations and routes are actually deployed first.
 
 ⚠ **`billing` must stay HOURLY.** The cycle boundary and the 48-hour grace
