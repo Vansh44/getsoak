@@ -28,7 +28,7 @@
   width: 18px;
   height: 18px;
   object-fit: contain;
-  opacity: 0.9;
+  opacity: 1;
 }
 
 @keyframes heartbeat {

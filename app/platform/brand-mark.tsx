@@ -1,16 +1,9 @@
 import Image from "next/image";
+import { STOREMINK_LOGO } from "@/lib/brand-assets";
 
-// The StoreMink mark — the real one.
-//
-// ★ THE SOURCE OF TRUTH IS public/brand/storemink-mark.png — the owner's own
-// artwork, 256×256 with a transparent background. NOT public/icon.svg: that
-// held an older, duller render of the same design, and regenerating from it
-// silently reverts the logo to the wrong colours (it has happened once).
-//
-// Everything else is derived from that one file and must be regenerated when it
-// changes — storemink-mark.webp, app/icon.png, app/apple-icon.png,
-// public/favicon.ico (16/32/48) and public/icon.svg. Don't hand-edit a
-// derivative, or the nav and the favicon drift apart.
+// Master: brand/assets/storemink-master.png (owner artwork, September 2026).
+// Regenerate every derivative with scripts/build-brand-assets.mjs. Display
+// exports remove the transparent margins; favicons have a tighter crop.
 //
 // `title` is optional on purpose: beside the visible "StoreMink" wordmark this
 // is decorative and must not be announced twice.
@@ -28,13 +21,13 @@ export function BrandMark({
 }) {
   return (
     <Image
-      src="/brand/storemink-mark.png"
+      src={STOREMINK_LOGO}
       alt={title ?? ""}
       aria-hidden={title ? undefined : true}
       width={size}
       height={size}
-      priority={priority}
-      style={{ display: "block", objectFit: "contain" }}
+      preload={priority}
+      style={{ display: "block", objectFit: "contain", flexShrink: 0 }}
     />
   );
 }

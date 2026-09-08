@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { STOREMINK_LOGO } from "@/lib/brand-assets";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { ChevronRight } from "lucide-react";
@@ -142,7 +143,7 @@ export default async function HelpArticlePage({ params, searchParams }: Props) {
     publishedAt: article.publishedAt,
     updatedAt: article.updatedAt,
     publisherName: "StoreMink",
-    logoUrl: `${PLATFORM_URL}/brand/storemink-mark.png`,
+    logoUrl: `${PLATFORM_URL}${STOREMINK_LOGO}`,
   });
   const breadcrumbLd = breadcrumbSchema(HELP_URL, [
     { name: "Help Centre", path: "/help" },

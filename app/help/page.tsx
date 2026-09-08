@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { connection } from "next/server";
 import { ChevronRight } from "lucide-react";
 import {
   getHelpCategories,
@@ -8,11 +9,11 @@ import {
 import { HelpSearchBox } from "./components/search-box";
 import { CategoryIcon } from "./components/category-icon";
 
-// Static + ISR: the help home is public and cache-friendly. Operator edits
-// bust TAGS.help; this bounds staleness otherwise.
-export const revalidate = 300;
+// Cloud Run supplies database credentials at runtime, not during image builds.
+// Render per request; the successful Help reads still share the tagged cache.
 
 export default async function HelpHome() {
+  await connection();
   const [categories, counts, popular] = await Promise.all([
     getHelpCategories(),
     getHelpCategoryCounts(),

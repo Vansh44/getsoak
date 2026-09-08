@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { STOREMINK_ICONS } from "@/lib/brand-assets";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import { Toaster } from "@/components/ui/sonner";
 import { getPlatformViewer } from "@/app/actions/platform";
@@ -24,7 +25,7 @@ const dashMono = JetBrains_Mono({
 export async function generateMetadata() {
   return {
     title: `StoreMink Admin`,
-    icons: { icon: "/brand/storemink-mark.png" },
+    icons: STOREMINK_ICONS,
   };
 }
 

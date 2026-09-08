@@ -25,6 +25,7 @@
     "dev:all:lean": "concurrently -n proxy,next -c blue,green --kill-others-on-fail \"npm run db:proxy\" \"npm run dev:lean\"",
     "dev:all:full": "concurrently -n proxy,next -c blue,green --kill-others-on-fail \"npm run db:proxy\" \"npm run dev:full\"",
     "build": "next build",
+    "brand:build": "node scripts/build-brand-assets.mjs",
     "start": "next start",
     "lint": "eslint .",
     "prettier": "prettier --check .",

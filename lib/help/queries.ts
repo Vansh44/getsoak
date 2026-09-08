@@ -1,6 +1,8 @@
 import { unstable_cache } from "next/cache";
 import { and, asc, desc, eq, inArray, ne, sql } from "drizzle-orm";
-import { withAnon } from "@/lib/db/client";
+import { withAnon, type Db } from "@/lib/db/client";
+import { pgErrorCode } from "@/lib/db/errors";
+import { logError } from "@/lib/observability/logger";
 import { helpArticles, helpCategories } from "@/drizzle/schema";
 import { TAGS } from "@/lib/storefront/tags";
 import {
@@ -17,13 +19,45 @@ import {
 // anonymous DB scope (withAnon) so RLS returns only published articles, then
 // wrap in `unstable_cache` tagged TAGS.help — operator edits call
 // updateTag(TAGS.help) so changes appear immediately; the time-based
-// revalidate is just a safety net. Reads tolerate a missing table / transient
-// error by returning empty so a cold deploy never crashes the help site.
+// revalidate is just a safety net. Only successful reads enter the cache:
+// outages must never become cached empty lists or false article 404s.
 //
 // Platform-global: no store_id anywhere (unlike lib/storefront/queries.ts).
 // ---------------------------------------------------------------------------
 
 const REVALIDATE = 300;
+
+// These callbacks are SELECT-only. Retry one dropped/starting connection here,
+// never in the shared transaction runner (which also executes writes).
+const RETRYABLE_READ_CODES = new Set([
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "EPIPE",
+  "ETIMEDOUT",
+  "08000",
+  "08001",
+  "08003",
+  "08006",
+  "57P01",
+  "57P02",
+  "57P03",
+]);
+
+async function readHelp<T>(query: (db: Db) => Promise<T>): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await withAnon(query);
+    } catch (error) {
+      const code = pgErrorCode(error);
+      if (attempt === 0 && code && RETRYABLE_READ_CODES.has(code)) continue;
+      // Do not log SQL parameters or propagate a fabricated empty catalogue.
+      logError("Help Centre database read failed", undefined, {
+        code: code ?? "unknown",
+      });
+      throw error;
+    }
+  }
+}
 
 const CATEGORY_COLS = {
   id: helpCategories.id,
@@ -52,44 +86,36 @@ const PUBLISHED = eq(helpArticles.status, "published");
 /** All categories, ordered for display. */
 export const getHelpCategories = unstable_cache(
   async (): Promise<HelpCategory[]> => {
-    try {
-      const rows = await withAnon((db) =>
-        db
-          .select(CATEGORY_COLS)
-          .from(helpCategories)
-          .orderBy(asc(helpCategories.position), asc(helpCategories.title)),
-      );
-      return rows.map(toHelpCategory);
-    } catch {
-      return [];
-    }
+    const rows = await readHelp((db) =>
+      db
+        .select(CATEGORY_COLS)
+        .from(helpCategories)
+        .orderBy(asc(helpCategories.position), asc(helpCategories.title)),
+    );
+    return rows.map(toHelpCategory);
   },
-  ["help-categories"],
+  ["help-categories", "read-v2"],
   { tags: [TAGS.help], revalidate: REVALIDATE },
 );
 
 /** Published-article count per category id (home page card counts). */
 export const getHelpCategoryCounts = unstable_cache(
   async (): Promise<Record<string, number>> => {
-    try {
-      const rows = await withAnon((db) =>
-        db
-          .select({
-            categoryId: helpArticles.categoryId,
-            count: sql<number>`count(*)::int`,
-          })
-          .from(helpArticles)
-          .where(PUBLISHED)
-          .groupBy(helpArticles.categoryId),
-      );
-      const out: Record<string, number> = {};
-      for (const r of rows) if (r.categoryId) out[r.categoryId] = r.count;
-      return out;
-    } catch {
-      return {};
-    }
+    const rows = await readHelp((db) =>
+      db
+        .select({
+          categoryId: helpArticles.categoryId,
+          count: sql<number>`count(*)::int`,
+        })
+        .from(helpArticles)
+        .where(PUBLISHED)
+        .groupBy(helpArticles.categoryId),
+    );
+    const out: Record<string, number> = {};
+    for (const r of rows) if (r.categoryId) out[r.categoryId] = r.count;
+    return out;
   },
-  ["help-category-counts"],
+  ["help-category-counts", "read-v2"],
   { tags: [TAGS.help], revalidate: REVALIDATE },
 );
 
@@ -128,7 +154,7 @@ export interface HelpAssistantDocument {
 }
 
 async function loadHelpSearchCatalog(): Promise<HelpSearchCatalogEntry[]> {
-  return withAnon((db) =>
+  return readHelp((db) =>
     db
       .select({
         id: helpArticles.id,
@@ -153,7 +179,7 @@ async function loadHelpSearchCatalog(): Promise<HelpSearchCatalogEntry[]> {
 
 const getHelpSearchCatalogCached = unstable_cache(
   loadHelpSearchCatalog,
-  ["help-search-catalog"],
+  ["help-search-catalog", "read-v2"],
   { tags: [TAGS.help], revalidate: REVALIDATE },
 );
 
@@ -190,7 +216,7 @@ export async function getPublishedHelpDocumentsForAssistant(
   if (slugs.length === 0) return [];
 
   try {
-    const rows = await withAnon((db) =>
+    const rows = await readHelp((db) =>
       db
         .select({
           slug: helpArticles.slug,
@@ -222,38 +248,34 @@ export async function getPublishedHelpDocumentsForAssistant(
  *  Powers the left docs sidebar. */
 export const getHelpNavTree = unstable_cache(
   async (): Promise<HelpNavCategory[]> => {
-    try {
-      const [cats, arts] = await Promise.all([
-        withAnon((db) =>
-          db
-            .select(CATEGORY_COLS)
-            .from(helpCategories)
-            .orderBy(asc(helpCategories.position), asc(helpCategories.title)),
-        ),
-        withAnon((db) =>
-          db
-            .select({
-              categoryId: helpArticles.categoryId,
-              slug: helpArticles.slug,
-              title: helpArticles.title,
-            })
-            .from(helpArticles)
-            .where(PUBLISHED)
-            .orderBy(asc(helpArticles.position), asc(helpArticles.title)),
-        ),
-      ]);
-      return cats.map((c) => ({
-        slug: c.slug,
-        title: c.title,
-        articles: arts
-          .filter((a) => a.categoryId === c.id)
-          .map((a) => ({ slug: a.slug, title: a.title })),
-      }));
-    } catch {
-      return [];
-    }
+    const [cats, arts] = await Promise.all([
+      readHelp((db) =>
+        db
+          .select(CATEGORY_COLS)
+          .from(helpCategories)
+          .orderBy(asc(helpCategories.position), asc(helpCategories.title)),
+      ),
+      readHelp((db) =>
+        db
+          .select({
+            categoryId: helpArticles.categoryId,
+            slug: helpArticles.slug,
+            title: helpArticles.title,
+          })
+          .from(helpArticles)
+          .where(PUBLISHED)
+          .orderBy(asc(helpArticles.position), asc(helpArticles.title)),
+      ),
+    ]);
+    return cats.map((c) => ({
+      slug: c.slug,
+      title: c.title,
+      articles: arts
+        .filter((a) => a.categoryId === c.id)
+        .map((a) => ({ slug: a.slug, title: a.title })),
+    }));
   },
-  ["help-nav-tree"],
+  ["help-nav-tree", "read-v2"],
   { tags: [TAGS.help], revalidate: REVALIDATE },
 );
 
@@ -268,67 +290,55 @@ export async function getHelpCategoryBySlug(
 /** Published article cards in a category, ordered for display. */
 export const getHelpArticleCardsByCategory = unstable_cache(
   async (categoryId: string): Promise<HelpArticleCard[]> => {
-    try {
-      const rows = await withAnon((db) =>
-        db
-          .select(CARD_COLS)
-          .from(helpArticles)
-          .where(and(PUBLISHED, eq(helpArticles.categoryId, categoryId)))
-          .orderBy(asc(helpArticles.position), asc(helpArticles.title)),
-      );
-      return rows.map(toHelpCard);
-    } catch {
-      return [];
-    }
+    const rows = await readHelp((db) =>
+      db
+        .select(CARD_COLS)
+        .from(helpArticles)
+        .where(and(PUBLISHED, eq(helpArticles.categoryId, categoryId)))
+        .orderBy(asc(helpArticles.position), asc(helpArticles.title)),
+    );
+    return rows.map(toHelpCard);
   },
-  ["help-articles-by-category"],
+  ["help-articles-by-category", "read-v2"],
   { tags: [TAGS.help], revalidate: REVALIDATE },
 );
 
 /** A published article by slug, with its full body (null if unknown/draft). */
 export const getPublishedHelpArticle = unstable_cache(
   async (slug: string): Promise<HelpArticle | null> => {
-    try {
-      const rows = await withAnon((db) =>
-        db
-          .select()
-          .from(helpArticles)
-          .where(and(PUBLISHED, eq(helpArticles.slug, slug)))
-          .limit(1),
-      );
-      return rows[0] ? toHelpArticle(rows[0]) : null;
-    } catch {
-      return null;
-    }
+    const rows = await readHelp((db) =>
+      db
+        .select()
+        .from(helpArticles)
+        .where(and(PUBLISHED, eq(helpArticles.slug, slug)))
+        .limit(1),
+    );
+    return rows[0] ? toHelpArticle(rows[0]) : null;
   },
-  ["help-article-by-slug"],
+  ["help-article-by-slug", "read-v2"],
   { tags: [TAGS.help], revalidate: REVALIDATE },
 );
 
 /** Most-viewed published articles (home page "Popular" list). */
 export const getPopularHelpArticles = unstable_cache(
   async (limit = 6): Promise<HelpArticleCard[]> => {
-    try {
-      const rows = await withAnon((db) =>
-        db
-          .select(CARD_COLS)
-          .from(helpArticles)
-          // See searchHelpArticles: exclude orphaned (category-less) articles so
-          // the Popular list never shows an unlinkable card.
-          .innerJoin(
-            helpCategories,
-            eq(helpArticles.categoryId, helpCategories.id),
-          )
-          .where(PUBLISHED)
-          .orderBy(desc(helpArticles.viewCount), desc(helpArticles.publishedAt))
-          .limit(limit),
-      );
-      return rows.map(toHelpCard);
-    } catch {
-      return [];
-    }
+    const rows = await readHelp((db) =>
+      db
+        .select(CARD_COLS)
+        .from(helpArticles)
+        // See searchHelpArticles: exclude orphaned (category-less) articles so
+        // the Popular list never shows an unlinkable card.
+        .innerJoin(
+          helpCategories,
+          eq(helpArticles.categoryId, helpCategories.id),
+        )
+        .where(PUBLISHED)
+        .orderBy(desc(helpArticles.viewCount), desc(helpArticles.publishedAt))
+        .limit(limit),
+    );
+    return rows.map(toHelpCard);
   },
-  ["help-articles-popular"],
+  ["help-articles-popular", "read-v2"],
   { tags: [TAGS.help], revalidate: REVALIDATE },
 );
 
@@ -339,41 +349,37 @@ export const getRelatedHelpArticles = unstable_cache(
     excludeId: string,
     limit = 5,
   ): Promise<HelpArticleCard[]> => {
-    try {
-      const rows = await withAnon((db) =>
-        db
-          .select(CARD_COLS)
-          .from(helpArticles)
-          .where(
-            and(
-              PUBLISHED,
-              eq(helpArticles.categoryId, categoryId),
-              ne(helpArticles.id, excludeId),
-            ),
-          )
-          .orderBy(asc(helpArticles.position), asc(helpArticles.title))
-          .limit(limit),
-      );
-      return rows.map(toHelpCard);
-    } catch {
-      return [];
-    }
+    const rows = await readHelp((db) =>
+      db
+        .select(CARD_COLS)
+        .from(helpArticles)
+        .where(
+          and(
+            PUBLISHED,
+            eq(helpArticles.categoryId, categoryId),
+            ne(helpArticles.id, excludeId),
+          ),
+        )
+        .orderBy(asc(helpArticles.position), asc(helpArticles.title))
+        .limit(limit),
+    );
+    return rows.map(toHelpCard);
   },
-  ["help-articles-related"],
+  ["help-articles-related", "read-v2"],
   { tags: [TAGS.help], revalidate: REVALIDATE },
 );
 
-/** Every published (categorySlug, slug) pair — for generateStaticParams + sitemap. */
+/** Every published (categorySlug, slug) pair — for sitemap discovery. */
 export const getPublishedHelpArticleParams = unstable_cache(
   async (): Promise<
     { categorySlug: string; slug: string; updatedAt: string | null }[]
   > => {
-    // Unlike reader-facing cards, sitemap discovery must fail closed. Returning
+    // Like reader-facing cards, sitemap discovery must fail closed. Returning
     // [] on a transient database problem serves Google a valid but suddenly
     // empty sitemap, which looks like every published article was deleted.
     // Throw instead so the sitemap request is retried and its previous known
     // URLs are not replaced by a false empty set.
-    const rows = await withAnon((db) =>
+    const rows = await readHelp((db) =>
       db
         .select({
           slug: helpArticles.slug,
@@ -393,7 +399,7 @@ export const getPublishedHelpArticleParams = unstable_cache(
       updatedAt: r.updatedAt,
     }));
   },
-  ["help-articles-params"],
+  ["help-articles-params", "read-v2"],
   { tags: [TAGS.help], revalidate: REVALIDATE },
 );
 
@@ -411,7 +417,7 @@ export async function searchHelpArticles(
   if (!q) return [];
   try {
     const tsq = sql`websearch_to_tsquery('english', ${q})`;
-    const rows = await withAnon((db) =>
+    const rows = await readHelp((db) =>
       db
         .select(CARD_COLS)
         .from(helpArticles)
