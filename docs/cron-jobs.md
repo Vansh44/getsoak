@@ -43,6 +43,69 @@ each job is a landmine the moment it does:
 > `staging` merges, the same job also drains notification email. Phase 5E makes
 > its one-minute heartbeat load-bearing for scheduled campaign resolution.
 
+## Schema-drift check (NOT an /api/cron route)
+
+`storemink-schema-drift` is the odd one out: a **Cloud Scheduler job that runs a
+Cloud Build trigger**, not an HTTPS call to `/api/cron/*` with a CRON_SECRET
+bearer. Everything else in this file follows that pattern; this one cannot.
+
+| Piece     | Value                                                                                                    |
+| --------- | -------------------------------------------------------------------------------------------------------- |
+| Scheduler | `storemink-schema-drift`, `0 4 * * *` UTC, region `asia-south1`                                          |
+| Target    | `POST .../v1/projects/storemink-prod/locations/global/triggers/c10f45a2-bbc3-4e42-a069-3767e6057c48:run` |
+| Auth      | OAuth as `705863961054-compute@developer.gserviceaccount.com`                                            |
+| Trigger   | `storemink-schema-drift` (manual), `gitFileSource` → `cloudbuild-drift.yaml` on `refs/heads/main`        |
+| Build     | `cloudbuild-drift.yaml` → `db-migrate drift --environment production`                                    |
+
+★★ **Why not an `/api/cron` route.** The check needs BOTH signals — the schema
+fingerprint and a digest of which migration ids are recorded — because
+`schemaFingerprint()` excludes `schema_migrations`, and that exclusion is what
+separates "a migration ran" from "somebody ran DDL by hand". Reading the ledger
+needs the postgres SUPERUSER login: migration 0018 revoked the app login's
+grants on `schema_migrations`, and a durable verify contract asserts they stay
+revoked. Putting that credential in the internet-facing Cloud Run runtime would
+be a downgrade. Cloud Build is not internet-facing, already holds
+`roles/run.admin` (so it can already deploy code that reaches the database), and
+runs the SAME code path a human runs rather than a second implementation.
+
+⚠ **It required two IAM grants** on the Cloud Build service account, which did
+NOT already have them: `secretmanager.secretAccessor` scoped to
+`CLOUDSQL_PROD_POSTGRES_PW` alone, and project-level `cloudsql.client` (Cloud SQL
+has no instance-level binding). The scheduler SA needed nothing new —
+`roles/cloudbuild.builds.builder` already includes `cloudbuild.builds.create`.
+
+⚠ **CREATED PAUSED (2026-09-08), and it must stay paused until
+`cloudbuild-drift.yaml` reaches `main`.** It lives on `minkai` today, so a run
+fails with `NOT_FOUND - File cloudbuild-drift.yaml not found`. Enabling it before
+the merge means a failure every morning, which is how a real alarm becomes noise.
+After merging:
+
+```bash
+gcloud scheduler jobs resume storemink-schema-drift --project storemink-prod --location asia-south1
+gcloud scheduler jobs run    storemink-schema-drift --project storemink-prod --location asia-south1
+```
+
+★ **The trigger could not be created by `gcloud` or the API.** Five shapes
+(`manual` with two URL forms, a raw `sourceToBuild` body, a `github` block
+mirroring the working deploy trigger, and `webhook`) all returned a bare
+`INVALID_ARGUMENT` with no field detail — this project has a 1st-gen GitHub App
+connection and no 2nd-gen connection, and manual triggers appear to need one. It
+was created through the Cloud Console instead. Expect the same if it is ever
+recreated.
+
+**Verified as far as the merge allows (2026-09-08):** the build itself ran
+against production (`cc4d4eda`, 3m8s) and logged `database=storemink`
+`environment=production` `drift=clean`; `GET` on the Scheduler's exact trigger
+URL returns 200, so the URL and OAuth are right; and `:run` fails with exactly
+one message, the missing file. What is NOT yet verified is a green scheduled run
+end to end — do that after the merge.
+
+Until then the same check runs by hand from any checkout:
+
+```bash
+gcloud builds submit --project storemink-prod --region global --config=cloudbuild-drift.yaml --ignore-file=.gitignore .
+```
+
 ## The jobs
 
 | Job                                 | Schedule (UTC) | Endpoint                                                 |
@@ -60,6 +123,28 @@ each job is a landmine the moment it does:
 | `storemink-help-embeddings`         | `50 * * * *`   | `https://storemink.com/api/cron/help-embeddings`         |
 | `storemink-mink-publications`       | `* * * * *`    | `https://storemink.com/api/cron/mink-publications`       |
 | `storemink-mink-workflows`          | `* * * * *`    | `https://storemink.com/api/cron/mink-workflows`          |
+
+> ⚠ **The table above is the INTENDED state. Measured live 2026-09-08 with
+> `gcloud scheduler jobs list --project storemink-prod --location asia-south1`,
+> production does not match it.** This is the exact gap the section above
+> describes, so it is recorded rather than quietly corrected:
+>
+> | Job                           | Table says   | Actually        |
+> | ----------------------------- | ------------ | --------------- |
+> | `storemink-send-emails`       | `* * * * *`  | **`0 0 * * *`** |
+> | `storemink-search-metrics`    | `30 2 * * *` | **PAUSED**      |
+> | `storemink-analytics-rollup`  | `40 * * * *` | **PAUSED**      |
+> | `storemink-help-embeddings`   | `50 * * * *` | **absent**      |
+> | `storemink-mink-publications` | `* * * * *`  | **absent**      |
+> | `storemink-mink-workflows`    | `* * * * *`  | **absent**      |
+>
+> The `send-emails` one has a live cost: Phase 5E made its one-minute heartbeat
+> load-bearing for resolving scheduled campaigns and draining notification
+> email, so on a daily schedule a merchant's reviewed send time can be missed by
+> up to 24 hours. The three absent jobs are the documented-but-never-created
+> failure this file was written about. None of this was changed while adding
+> `storemink-schema-drift`; each needs its own decision about whether its
+> migrations and routes are actually deployed first.
 
 ⚠ **`billing` must stay HOURLY.** The cycle boundary and the 48-hour grace
 deadline are wall-clock instants, so the interval IS the resolution of the whole

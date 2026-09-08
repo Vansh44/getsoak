@@ -329,6 +329,23 @@ wholesip/
 │                              # runtime-only. Cloud Build owns the complete Cloud Run env,
 │                              # including default-on Mink + fail-closed invitation substitutions.
 │                              # Build linux/amd64 (Cloud Build or --platform).
+├── cloudbuild-drift.yaml      # ★ Scheduled production schema-drift check, run by the
+│                              # `storemink-schema-drift` Cloud Build trigger (manual)
+│                              # via Cloud Scheduler `0 4 * * *` UTC. Runs
+│                              # `db-migrate drift --environment production` behind a
+│                              # version-pinned cloud-sql-proxy. ★★ A BUILD, NOT an
+│                              # /api/cron route like the other jobs: the check needs the
+│                              # ledger digest as well as the fingerprint, and reading
+│                              # schema_migrations needs the postgres SUPERUSER login that
+│                              # migration 0018 denied the app — a credential that must not
+│                              # live in the internet-facing Cloud Run runtime. Required two
+│                              # IAM grants the build SA did NOT have: secretAccessor scoped
+│                              # to CLOUDSQL_PROD_POSTGRES_PW, and cloudsql.client.
+│                              # ⚠ CREATED PAUSED until this file reaches `main`; the
+│                              # trigger reads it from refs/heads/main and otherwise fails
+│                              # "File cloudbuild-drift.yaml not found". Full contract,
+│                              # verification evidence and the resume commands are in
+│                              # docs/cron-jobs.md.
 ├── vercel.json                # INERT schedule record (prod = Cloud Scheduler):
 │                              # send-emails, plan-expiry, expire-pending-payments,
 │                              # seo-refresh, search-metrics, domain-reconcile, prune-logs,
@@ -1796,10 +1813,16 @@ wholesip/
 │   │                          # already holds Secret Manager and Cloud SQL access
 │   │                          # for the deploy triggers, so a Cloud Scheduler entry
 │   │                          # invoking it needs no GitHub secret whatsoever.
-│   │                          # ⚠ NOT BUILT YET; run `npm run db:drift:prod` by
-│   │                          # hand until it is, and see docs/cron-jobs.md's
-│   │                          # standing lesson that a job documented but never
-│   │                          # created is a job that does not run.
+│   │                          # ★ BUILT: cloudbuild-drift.yaml + the
+│   │                          # `storemink-schema-drift` trigger and Cloud Scheduler
+│   │                          # job (`0 4 * * *` UTC), CREATED PAUSED until that
+│   │                          # file reaches `main`. The build ran green against
+│   │                          # production before any schedule was attached. Until
+│   │                          # it is resumed, `npm run db:drift:prod` by hand is the
+│   │                          # check. See docs/cron-jobs.md for the contract, the
+│   │                          # evidence and the resume commands — and its standing
+│   │                          # lesson that a job documented but never created is a
+│   │                          # job that does not run.
 │   └── sql/                   # New forward-only SQL. 0002 repairs the production
 │                              # credit-note formatter drift (bare lpad truncated
 │                              # legal serials beyond 9,999) and canonicalizes the
